@@ -1,0 +1,155 @@
+@import "tailwindcss";
+
+/* ========================================
+   SKY PLAY PWA — Design System
+   Fusion PDF charte graphique + skyplay.cloud
+   ======================================== */
+
+@theme inline {
+  --color-background: var(--skyplay-bg-dark);
+  --color-foreground: var(--skyplay-text-main);
+  --font-sans: "Inter", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", monospace;
+}
+
+:root {
+  /* Fond & Surface */
+  --skyplay-bg-dark: #070f1e;
+  --skyplay-bg-card: #0d1b2e;
+  --skyplay-bg-card-hover: #131a30;
+  --skyplay-surface: #13162a;
+
+  /* Brand Colors */
+  --skyplay-cyan: #00c8ff;
+  --skyplay-cyan-dark: #0097fc;
+  --skyplay-gold: #ffd700;
+  --skyplay-pink: #fd2e5f;
+  --skyplay-green: #2ecc71;
+  --skyplay-orange: #e67e22;
+
+  /* Texte */
+  --skyplay-text-main: #ffffff;
+  --skyplay-text-muted: #8fa0ba;
+  --skyplay-text-dim: #5a6a80;
+
+  /* Gradients */
+  --gradient-button: linear-gradient(90deg, #00c8ff 0%, #0097fc 100%);
+  --gradient-logo: linear-gradient(135deg, #00d2ff 0%, #9b5de5 50%, #f15bb5 100%);
+  --gradient-hero: linear-gradient(to right, #00c8ff, #ffd700, #fd2e5f);
+  --gradient-success: linear-gradient(90deg, #00c8ff 0%, #2ecc71 100%);
+  --gradient-warning: linear-gradient(90deg, #ffd700 0%, #e67e22 100%);
+
+  /* Shadows */
+  --glow-cyan: 0 0 20px rgba(0, 200, 255, 0.4);
+  --glow-cyan-strong: 0 0 40px rgba(0, 200, 255, 0.6);
+  --glow-pink: 0 0 20px rgba(253, 46, 95, 0.4);
+  --glow-gold: 0 0 20px rgba(255, 215, 0, 0.4);
+
+  /* Border radius */
+  --radius-capsule: 50px;
+  --radius-card: 16px;
+  --radius-xl: 24px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  background-color: var(--skyplay-bg-dark);
+  color: var(--skyplay-text-main);
+  font-family: "Inter", system-ui, sans-serif;
+  min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  /* Mobile touch optimization */
+  -webkit-tap-highlight-color: transparent;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Fix iOS Safari touch events through transparent/backdrop elements */
+* {
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Ensure inputs don't cause iOS zoom */
+input,
+textarea,
+select,
+button {
+  font-size: 16px;
+  touch-action: manipulation;
+}
+
+/* Grid pattern overlay */
+.bg-grid-pattern {
+  background-image: linear-gradient(
+      rgba(0, 200, 255, 0.07) 1px,
+      transparent 1px
+    ),
+    linear-gradient(90deg, rgba(0, 200, 255, 0.07) 1px, transparent 1px);
+  background-size: 60px 60px;
+  mask-image: radial-gradient(ellipse at center, black 30%, transparent 75%);
+}
+
+/* Scrollbar gaming */
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-track {
+  background: var(--skyplay-bg-dark);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--skyplay-cyan-dark);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--skyplay-cyan);
+}
+
+/* Animations */
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(28px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes pulse-glow {
+  0%,
+  100% {
+    box-shadow: 0 0 15px rgba(0, 200, 255, 0.4);
+  }
+  50% {
+    box-shadow: 0 0 30px rgba(0, 200, 255, 0.7);
+  }
+}
+
+.animate-fade-in-up {
+  animation: fadeInUp 0.6s ease-out forwards;
+}
+
+.animate-pulse-glow {
+  animation: pulse-glow 2s ease-in-out infinite;
+}
+
+/* Staggered animation delays */
+.delay-100 {
+  animation-delay: 100ms;
+}
+.delay-200 {
+  animation-delay: 200ms;
+}
+.delay-300 {
+  animation-delay: 300ms;
+}
+.delay-400 {
+  animation-delay: 400ms;
+}
+.delay-500 {
+  animation-delay: 500ms;
+}

@@ -1,0 +1,24 @@
+{
+  "name": "SKY PLAY — PWA Compagnon",
+  "short_name": "SKYPLAY PWA",
+  "description": "Outil compagnon pour la phase de test utilisateur de skyplay.cloud",
+  "start_url": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#070f1e",
+  "theme_color": "#0097FC",
+  "icons": [
+    {
+      "src": "/icons/icon-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icons/icon-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
