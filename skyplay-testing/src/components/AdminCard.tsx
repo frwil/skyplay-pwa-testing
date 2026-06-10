@@ -29,10 +29,15 @@ export default function AdminCard({ submission, onStatusChange }: AdminCardProps
   const [loading, setLoading] = useState(false);
   const [showScreenshot, setShowScreenshot] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [successMsg, setSuccessMsg] = useState<string | null>(null);
+  const [localStatus, setLocalStatus] = useState<string | null>(null);
+
+  const effectiveStatus = localStatus ?? submission.status;
 
   const handleAction = async (status: "APPROVED" | "REJECTED") => {
     setLoading(true);
     setError(null);
+    setSuccessMsg(null);
 
     try {
       const res = await fetch("/api/admin/approve", {
@@ -45,13 +50,19 @@ export default function AdminCard({ submission, onStatusChange }: AdminCardProps
       const data = await res.json();
 
       if (res.ok) {
-        onStatusChange();
+        setLocalStatus(status);
+        setSuccessMsg(data.message || (status === "APPROVED" ? "✅ Approuvé !" : "❌ Rejeté"));
+        // Refresh parent data after a brief delay so the user sees the confirmation
+        setTimeout(() => {
+          onStatusChange();
+          setSuccessMsg(null);
+        }, 1200);
       } else {
         setError(data.error || "Erreur lors de la mise à jour");
+        setLoading(false);
       }
     } catch {
       setError("Erreur réseau");
-    } finally {
       setLoading(false);
     }
   };
@@ -78,7 +89,7 @@ export default function AdminCard({ submission, onStatusChange }: AdminCardProps
   };
 
   const config =
-    statusConfig[submission.status as keyof typeof statusConfig] ||
+    statusConfig[effectiveStatus as keyof typeof statusConfig] ||
     statusConfig.PENDING;
 
   return (
@@ -131,7 +142,7 @@ export default function AdminCard({ submission, onStatusChange }: AdminCardProps
         </div>
 
         {/* Actions */}
-        {submission.status === "PENDING" && (
+        {effectiveStatus === "PENDING" && (
           <div className="flex items-center gap-2 shrink-0">
             <button
               onClick={() => handleAction("APPROVED")}
@@ -169,14 +180,20 @@ export default function AdminCard({ submission, onStatusChange }: AdminCardProps
             </button>
           </div>
         )}
-        {submission.status !== "PENDING" && (
+        {effectiveStatus !== "PENDING" && (
           <span className="text-xs text-white/30 italic">Traité</span>
         )}
       </div>
 
       {error && (
-        <div className="mx-5 mb-3 p-3 rounded-xl bg-red-500/10 border border-red-500/20 text-red-400 text-xs font-medium">
+        <div className="mx-5 mb-3 p-3 rounded-xl bg-red-500/10 border border-red-500/20 text-red-400 text-xs font-medium animate-fade-in-up">
           {error}
+        </div>
+      )}
+      {successMsg && (
+        <div className="mx-5 mb-3 p-3 rounded-xl bg-[#2ecc71]/10 border border-[#2ecc71]/25 text-[#2ecc71] text-xs font-bold animate-fade-in-up flex items-center gap-2">
+          <Check className="w-4 h-4" />
+          {successMsg}
         </div>
       )}
 
