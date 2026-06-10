@@ -80,6 +80,7 @@ export default function SubmissionForm({
   ).length;
   const progressPct =
     totalQuestions > 0 ? (completedCount / totalQuestions) * 100 : 0;
+  const allCompleted = totalQuestions > 0 && completedCount >= totalQuestions;
 
   const activeQuestion = allQuestions.find((q) => q.id === activeQuestionId);
   const activeStep = steps.find((s) => s.id === activeQuestion?.stepId);
@@ -354,6 +355,42 @@ export default function SubmissionForm({
           />
         </div>
       </div>
+
+      {/* ── Congratulations banner ── */}
+      {allCompleted && (
+        <div
+          className="p-5 rounded-2xl border text-center space-y-3 animate-fade-in-up"
+          style={{
+            background: "linear-gradient(135deg, rgba(0,200,255,0.08) 0%, rgba(46,204,113,0.08) 100%)",
+            borderColor: "rgba(46,204,113,0.3)",
+          }}
+        >
+          <div className="text-4xl">🎉</div>
+          <h3 className="text-lg font-black text-white">
+            Félicitations&nbsp;!
+          </h3>
+          <p className="text-sm text-white/70 leading-relaxed">
+            Tu as répondu aux <span className="font-bold text-[#ffd700]">16 questions</span> du
+            programme de test. Merci pour ta précieuse contribution&nbsp;!
+          </p>
+          <p className="text-xs text-white/40 leading-relaxed">
+            L&rsquo;équipe <span className="font-bold text-[#00c8ff]">skyplay.cloud</span> va
+            examiner tes réponses. Tu recevras une notification très bientôt avec le
+            récapitulatif de tes gains en <span style={{ color: "#ffd700" }}>Sky</span>.
+          </p>
+          <div
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-full text-xs font-bold"
+            style={{
+              backgroundColor: "rgba(46,204,113,0.1)",
+              border: "1px solid rgba(46,204,113,0.3)",
+              color: "#2ecc71",
+            }}
+          >
+            <Trophy className="w-4 h-4" />
+            Test terminé — en attente de validation
+          </div>
+        </div>
+      )}
 
       {/* ── Jalons accordion ── */}
       <div className="space-y-2">

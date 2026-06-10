@@ -31,9 +31,9 @@ export async function GET(request: NextRequest) {
         q.question_text,
         q.reward_amount as question_reward
       FROM submissions s
-      JOIN users u ON s.user_id = u.id
-      JOIN steps st ON s.step_id = st.id
-      JOIN questions q ON s.question_id = q.id
+      LEFT JOIN users u ON s.user_id = u.id
+      LEFT JOIN steps st ON s.step_id = st.id
+      LEFT JOIN questions q ON s.question_id = q.id
       ORDER BY s.submitted_at DESC`
     );
 
