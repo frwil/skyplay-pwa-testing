@@ -34,6 +34,8 @@ export default function SubmissionFormWrapper({
   const [mode, setMode] = useState<"login" | "register">("login");
   const [username, setUsername] = useState("");
   const [email, setEmail] = useState("");
+  const [pin, setPin] = useState("");
+  const [registeredPin, setRegisteredPin] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [completedMap, setCompletedMap] = useState<Map<number, CompletedInfo>>(
@@ -98,6 +100,7 @@ export default function SubmissionFormWrapper({
 
       if (res.ok) {
         setUserId(data.user.id);
+        setRegisteredPin(data.pin); // Show PIN once
       } else {
         setError(data.error || "Erreur d'inscription");
       }
@@ -109,8 +112,8 @@ export default function SubmissionFormWrapper({
   };
 
   const handleLogin = async () => {
-    if (!username.trim()) {
-      setError("Le nom d'utilisateur est requis");
+    if (!username.trim() || !pin.trim()) {
+      setError("Nom d'utilisateur et code PIN requis");
       return;
     }
 
@@ -118,15 +121,17 @@ export default function SubmissionFormWrapper({
     setError(null);
 
     try {
-      const res = await fetch(
-        `/api/users/lookup?username=${encodeURIComponent(username.trim())}`
-      );
+      const params = new URLSearchParams({
+        username: username.trim(),
+        pin: pin.trim(),
+      });
+      const res = await fetch(`/api/users/lookup?${params}`);
       const data = await res.json();
 
       if (res.ok && data.user) {
         setUserId(data.user.id);
       } else {
-        setError(data.error || "Utilisateur introuvable");
+        setError(data.error || "Identifiants invalides");
       }
     } catch {
       setError("Erreur réseau");
@@ -194,6 +199,81 @@ export default function SubmissionFormWrapper({
               className="w-full bg-[#0d1b2e] border border-white/10 rounded-2xl p-3.5 text-white placeholder:text-white/25 focus:outline-none focus:border-[#00c8ff]/50 focus:ring-1 focus:ring-[#00c8ff]/30 transition"
               style={{ animation: "fadeInUp 0.3s ease-out" }}
             />
+          )}
+
+          {/* PIN field — only for login */}
+          {mode === "login" && (
+            <div className="space-y-1.5">
+              <input
+                type="text"
+                inputMode="numeric"
+                maxLength={4}
+                pattern="[0-9]{4}"
+                value={pin}
+                onChange={(e) => {
+                  const v = e.target.value.replace(/\D/g, "").slice(0, 4);
+                  setPin(v);
+                  setError(null);
+                }}
+                placeholder="Code PIN (4 chiffres)"
+                autoComplete="off"
+                className="w-full bg-[#0d1b2e] border border-white/10 rounded-2xl p-3.5 text-white placeholder:text-white/25 focus:outline-none focus:border-[#ffd700]/50 focus:ring-1 focus:ring-[#ffd700]/30 transition font-mono tracking-[4px] text-center text-lg"
+              />
+              <button
+                type="button"
+                onClick={async () => {
+                  if (!username.trim() || !email.trim()) {
+                    setError("Entre ton nom d'utilisateur et ton email pour réinitialiser le PIN");
+                    return;
+                  }
+                  setLoading(true);
+                  setError(null);
+                  try {
+                    const res = await fetch("/api/users/reset-pin", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ username: username.trim(), email: email.trim() }),
+                    });
+                    const data = await res.json();
+                    if (res.ok) {
+                      setPin(data.pin);
+                      alert(`Ton nouveau PIN est : ${data.pin}\n\nNote-le bien ! Il ne sera plus affiché.`);
+                    } else {
+                      setError(data.error || "Réinitialisation impossible");
+                    }
+                  } catch {
+                    setError("Erreur réseau");
+                  } finally {
+                    setLoading(false);
+                  }
+                }}
+                className="text-[10px] text-white/20 hover:text-[#ffd700]/60 transition text-left"
+              >
+                PIN oublié ? (nécessite ton email)
+              </button>
+            </div>
+          )}
+
+          {/* Show auto-generated PIN after registration */}
+          {registeredPin && (
+            <div
+              className="p-4 rounded-xl border space-y-2 text-center animate-fade-in-up"
+              style={{
+                backgroundColor: "rgba(255,215,0,0.08)",
+                borderColor: "rgba(255,215,0,0.3)",
+              }}
+            >
+              <p className="text-xs text-[#ffd700] font-bold uppercase tracking-wider">
+                🔑 Ton code PIN (auto-généré)
+              </p>
+              <p className="text-2xl font-black text-[#ffd700] font-mono tracking-[6px]">
+                {registeredPin}
+              </p>
+              <p className="text-[10px] text-white/40 leading-relaxed">
+                Note-le immédiatement ! Il ne sera plus affiché.<br />
+                Tu en as besoin pour te reconnecter.
+              </p>
+            </div>
           )}
 
           {error && (

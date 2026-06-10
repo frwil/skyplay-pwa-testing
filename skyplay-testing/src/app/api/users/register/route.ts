@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
+import { generatePin, hashPassword } from "@/lib/auth";
 
 export async function POST(request: NextRequest) {
   try {
@@ -29,7 +30,7 @@ export async function POST(request: NextRequest) {
 
     const db = await getDb();
 
-    // Check uniqueness with specific feedback
+    // Check uniqueness
     const existingUsername = await db.execute({
       sql: "SELECT id FROM users WHERE username = ?",
       args: [username.trim()],
@@ -52,9 +53,13 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // Generate PIN and hash it
+    const pin = generatePin();
+    const pinHash = await hashPassword(pin);
+
     const result = await db.execute({
-      sql: "INSERT INTO users (username, email) VALUES (?, ?)",
-      args: [username.trim(), email.trim()],
+      sql: "INSERT INTO users (username, email, role, password_hash) VALUES (?, ?, 'user', ?)",
+      args: [username.trim(), email.trim(), pinHash],
     });
 
     return NextResponse.json(
@@ -65,6 +70,7 @@ export async function POST(request: NextRequest) {
           username: username.trim(),
           email: email.trim(),
         },
+        pin, // Returned only once — user must save it!
       },
       { status: 201 }
     );

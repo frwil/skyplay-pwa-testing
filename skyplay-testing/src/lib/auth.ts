@@ -15,6 +15,12 @@ export async function verifyPassword(
   return bcrypt.compare(password, hash);
 }
 
+// ── PIN utilities ──
+
+export function generatePin(): string {
+  return String(Math.floor(1000 + Math.random() * 9000)); // 1000-9999
+}
+
 // ── JWT utilities ──
 
 const AUTH_SECRET = new TextEncoder().encode(
