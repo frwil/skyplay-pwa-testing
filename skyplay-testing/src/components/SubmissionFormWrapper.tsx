@@ -36,6 +36,7 @@ export default function SubmissionFormWrapper({
   const [email, setEmail] = useState("");
   const [pin, setPin] = useState("");
   const [registeredPin, setRegisteredPin] = useState<string | null>(null);
+  const [showResetEmail, setShowResetEmail] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [completedMap, setCompletedMap] = useState<Map<number, CompletedInfo>>(
@@ -219,38 +220,61 @@ export default function SubmissionFormWrapper({
                 autoComplete="off"
                 className="w-full bg-[#0d1b2e] border border-white/10 rounded-2xl p-3.5 text-white placeholder:text-white/25 focus:outline-none focus:border-[#ffd700]/50 focus:ring-1 focus:ring-[#ffd700]/30 transition font-mono tracking-[4px] text-center text-lg"
               />
-              <button
-                type="button"
-                onClick={async () => {
-                  if (!username.trim() || !email.trim()) {
-                    setError("Entre ton nom d'utilisateur et ton email pour réinitialiser le PIN");
-                    return;
-                  }
-                  setLoading(true);
-                  setError(null);
-                  try {
-                    const res = await fetch("/api/users/reset-pin", {
-                      method: "POST",
-                      headers: { "Content-Type": "application/json" },
-                      body: JSON.stringify({ username: username.trim(), email: email.trim() }),
-                    });
-                    const data = await res.json();
-                    if (res.ok) {
-                      setPin(data.pin);
-                      alert(`Ton nouveau PIN est : ${data.pin}\n\nNote-le bien ! Il ne sera plus affiché.`);
-                    } else {
-                      setError(data.error || "Réinitialisation impossible");
-                    }
-                  } catch {
-                    setError("Erreur réseau");
-                  } finally {
-                    setLoading(false);
-                  }
-                }}
-                className="text-[10px] text-white/20 hover:text-[#ffd700]/60 transition text-left"
-              >
-                PIN oublié ? (nécessite ton email)
-              </button>
+              {!showResetEmail ? (
+                <button
+                  type="button"
+                  onClick={() => setShowResetEmail(true)}
+                  className="text-[10px] text-white/20 hover:text-[#ffd700]/60 transition text-left"
+                >
+                  PIN oublié ?
+                </button>
+              ) : (
+                <div className="space-y-2 p-3 rounded-xl bg-white/[0.02] border border-white/5" style={{ animation: "fadeInUp 0.3s ease-out" }}>
+                  <input
+                    type="email"
+                    value={email}
+                    onChange={(e) => { setEmail(e.target.value); setError(null); }}
+                    placeholder="Ton email d'inscription"
+                    className="w-full bg-[#0d1b2e] border border-white/10 rounded-xl p-2.5 text-sm text-white placeholder:text-white/25 focus:outline-none focus:border-[#ffd700]/50 transition"
+                  />
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        if (!email.trim()) { setError("Email requis"); return; }
+                        setLoading(true); setError(null);
+                        try {
+                          const res = await fetch("/api/users/reset-pin", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ username: username.trim(), email: email.trim() }),
+                          });
+                          const data = await res.json();
+                          if (res.ok) {
+                            setPin(data.pin);
+                            setShowResetEmail(false);
+                            alert(`Ton nouveau PIN est : ${data.pin}\n\nNote-le bien ! Il ne sera plus affiché.`);
+                          } else {
+                            setError(data.error || "Réinitialisation impossible");
+                          }
+                        } catch { setError("Erreur réseau"); }
+                        finally { setLoading(false); }
+                      }}
+                      disabled={loading}
+                      className="flex-1 py-2 rounded-full text-xs font-bold bg-[#ffd700]/15 border border-[#ffd700]/30 text-[#ffd700] hover:bg-[#ffd700]/25 transition disabled:opacity-50"
+                    >
+                      Réinitialiser mon PIN
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => { setShowResetEmail(false); setEmail(""); }}
+                      className="py-2 px-3 rounded-full text-xs text-white/30 hover:text-white/60 transition"
+                    >
+                      Annuler
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
