@@ -25,7 +25,13 @@ export async function getDb(): Promise<Client> {
 }
 
 async function initializeSchema(): Promise<void> {
-  // Create tables
+  // Fast-path: skip if users table already exists (avoids SQL parsing overhead)
+  const tableCheck = await getClient().execute(
+    "SELECT name FROM sqlite_master WHERE type='table' AND name='users'"
+  );
+  if (tableCheck.rows.length > 0) return;
+
+  // Create all tables in one batch
   await getClient().executeMultiple(`
     CREATE TABLE IF NOT EXISTS users (
       id INTEGER PRIMARY KEY AUTOINCREMENT,

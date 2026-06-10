@@ -22,36 +22,47 @@ interface StepWithQuestions {
 export default async function HomePage() {
   const db = await getDb();
 
-  const stepsRs = await db.execute("SELECT * FROM steps ORDER BY id");
+  // Single query: steps + questions via JSON aggregation
+  const [stepsRs, statsRs] = await Promise.all([
+    db.execute(
+      `SELECT
+        s.id, s.slug, s.title,
+        COALESCE(
+          json_group_array(
+            json_object('id', q.id, 'question_text', q.question_text, 'reward_amount', q.reward_amount, 'sort_order', q.sort_order)
+          ),
+          '[]'
+        ) as questions_json
+      FROM steps s
+      LEFT JOIN questions q ON q.step_id = s.id
+      GROUP BY s.id
+      ORDER BY s.id`
+    ),
+    db.execute(
+      `SELECT
+        (SELECT COUNT(*) FROM users WHERE role = 'user' OR role IS NULL) as users,
+        (SELECT COUNT(*) FROM submissions) as submissions,
+        (SELECT COUNT(*) FROM submissions WHERE status = 'APPROVED') as approved,
+        (SELECT COALESCE(SUM(q.reward_amount), 0)
+         FROM submissions s
+         JOIN questions q ON s.question_id = q.id
+         WHERE s.status = 'APPROVED') as totalSky`
+    ),
+  ]);
 
-  const steps = stepsRs.rows as unknown as {
-    id: number;
-    slug: string;
-    title: string;
-  }[];
-
-  const stepsWithQuestions: StepWithQuestions[] = await Promise.all(
-    steps.map(async (step) => {
-      const qRs = await db.execute({
-        sql: "SELECT id, question_text, reward_amount, sort_order FROM questions WHERE step_id = ? ORDER BY sort_order",
-        args: [step.id],
-      });
-      return { ...step, questions: qRs.rows as unknown as Question[] };
-    })
-  );
-
-  // Stats from DB (exclude admin accounts)
-  const statsRs = await db.execute(
-    `SELECT
-      (SELECT COUNT(*) FROM users WHERE role = 'user' OR role IS NULL) as users,
-      (SELECT COUNT(*) FROM submissions) as submissions,
-      (SELECT COUNT(*) FROM submissions WHERE status = 'APPROVED') as approved,
-      (SELECT COALESCE(SUM(q.reward_amount), 0)
-       FROM submissions s
-       JOIN questions q ON s.question_id = q.id
-       WHERE s.status = 'APPROVED') as totalSky
-    `
-  );
+  const stepsWithQuestions: StepWithQuestions[] = (
+    stepsRs.rows as unknown as {
+      id: number;
+      slug: string;
+      title: string;
+      questions_json: string;
+    }[]
+  ).map((row) => ({
+    id: row.id,
+    slug: row.slug,
+    title: row.title,
+    questions: JSON.parse(row.questions_json) as Question[],
+  }));
 
   const stats = statsRs.rows[0] as unknown as {
     users: number;

@@ -5,17 +5,34 @@ export async function GET() {
   try {
     const db = await getDb();
 
-    const stepsRs = await db.execute("SELECT * FROM steps ORDER BY id");
-
-    const stepsWithQuestions = await Promise.all(
-      stepsRs.rows.map(async (step) => {
-        const qRs = await db.execute({
-          sql: "SELECT id, question_text, reward_amount, sort_order FROM questions WHERE step_id = ? ORDER BY sort_order",
-          args: [step.id],
-        });
-        return { ...step, questions: qRs.rows };
-      })
+    const rs = await db.execute(
+      `SELECT
+        s.id, s.slug, s.title,
+        COALESCE(
+          json_group_array(
+            json_object('id', q.id, 'question_text', q.question_text, 'reward_amount', q.reward_amount, 'sort_order', q.sort_order)
+          ),
+          '[]'
+        ) as questions_json
+      FROM steps s
+      LEFT JOIN questions q ON q.step_id = s.id
+      GROUP BY s.id
+      ORDER BY s.id`
     );
+
+    const stepsWithQuestions = (
+      rs.rows as unknown as {
+        id: number;
+        slug: string;
+        title: string;
+        questions_json: string;
+      }[]
+    ).map((row) => ({
+      id: row.id,
+      slug: row.slug,
+      title: row.title,
+      questions: JSON.parse(row.questions_json),
+    }));
 
     return NextResponse.json({ steps: stepsWithQuestions });
   } catch (error) {
