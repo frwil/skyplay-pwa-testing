@@ -40,10 +40,10 @@ export default async function HomePage() {
     })
   );
 
-  // Stats from DB
+  // Stats from DB (exclude admin accounts)
   const statsRs = await db.execute(
     `SELECT
-      (SELECT COUNT(*) FROM users) as users,
+      (SELECT COUNT(*) FROM users WHERE role = 'user' OR role IS NULL) as users,
       (SELECT COUNT(*) FROM submissions) as submissions,
       (SELECT COUNT(*) FROM submissions WHERE status = 'APPROVED') as approved,
       (SELECT COALESCE(SUM(q.reward_amount), 0)
