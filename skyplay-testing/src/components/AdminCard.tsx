@@ -52,6 +52,7 @@ export default function AdminCard({ submission, onStatusChange }: AdminCardProps
       if (res.ok) {
         setLocalStatus(status);
         setSuccessMsg(data.message || (status === "APPROVED" ? "✅ Approuvé !" : "❌ Rejeté"));
+        setLoading(false);
         // Refresh parent data after a brief delay so the user sees the confirmation
         setTimeout(() => {
           onStatusChange();
@@ -60,6 +61,7 @@ export default function AdminCard({ submission, onStatusChange }: AdminCardProps
       } else {
         setError(data.error || "Erreur lors de la mise à jour");
         setLoading(false);
+      }
       }
     } catch {
       setError("Erreur réseau");
