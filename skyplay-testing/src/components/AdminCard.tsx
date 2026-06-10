@@ -62,7 +62,6 @@ export default function AdminCard({ submission, onStatusChange }: AdminCardProps
         setError(data.error || "Erreur lors de la mise à jour");
         setLoading(false);
       }
-      }
     } catch {
       setError("Erreur réseau");
       setLoading(false);
