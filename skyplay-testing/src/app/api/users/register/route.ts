@@ -53,7 +53,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Generate PIN and hash it
+    // Generate PIN, hash it, and send via email
     const pin = generatePin();
     const pinHash = await hashPassword(pin);
 
@@ -61,6 +61,10 @@ export async function POST(request: NextRequest) {
       sql: "INSERT INTO users (username, email, role, password_hash) VALUES (?, ?, 'user', ?)",
       args: [username.trim(), email.trim(), pinHash],
     });
+
+    // Send PIN via email (don't return it in the response)
+    const { sendPinEmail } = await import("@/lib/email");
+    const sent = await sendPinEmail(email.trim(), username.trim(), pin, true);
 
     return NextResponse.json(
       {
@@ -70,7 +74,9 @@ export async function POST(request: NextRequest) {
           username: username.trim(),
           email: email.trim(),
         },
-        pin, // Returned only once — user must save it!
+        message: sent
+          ? "Compte créé ! Vérifie tes emails pour ton code PIN."
+          : "Compte créé ! Contacte l'admin pour récupérer ton PIN.",
       },
       { status: 201 }
     );

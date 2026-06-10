@@ -42,10 +42,15 @@ export async function POST(request: NextRequest) {
       args: [pinHash, user.id],
     });
 
+    // Send new PIN via email (don't return it)
+    const { sendPinEmail } = await import("@/lib/email");
+    const sent = await sendPinEmail(user.email, user.username, newPin, false);
+
     return NextResponse.json({
       success: true,
-      pin: newPin,
-      message: "Nouveau PIN généré. Note-le bien, il ne sera plus affiché.",
+      message: sent
+        ? "Un nouveau PIN a été envoyé à ton adresse email."
+        : "PIN réinitialisé mais l'email n'a pas pu être envoyé. Contacte l'admin.",
     });
   } catch (error) {
     console.error("POST /api/users/reset-pin error:", error);

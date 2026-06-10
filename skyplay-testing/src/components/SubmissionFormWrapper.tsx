@@ -37,6 +37,7 @@ export default function SubmissionFormWrapper({
   const [pin, setPin] = useState("");
   const [registeredPin, setRegisteredPin] = useState<string | null>(null);
   const [showResetEmail, setShowResetEmail] = useState(false);
+  const [resetSuccess, setResetSuccess] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [completedMap, setCompletedMap] = useState<Map<number, CompletedInfo>>(
@@ -101,7 +102,7 @@ export default function SubmissionFormWrapper({
 
       if (res.ok) {
         setUserId(data.user.id);
-        setRegisteredPin(data.pin); // Show PIN once
+        setRegisteredPin(data.message); // Show email confirmation message
       } else {
         setError(data.error || "Erreur d'inscription");
       }
@@ -205,30 +206,26 @@ export default function SubmissionFormWrapper({
           {/* PIN field — only for login */}
           {mode === "login" && (
             <div className="space-y-1.5">
-              <input
-                type="text"
-                inputMode="numeric"
-                maxLength={4}
-                pattern="[0-9]{4}"
-                value={pin}
-                onChange={(e) => {
-                  const v = e.target.value.replace(/\D/g, "").slice(0, 4);
-                  setPin(v);
-                  setError(null);
-                }}
-                placeholder="Code PIN (4 chiffres)"
-                autoComplete="off"
-                className="w-full bg-[#0d1b2e] border border-white/10 rounded-2xl p-3.5 text-white placeholder:text-white/25 focus:outline-none focus:border-[#ffd700]/50 focus:ring-1 focus:ring-[#ffd700]/30 transition font-mono tracking-[4px] text-center text-lg"
-              />
-              {!showResetEmail ? (
-                <button
-                  type="button"
-                  onClick={() => setShowResetEmail(true)}
-                  className="text-[10px] text-white/20 hover:text-[#ffd700]/60 transition text-left"
+              {/* Success message after PIN reset */}
+              {resetSuccess ? (
+                <div
+                  className="p-3 rounded-xl border text-center animate-fade-in-up"
+                  style={{ backgroundColor: "rgba(46,204,113,0.08)", borderColor: "rgba(46,204,113,0.3)" }}
                 >
-                  PIN oublié ?
-                </button>
-              ) : (
+                  <p className="text-xs text-[#2ecc71] font-bold">✅ Email envoyé</p>
+                  <p className="text-[11px] text-white/50 mt-1">
+                    Vérifie tes emails et reconnecte-toi avec ton nouveau PIN.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => { setResetSuccess(false); setPin(""); setShowResetEmail(false); setEmail(""); }}
+                    className="mt-2 text-xs text-[#00c8ff] hover:underline"
+                  >
+                    Revenir à la connexion
+                  </button>
+                </div>
+              ) : showResetEmail ? (
+                /* Reset email form */
                 <div className="space-y-2 p-3 rounded-xl bg-white/[0.02] border border-white/5" style={{ animation: "fadeInUp 0.3s ease-out" }}>
                   <input
                     type="email"
@@ -251,9 +248,7 @@ export default function SubmissionFormWrapper({
                           });
                           const data = await res.json();
                           if (res.ok) {
-                            setPin(data.pin);
-                            setShowResetEmail(false);
-                            alert(`Ton nouveau PIN est : ${data.pin}\n\nNote-le bien ! Il ne sera plus affiché.`);
+                            setResetSuccess(true);
                           } else {
                             setError(data.error || "Réinitialisation impossible");
                           }
@@ -274,28 +269,53 @@ export default function SubmissionFormWrapper({
                     </button>
                   </div>
                 </div>
+              ) : (
+                /* Normal PIN input */
+                <>
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    maxLength={4}
+                    pattern="[0-9]{4}"
+                    value={pin}
+                    onChange={(e) => {
+                      const v = e.target.value.replace(/\D/g, "").slice(0, 4);
+                      setPin(v);
+                      setError(null);
+                    }}
+                    placeholder="Code PIN (4 chiffres)"
+                    autoComplete="off"
+                    className="w-full bg-[#0d1b2e] border border-white/10 rounded-2xl p-3.5 text-white placeholder:text-white/25 focus:outline-none focus:border-[#ffd700]/50 focus:ring-1 focus:ring-[#ffd700]/30 transition font-mono tracking-[4px] text-center text-lg"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowResetEmail(true)}
+                    className="text-[10px] text-white/20 hover:text-[#ffd700]/60 transition text-left"
+                  >
+                    PIN oublié ?
+                  </button>
+                </>
               )}
             </div>
           )}
 
-          {/* Show auto-generated PIN after registration */}
+          {/* Show confirmation after registration */}
           {registeredPin && (
             <div
               className="p-4 rounded-xl border space-y-2 text-center animate-fade-in-up"
               style={{
-                backgroundColor: "rgba(255,215,0,0.08)",
-                borderColor: "rgba(255,215,0,0.3)",
+                backgroundColor: "rgba(46,204,113,0.08)",
+                borderColor: "rgba(46,204,113,0.3)",
               }}
             >
-              <p className="text-xs text-[#ffd700] font-bold uppercase tracking-wider">
-                🔑 Ton code PIN (auto-généré)
+              <p className="text-xs text-[#2ecc71] font-bold uppercase tracking-wider">
+                ✅ Compte créé
               </p>
-              <p className="text-2xl font-black text-[#ffd700] font-mono tracking-[6px]">
+              <p className="text-sm text-white/70">
                 {registeredPin}
               </p>
-              <p className="text-[10px] text-white/40 leading-relaxed">
-                Note-le immédiatement ! Il ne sera plus affiché.<br />
-                Tu en as besoin pour te reconnecter.
+              <p className="text-[10px] text-white/30">
+                Vérifie tes emails (spams inclus)
               </p>
             </div>
           )}
