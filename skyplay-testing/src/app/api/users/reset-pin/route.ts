@@ -46,8 +46,13 @@ export async function POST(request: NextRequest) {
     const { sendPinEmail } = await import("@/lib/email");
     const sent = await sendPinEmail(user.email, user.username, newPin, false);
 
+    if (!sent) {
+      console.error("Reset PIN: email failed to send to", user.email);
+    }
+
     return NextResponse.json({
       success: true,
+      emailSent: sent,
       message: sent
         ? "Un nouveau PIN a été envoyé à ton adresse email."
         : "PIN réinitialisé mais l'email n'a pas pu être envoyé. Contacte l'admin.",

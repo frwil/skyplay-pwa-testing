@@ -102,7 +102,7 @@ export default function SubmissionFormWrapper({
 
       if (res.ok) {
         setUserId(data.user.id);
-        setRegisteredPin(data.message); // Show email confirmation message
+        setRegisteredPin(data.message);
       } else {
         setError(data.error || "Erreur d'inscription");
       }
@@ -247,10 +247,12 @@ export default function SubmissionFormWrapper({
                             body: JSON.stringify({ username: username.trim(), email: email.trim() }),
                           });
                           const data = await res.json();
-                          if (res.ok) {
-                            setResetSuccess(true);
-                          } else {
+                          if (!res.ok) {
                             setError(data.error || "Réinitialisation impossible");
+                          } else if (!data.emailSent) {
+                            setError(data.message || "PIN réinitialisé mais l'email n'a pas pu être envoyé. Contacte l'admin.");
+                          } else {
+                            setResetSuccess(true);
                           }
                         } catch { setError("Erreur réseau"); }
                         finally { setLoading(false); }

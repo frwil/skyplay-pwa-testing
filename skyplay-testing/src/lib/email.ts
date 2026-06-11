@@ -1,5 +1,9 @@
 import { Resend } from "resend";
 
+if (!process.env.RESEND_API_KEY) {
+  console.error("RESEND_API_KEY is not set — emails will not be sent");
+}
+
 const resend = new Resend(process.env.RESEND_API_KEY);
 
 const FROM_EMAIL = "SKY PLAY Testing <noreply@skyplay.cloud>";
@@ -57,7 +61,15 @@ export async function sendPinEmail(
     });
     return true;
   } catch (error) {
-    console.error("Failed to send PIN email:", error);
+    const errMsg =
+      error instanceof Error
+        ? `${error.name}: ${error.message}`
+        : String(error);
+    console.error("Failed to send PIN email:", {
+      to,
+      from: FROM_EMAIL,
+      error: errMsg,
+    });
     return false;
   }
 }

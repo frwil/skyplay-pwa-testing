@@ -66,9 +66,14 @@ export async function POST(request: NextRequest) {
     const { sendPinEmail } = await import("@/lib/email");
     const sent = await sendPinEmail(email.trim(), username.trim(), pin, true);
 
+    if (!sent) {
+      console.error("Register: email failed to send to", email.trim());
+    }
+
     return NextResponse.json(
       {
         success: true,
+        emailSent: sent,
         user: {
           id: Number(result.lastInsertRowid),
           username: username.trim(),
