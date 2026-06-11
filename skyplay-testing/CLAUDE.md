@@ -18,7 +18,7 @@
 - **Production URL**: https://skyplay-testing.vercel.app
 - **Vercel project**: `fohom-tagne-william-franciss-projects/skyplay-testing`
 - **Database**: Turso (`libsql://` via `@libsql/client`)
-- **Env vars (Vercel)**: `TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN`, `AUTH_SECRET`, `ADMIN_SUPER_PASS`, `ADMIN_PASS`
+- **Env vars (Vercel)**: `TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN`, `AUTH_SECRET`, `ADMIN_SUPER_PASS`, `ADMIN_PASS`, `RESEND_API_KEY`
 
 ## Tech Stack
 
