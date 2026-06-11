@@ -6,7 +6,8 @@ if (!process.env.RESEND_API_KEY) {
 
 const resend = new Resend(process.env.RESEND_API_KEY);
 
-const FROM_EMAIL = "SKY PLAY Testing <noreply@skyplay.cloud>";
+// TODO: remettre noreply@skyplay.cloud quand le domaine sera vérifié dans Resend
+const FROM_EMAIL = "SKY PLAY Testing <onboarding@resend.dev>";
 
 export async function sendPinEmail(
   to: string,
