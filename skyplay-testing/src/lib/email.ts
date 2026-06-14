@@ -1,13 +1,23 @@
-import { Resend } from "resend";
+import nodemailer from "nodemailer";
 
-if (!process.env.RESEND_API_KEY) {
-  console.error("RESEND_API_KEY is not set — emails will not be sent");
+function createTransport() {
+  const user = process.env.GMAIL_USER;
+  const pass = process.env.GMAIL_APP_PASSWORD;
+
+  if (!user || !pass) {
+    console.error("GMAIL_USER or GMAIL_APP_PASSWORD is not set — emails will not be sent");
+    return null;
+  }
+
+  return nodemailer.createTransport({
+    host: "smtp.gmail.com",
+    port: 587,
+    secure: false, // true for 465, false for other ports
+    auth: { user, pass },
+  });
 }
 
-const resend = new Resend(process.env.RESEND_API_KEY);
-
-// TODO: remettre noreply@skyplay.cloud quand le domaine sera vérifié dans Resend
-const FROM_EMAIL = "SKY PLAY Testing <onboarding@resend.dev>";
+const FROM_EMAIL = "SKY PLAY Testing <noreply@skyplay.cloud>";
 
 export async function sendPinEmail(
   to: string,
@@ -15,8 +25,14 @@ export async function sendPinEmail(
   pin: string,
   isNew: boolean
 ): Promise<boolean> {
+  const transport = createTransport();
+  if (!transport) {
+    console.error("sendPinEmail: no transport available");
+    return false;
+  }
+
   try {
-    await resend.emails.send({
+    await transport.sendMail({
       from: FROM_EMAIL,
       to,
       subject: isNew
