@@ -37,6 +37,21 @@ export async function POST(request: NextRequest) {
 
     const db = await getDb();
 
+    // Vérifier que la campagne est toujours active
+    const campaignRs = await db.execute(
+      "SELECT deadline FROM campaigns ORDER BY created_at DESC LIMIT 1"
+    );
+    const activeCampaign = campaignRs.rows[0] as unknown as { deadline: string } | undefined;
+    if (activeCampaign) {
+      const deadlineMs = Date.parse(activeCampaign.deadline);
+      if (Date.now() > deadlineMs) {
+        return NextResponse.json(
+          { error: "La campagne de test est terminée. Les soumissions sont fermées." },
+          { status: 403 }
+        );
+      }
+    }
+
     // Vérifier que l'utilisateur existe
     const userRs = await db.execute({
       sql: "SELECT id FROM users WHERE id = ?",

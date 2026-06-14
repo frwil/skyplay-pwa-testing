@@ -13,6 +13,7 @@ import {
   Users,
   Trophy,
   Activity,
+  Clock,
 } from "lucide-react";
 
 interface Submission {
@@ -92,7 +93,27 @@ export default function AdminPage() {
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState<"ALL" | "PENDING" | "APPROVED" | "REJECTED">("ALL");
   const [stepFilter, setStepFilter] = useState<string>("ALL");
-  const [tab, setTab] = useState<"dashboard" | "submissions">("dashboard");
+  const [tab, setTab] = useState<"dashboard" | "submissions" | "campagne">("dashboard");
+
+  // Campaign state
+  const [activeCampaign, setActiveCampaign] = useState<{
+    id: number;
+    name: string;
+    deadline: string;
+    createdAt: string;
+    expired?: boolean;
+    remainingMs?: number;
+  } | null>(null);
+  const [newDeadline, setNewDeadline] = useState("");
+  const [extendLoading, setExtendLoading] = useState(false);
+  const [extendError, setExtendError] = useState<string | null>(null);
+  const [extendSuccess, setExtendSuccess] = useState<string | null>(null);
+  // Create campaign state (superadmin only)
+  const [newCampaignName, setNewCampaignName] = useState("");
+  const [newCampaignDeadline, setNewCampaignDeadline] = useState("");
+  const [createLoading, setCreateLoading] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
+  const [createSuccess, setCreateSuccess] = useState<string | null>(null);
 
   // Try to restore session on mount
   useEffect(() => {
@@ -112,9 +133,10 @@ export default function AdminPage() {
     setLoading(true);
     setError(null);
     try {
-      const [subsRes, statsRes] = await Promise.all([
+      const [subsRes, statsRes, campaignRes] = await Promise.all([
         fetch("/api/admin/submissions", { credentials: "same-origin" }),
         fetch("/api/admin/stats", { credentials: "same-origin" }),
+        fetch("/api/campaign"),
       ]);
 
       if (subsRes.status === 401 || statsRes.status === 401) {
@@ -136,6 +158,16 @@ export default function AdminPage() {
         setPhases(statsData.phases);
         setUsers(statsData.users);
         setOverview(statsData.overview);
+      }
+
+      if (campaignRes.ok) {
+        const campaignData = await campaignRes.json();
+        setActiveCampaign(campaignData.campaign);
+        if (campaignData.campaign?.deadline) {
+          setNewDeadline(
+            new Date(campaignData.campaign.deadline).toISOString().slice(0, 16)
+          );
+        }
       }
     } catch {
       setError("Erreur réseau");
@@ -175,6 +207,63 @@ export default function AdminPage() {
     }
   };
 
+  const handleExtend = async () => {
+    setExtendLoading(true);
+    setExtendError(null);
+    setExtendSuccess(null);
+    try {
+      const res = await fetch("/api/admin/campaign", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({ deadline: new Date(newDeadline).toISOString() }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setActiveCampaign(data.campaign);
+        setExtendSuccess("Date limite prolongée avec succès !");
+        setTimeout(() => setExtendSuccess(null), 3000);
+      } else {
+        setExtendError(data.error || "Erreur lors de la prolongation");
+      }
+    } catch {
+      setExtendError("Erreur réseau");
+    } finally {
+      setExtendLoading(false);
+    }
+  };
+
+  const handleCreateCampaign = async () => {
+    setCreateLoading(true);
+    setCreateError(null);
+    setCreateSuccess(null);
+    try {
+      const res = await fetch("/api/admin/campaign", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({
+          name: newCampaignName || "Campagne de test",
+          deadline: new Date(newCampaignDeadline).toISOString(),
+        }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setActiveCampaign(data.campaign);
+        setNewCampaignName("");
+        setNewCampaignDeadline("");
+        setCreateSuccess("Nouvelle campagne créée !");
+        setTimeout(() => setCreateSuccess(null), 3000);
+      } else {
+        setCreateError(data.error || "Erreur lors de la création");
+      }
+    } catch {
+      setCreateError("Erreur réseau");
+    } finally {
+      setCreateLoading(false);
+    }
+  };
+
   const handleLogout = async () => {
     await fetch("/api/auth/logout", { method: "POST", credentials: "same-origin" });
     setAdminUser(null);
@@ -185,6 +274,7 @@ export default function AdminPage() {
     setPhases([]);
     setUsers([]);
     setOverview(null);
+    setActiveCampaign(null);
   };
 
   const stepSlugs = ["ALL", ...new Set(submissions.map((s) => s.step_slug))];
@@ -343,6 +433,7 @@ export default function AdminPage() {
           {([
             { key: "dashboard", label: "Dashboard", icon: BarChart3 },
             { key: "submissions", label: "Soumissions", icon: Activity },
+            { key: "campagne", label: "Campagne", icon: Clock },
           ] as const).map((t) => (
             <button
               key={t.key}
@@ -652,6 +743,207 @@ export default function AdminPage() {
               </div>
             )}
           </>
+        )}
+
+        {/* ═══════════ CAMPAGNE TAB ═══════════ */}
+        {tab === "campagne" && (
+          <div className="space-y-6">
+            {/* Current campaign info */}
+            {activeCampaign ? (
+              <div
+                className="rounded-2xl border p-6"
+                style={{
+                  backgroundColor: "rgba(13,27,46,0.6)",
+                  borderColor: "rgba(255,255,255,0.06)",
+                }}
+              >
+                <h2 className="text-lg font-black text-white mb-4 flex items-center gap-2">
+                  <Clock className="w-5 h-5 text-[#00c8ff]" />
+                  Campagne active
+                </h2>
+
+                <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+                  {[
+                    { label: "Nom", value: activeCampaign.name, color: "#00c8ff" },
+                    {
+                      label: "Date limite",
+                      value: new Date(activeCampaign.deadline).toLocaleDateString("fr-FR", {
+                        day: "numeric",
+                        month: "long",
+                        year: "numeric",
+                        hour: "2-digit",
+                        minute: "2-digit",
+                      }),
+                      color: "#ffd700",
+                    },
+                    {
+                      label: "Statut",
+                      value: activeCampaign.expired ? "Terminée" : "En cours",
+                      color: activeCampaign.expired ? "#FD2E5F" : "#2ecc71",
+                    },
+                    {
+                      label: "Créée le",
+                      value: new Date(activeCampaign.createdAt).toLocaleDateString("fr-FR", {
+                        day: "numeric",
+                        month: "long",
+                        year: "numeric",
+                      }),
+                      color: "rgba(255,255,255,0.4)",
+                    },
+                  ].map((item) => (
+                    <div key={item.label}>
+                      <p className="text-[10px] text-white/30 uppercase tracking-wider mb-1">
+                        {item.label}
+                      </p>
+                      <p
+                        className="text-sm font-black"
+                        style={{ color: item.color }}
+                      >
+                        {item.value}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Extend deadline form */}
+                <div className="pt-6 border-t border-white/5">
+                  <h3 className="text-sm font-black text-white mb-3">
+                    Prolonger la campagne
+                  </h3>
+                  <div className="flex items-end gap-3 flex-wrap">
+                    <div className="flex-1 min-w-[220px]">
+                      <label className="block text-[10px] text-white/30 uppercase tracking-wider mb-1">
+                        Nouvelle date limite
+                      </label>
+                      <input
+                        type="datetime-local"
+                        value={newDeadline}
+                        onChange={(e) => {
+                          setNewDeadline(e.target.value);
+                          setExtendError(null);
+                          setExtendSuccess(null);
+                        }}
+                        className="w-full bg-[#0d1b2e] border border-white/10 rounded-xl p-3 text-white text-sm focus:outline-none focus:border-[#ffd700]/50 focus:ring-1 focus:ring-[#ffd700]/30 transition"
+                      />
+                    </div>
+                    <button
+                      onClick={handleExtend}
+                      disabled={extendLoading}
+                      className="px-5 py-3 rounded-full font-black text-sm uppercase tracking-wider bg-[#ffd700]/15 border border-[#ffd700]/30 text-[#ffd700] hover:bg-[#ffd700]/25 transition disabled:opacity-50"
+                    >
+                      {extendLoading ? (
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                      ) : (
+                        "Prolonger"
+                      )}
+                    </button>
+                  </div>
+
+                  {extendError && (
+                    <div className="mt-3 p-3 rounded-xl bg-red-500/10 border border-red-500/20 text-red-400 text-xs font-medium">
+                      {extendError}
+                    </div>
+                  )}
+                  {extendSuccess && (
+                    <div className="mt-3 p-3 rounded-xl bg-[#2ecc71]/10 border border-[#2ecc71]/20 text-[#2ecc71] text-xs font-medium">
+                      {extendSuccess}
+                    </div>
+                  )}
+                </div>
+              </div>
+            ) : (
+              <div
+                className="rounded-2xl border p-8 text-center"
+                style={{
+                  backgroundColor: "rgba(13,27,46,0.6)",
+                  borderColor: "rgba(255,255,255,0.06)",
+                }}
+              >
+                <Clock className="w-10 h-10 mx-auto mb-3 text-white/15" />
+                <p className="text-white/40 font-medium">
+                  Aucune campagne active
+                </p>
+              </div>
+            )}
+
+            {/* Create new campaign — superadmin only */}
+            {adminUser.role === "superadmin" && (
+              <div
+                className="rounded-2xl border p-6"
+                style={{
+                  backgroundColor: "rgba(13,27,46,0.6)",
+                  borderColor: "rgba(255,215,0,0.15)",
+                }}
+              >
+                <h2 className="text-sm font-black text-white mb-4 flex items-center gap-2">
+                  <Shield className="w-4 h-4 text-[#ffd700]" />
+                  Nouvelle campagne
+                  <span className="text-[10px] text-[#ffd700]/60 font-normal">
+                    (superadmin)
+                  </span>
+                </h2>
+
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-[10px] text-white/30 uppercase tracking-wider mb-1">
+                      Nom de la campagne
+                    </label>
+                    <input
+                      type="text"
+                      value={newCampaignName}
+                      onChange={(e) => {
+                        setNewCampaignName(e.target.value);
+                        setCreateError(null);
+                      }}
+                      placeholder="Campagne de test #2"
+                      className="w-full bg-[#0d1b2e] border border-white/10 rounded-xl p-3 text-white text-sm focus:outline-none focus:border-[#ffd700]/50 focus:ring-1 focus:ring-[#ffd700]/30 transition"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-[10px] text-white/30 uppercase tracking-wider mb-1">
+                      Date limite (minimum 7 jours)
+                    </label>
+                    <input
+                      type="datetime-local"
+                      value={newCampaignDeadline}
+                      onChange={(e) => {
+                        setNewCampaignDeadline(e.target.value);
+                        setCreateError(null);
+                      }}
+                      min={new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
+                        .toISOString()
+                        .slice(0, 16)}
+                      className="w-full bg-[#0d1b2e] border border-white/10 rounded-xl p-3 text-white text-sm focus:outline-none focus:border-[#ffd700]/50 focus:ring-1 focus:ring-[#ffd700]/30 transition"
+                    />
+                  </div>
+
+                  <button
+                    onClick={handleCreateCampaign}
+                    disabled={createLoading || !newCampaignDeadline}
+                    className="w-full py-3 rounded-full font-black text-sm uppercase tracking-wider bg-[#ffd700]/15 border border-[#ffd700]/30 text-[#ffd700] hover:bg-[#ffd700]/25 transition disabled:opacity-50"
+                  >
+                    {createLoading ? (
+                      <Loader2 className="w-4 h-4 animate-spin mx-auto" />
+                    ) : (
+                      "Créer la campagne"
+                    )}
+                  </button>
+
+                  {createError && (
+                    <div className="p-3 rounded-xl bg-red-500/10 border border-red-500/20 text-red-400 text-xs font-medium">
+                      {createError}
+                    </div>
+                  )}
+                  {createSuccess && (
+                    <div className="p-3 rounded-xl bg-[#2ecc71]/10 border border-[#2ecc71]/20 text-[#2ecc71] text-xs font-medium">
+                      {createSuccess}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
         )}
       </div>
     </main>

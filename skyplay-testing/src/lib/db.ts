@@ -25,14 +25,15 @@ export async function getDb(): Promise<Client> {
 }
 
 async function initializeSchema(): Promise<void> {
-  // Fast-path: skip if users table already exists (avoids SQL parsing overhead)
+  // Fast-path: skip main tables if users already exists (avoids SQL parsing overhead)
   const tableCheck = await getClient().execute(
     "SELECT name FROM sqlite_master WHERE type='table' AND name='users'"
   );
-  if (tableCheck.rows.length > 0) return;
+  const usersExist = tableCheck.rows.length > 0;
 
-  // Create all tables in one batch
-  await getClient().executeMultiple(`
+  if (!usersExist) {
+    // Create all tables in one batch
+    await getClient().executeMultiple(`
     CREATE TABLE IF NOT EXISTS users (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       username VARCHAR(50) UNIQUE NOT NULL,
@@ -71,7 +72,8 @@ async function initializeSchema(): Promise<void> {
       FOREIGN KEY (question_id) REFERENCES questions(id),
       UNIQUE(user_id, question_id)
     );
-  `);
+    `);
+  }
 
   // Migrate existing databases that may lack the new columns
   try {
@@ -84,6 +86,16 @@ async function initializeSchema(): Promise<void> {
       "ALTER TABLE users ADD COLUMN password_hash TEXT"
     );
   } catch { /* column already exists */ }
+
+  // Campaigns table — always ensure it exists (even on older DBs)
+  await getClient().execute(`
+    CREATE TABLE IF NOT EXISTS campaigns (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL DEFAULT 'Campagne de test',
+      deadline TIMESTAMP NOT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
 }
 
 async function seedData(): Promise<void> {
@@ -159,6 +171,17 @@ async function seedData(): Promise<void> {
         args: [adminUser, adminEmail, "admin", hash],
       });
     }
+  }
+
+  // Seed default campaign (if none exists) — starts tomorrow, 7 days
+  const campaignRs = await client.execute("SELECT COUNT(*) as cnt FROM campaigns");
+  const campaignCnt = campaignRs.rows[0]?.cnt as number;
+
+  if (campaignCnt === 0) {
+    await client.execute({
+      sql: "INSERT INTO campaigns (name, deadline) VALUES (?, ?)",
+      args: ["Campagne de test #1", "2026-06-22T00:00:00Z"],
+    });
   }
 }
 

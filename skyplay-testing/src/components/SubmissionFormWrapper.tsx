@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import SubmissionForm from "./SubmissionForm";
-import { LogIn, UserPlus } from "lucide-react";
+import { LogIn, UserPlus, AlertTriangle } from "lucide-react";
 
 interface Question {
   id: number;
@@ -25,10 +25,12 @@ interface CompletedInfo {
 
 interface SubmissionFormWrapperProps {
   steps: StepWithQuestions[];
+  campaignDeadline?: string | null;
 }
 
 export default function SubmissionFormWrapper({
   steps,
+  campaignDeadline = null,
 }: SubmissionFormWrapperProps) {
   const [userId, setUserId] = useState<number | null>(null);
   const [mode, setMode] = useState<"login" | "register">("login");
@@ -43,6 +45,11 @@ export default function SubmissionFormWrapper({
   const [completedMap, setCompletedMap] = useState<Map<number, CompletedInfo>>(
     new Map()
   );
+
+  // Check if campaign is expired
+  const campaignExpired = campaignDeadline
+    ? Date.now() > Date.parse(campaignDeadline)
+    : false;
 
   // Load completed submissions for this user
   useEffect(() => {
@@ -141,6 +148,28 @@ export default function SubmissionFormWrapper({
       setLoading(false);
     }
   };
+
+  // Campaign expired — block submissions entirely
+  if (campaignExpired) {
+    return (
+      <div
+        className="p-6 rounded-2xl border text-center space-y-3"
+        style={{
+          backgroundColor: "rgba(253,46,95,0.08)",
+          borderColor: "rgba(253,46,95,0.2)",
+        }}
+      >
+        <AlertTriangle className="w-10 h-10 mx-auto text-[#FD2E5F]" />
+        <h3 className="text-lg font-black text-white">Campagne terminée</h3>
+        <p className="text-sm text-white/60">
+          La campagne de test est terminée. Les soumissions sont fermées.
+        </p>
+        <p className="text-xs text-white/40">
+          Merci pour ta participation ! Reviens lors de la prochaine campagne.
+        </p>
+      </div>
+    );
+  }
 
   // Auth screen
   if (!userId) {

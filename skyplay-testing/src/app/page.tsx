@@ -1,6 +1,7 @@
 import { getDb } from "@/lib/db";
 import GlowBackground from "@/components/GlowBackground";
 import SubmissionFormWrapper from "@/components/SubmissionFormWrapper";
+import CampaignBanner from "@/components/CampaignBanner";
 import { Activity, Trophy, Users } from "lucide-react";
 
 export const dynamic = "force-dynamic";
@@ -22,8 +23,8 @@ interface StepWithQuestions {
 export default async function HomePage() {
   const db = await getDb();
 
-  // Single query: steps + questions via JSON aggregation
-  const [stepsRs, statsRs] = await Promise.all([
+  // Fetch steps, stats, and active campaign in parallel
+  const [stepsRs, statsRs, campaignRs] = await Promise.all([
     db.execute(
       `SELECT
         s.id, s.slug, s.title,
@@ -48,6 +49,12 @@ export default async function HomePage() {
          JOIN questions q ON s.question_id = q.id
          WHERE s.status = 'APPROVED') as totalSky`
     ),
+    db.execute(
+      `SELECT id, name, deadline, created_at
+       FROM campaigns
+       ORDER BY created_at DESC
+       LIMIT 1`
+    ),
   ]);
 
   const stepsWithQuestions: StepWithQuestions[] = (
@@ -70,6 +77,14 @@ export default async function HomePage() {
     approved: number;
     totalSky: number;
   };
+
+  const campaignRow = campaignRs.rows[0] as unknown as
+    | { id: number; name: string; deadline: string; created_at: string }
+    | undefined;
+  const campaignDeadline: string | null = campaignRow?.deadline ?? null;
+  const campaignExpired = campaignDeadline
+    ? Date.now() > Date.parse(campaignDeadline)
+    : false;
 
   return (
     <main className="relative min-h-screen">
@@ -122,6 +137,9 @@ export default async function HomePage() {
           </div>
         </div>
       </header>
+
+      {/* Campaign countdown / expired banner */}
+      <CampaignBanner deadline={campaignDeadline} />
 
       {/* Hero */}
       <section className="relative z-10 pt-12 pb-8 px-4 text-center">
@@ -206,7 +224,10 @@ export default async function HomePage() {
             </p>
           </div>
 
-          <SubmissionFormWrapper steps={stepsWithQuestions} />
+          <SubmissionFormWrapper
+            steps={stepsWithQuestions}
+            campaignDeadline={campaignDeadline}
+          />
         </div>
       </section>
 
