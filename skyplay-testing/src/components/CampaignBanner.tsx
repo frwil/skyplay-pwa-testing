@@ -5,9 +5,10 @@ import { Clock, AlertTriangle } from "lucide-react";
 
 interface CampaignBannerProps {
   deadline: string | null;
+  name?: string | null;
 }
 
-export default function CampaignBanner({ deadline }: CampaignBannerProps) {
+export default function CampaignBanner({ deadline, name }: CampaignBannerProps) {
   const [remaining, setRemaining] = useState<{
     days: number;
     hours: number;
@@ -58,7 +59,7 @@ export default function CampaignBanner({ deadline }: CampaignBannerProps) {
         >
           <div className="flex items-center justify-center gap-2 text-sm font-bold text-[#FD2E5F]">
             <AlertTriangle className="w-4 h-4" />
-            Campagne terminée — les soumissions sont fermées
+            {name || "Campagne"} terminée — les soumissions sont fermées
           </div>
         </div>
       );
@@ -82,8 +83,8 @@ export default function CampaignBanner({ deadline }: CampaignBannerProps) {
       }}
     >
       <Clock className="w-4 h-4 text-[#00c8ff]" />
-      <span className="text-xs text-white/50 font-medium uppercase tracking-wider">
-        Campagne active —
+      <span className="text-xs text-white/50 font-medium">
+        {name || "Campagne"} —
       </span>
       {parts.map((p, i) => (
         <span key={p.label} className="inline-flex items-baseline gap-1">

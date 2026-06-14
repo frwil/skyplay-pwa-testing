@@ -82,6 +82,7 @@ export default async function HomePage() {
     | { id: number; name: string; deadline: string; created_at: string }
     | undefined;
   const campaignDeadline: string | null = campaignRow?.deadline ?? null;
+  const campaignName: string | null = campaignRow?.name ?? null;
   const campaignExpired = campaignDeadline
     ? Date.now() > Date.parse(campaignDeadline)
     : false;
@@ -139,7 +140,7 @@ export default async function HomePage() {
       </header>
 
       {/* Campaign countdown / expired banner */}
-      <CampaignBanner deadline={campaignDeadline} />
+      <CampaignBanner deadline={campaignDeadline} name={campaignName} />
 
       {/* Hero */}
       <section className="relative z-10 pt-12 pb-8 px-4 text-center">
