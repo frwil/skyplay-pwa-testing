@@ -141,6 +141,8 @@ export default function SubmissionForm({
   const openQuestion = (questionId: number) => {
     const q = allQuestions.find((x) => x.id === questionId);
     if (!q) return;
+    // Bloquer l'ouverture si la question a déjà été répondue
+    if (getQuestionStatus(questionId) !== "idle") return;
     setActiveQuestionId(questionId);
     setAnswerText("");
     setScreenshot(null);
@@ -469,10 +471,11 @@ export default function SubmissionForm({
                       <button
                         key={q.id}
                         onClick={() => openQuestion(q.id)}
+                        disabled={isDone}
                         className={`w-full flex items-start gap-3 p-3 rounded-xl text-left transition-all duration-200 min-h-[48px] ${
                           isDone
-                            ? "bg-white/[0.02] border border-transparent"
-                            : "bg-white/[0.01] border border-transparent hover:bg-white/[0.04] active:bg-[#00c8ff]/10"
+                            ? "bg-white/[0.02] border border-transparent cursor-default opacity-60"
+                            : "bg-white/[0.01] border border-transparent hover:bg-white/[0.04] active:bg-[#00c8ff]/10 cursor-pointer"
                         }`}
                       >
                         <div className="shrink-0 mt-0.5">
