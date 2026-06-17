@@ -96,6 +96,23 @@ async function initializeSchema(): Promise<void> {
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
   `);
+
+  // Performance indexes — harmless if already exist (IF NOT EXISTS from SQLite 3.25+,
+  // but Turso/libsql supports it; wrapped in try/catch for safety)
+  const indexes = [
+    "CREATE INDEX IF NOT EXISTS idx_submissions_status ON submissions(status)",
+    "CREATE INDEX IF NOT EXISTS idx_submissions_step_id ON submissions(step_id)",
+    "CREATE INDEX IF NOT EXISTS idx_submissions_user_id ON submissions(user_id)",
+    "CREATE INDEX IF NOT EXISTS idx_submissions_question_id ON submissions(question_id)",
+    "CREATE INDEX IF NOT EXISTS idx_questions_step_id ON questions(step_id)",
+  ];
+  for (const idx of indexes) {
+    try {
+      await getClient().execute(idx);
+    } catch {
+      // index may already exist — ignore
+    }
+  }
 }
 
 async function seedData(): Promise<void> {

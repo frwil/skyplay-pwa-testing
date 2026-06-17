@@ -22,7 +22,6 @@ interface Submission {
   step_id: number;
   question_id: number;
   answer_text: string;
-  screenshot_base64: string;
   status: string;
   submitted_at: string;
   username: string;
@@ -569,7 +568,7 @@ export default function AdminPage() {
                   <table className="w-full text-xs">
                     <thead>
                       <tr className="border-b border-white/5 bg-white/[0.02]">
-                        {["Rang", "Utilisateur", "Réponses", "Approuvés", "Sky gagnés", "Jalons"].map((h) => (
+                        {["Rang", "Utilisateur", "Email", "Réponses", "Approuvés", "Sky gagnés", "Jalons"].map((h) => (
                           <th
                             key={h}
                             className="text-left px-4 py-3 font-bold text-white/30 uppercase tracking-wider"
@@ -596,8 +595,12 @@ export default function AdminPage() {
                             </span>
                           </td>
                           <td className="px-4 py-3 font-medium text-white/80">
+
                             {u.username}
-                            <span className="text-white/20 ml-1 hidden sm:inline">{u.email}</span>
+                          </td>
+                          <td className="px-4 py-3 text-white/50 text-[11px]">
+
+                            {u.email}
                           </td>
                           <td className="px-4 py-3 text-white/60">{u.total_submissions || 0}</td>
                           <td className="px-4 py-3">

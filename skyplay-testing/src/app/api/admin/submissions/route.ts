@@ -14,6 +14,10 @@ export async function GET(request: NextRequest) {
 
     const db = await getDb();
 
+    // NOTE: screenshot_base64 is intentionally excluded from the list query.
+    // Screenshots can be 500KB-2MB+ each; fetching them all at once was the #1
+    // cause of admin page slowness. Use GET /api/admin/submissions/[id]/screenshot
+    // to load a single screenshot on demand.
     const submissionsRs = await db.execute(
       `SELECT
         s.id,
@@ -21,7 +25,6 @@ export async function GET(request: NextRequest) {
         s.step_id,
         s.question_id,
         s.answer_text,
-        s.screenshot_base64,
         s.status,
         s.submitted_at,
         u.username,

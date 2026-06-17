@@ -9,7 +9,6 @@ interface Submission {
   step_id: number;
   question_id: number;
   answer_text: string;
-  screenshot_base64: string;
   status: string;
   submitted_at: string;
   username: string;
@@ -28,6 +27,8 @@ interface AdminCardProps {
 export default function AdminCard({ submission, onStatusChange }: AdminCardProps) {
   const [loading, setLoading] = useState(false);
   const [showScreenshot, setShowScreenshot] = useState(false);
+  const [screenshotSrc, setScreenshotSrc] = useState<string | null>(null);
+  const [screenshotLoading, setScreenshotLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [localStatus, setLocalStatus] = useState<string | null>(null);
@@ -215,10 +216,29 @@ export default function AdminCard({ submission, onStatusChange }: AdminCardProps
         </p>
       </div>
 
-      {/* Screenshot toggle */}
+      {/* Screenshot toggle — lazy-loaded on demand */}
       <div className="px-5 pb-5">
         <button
-          onClick={() => setShowScreenshot(!showScreenshot)}
+          onClick={() => {
+            const newShow = !showScreenshot;
+            setShowScreenshot(newShow);
+            // Lazy-load screenshot only when first opened
+            if (newShow && !screenshotSrc) {
+              setScreenshotLoading(true);
+              fetch(
+                `/api/admin/submissions/${submission.id}/screenshot`,
+                { credentials: "same-origin" }
+              )
+                .then((res) => res.json())
+                .then((data) => {
+                  if (data.screenshot_base64) {
+                    setScreenshotSrc(data.screenshot_base64);
+                  }
+                })
+                .catch(() => { /* silently fail */ })
+                .finally(() => setScreenshotLoading(false));
+            }
+          }}
           className="flex items-center gap-2 text-xs font-bold text-[#00c8ff] hover:text-white transition"
         >
           <ImageIcon className="w-4 h-4" />
@@ -227,12 +247,22 @@ export default function AdminCard({ submission, onStatusChange }: AdminCardProps
 
         {showScreenshot && (
           <div className="mt-3 rounded-xl overflow-hidden border border-white/10">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src={submission.screenshot_base64}
-              alt="Capture d'écran"
-              className="w-full max-h-96 object-contain bg-black/40"
-            />
+            {screenshotLoading ? (
+              <div className="flex items-center justify-center h-32 bg-black/40">
+                <Loader2 className="w-6 h-6 animate-spin text-[#00c8ff]" />
+              </div>
+            ) : screenshotSrc ? (
+              /* eslint-disable-next-line @next/next/no-img-element */
+              <img
+                src={screenshotSrc}
+                alt="Capture d'écran"
+                className="w-full max-h-96 object-contain bg-black/40"
+              />
+            ) : (
+              <div className="flex items-center justify-center h-20 bg-black/40 text-white/30 text-xs">
+                Capture indisponible
+              </div>
+            )}
           </div>
         )}
       </div>
