@@ -129,6 +129,37 @@ async function initializeSchema(): Promise<void> {
     );
   } catch { /* column already exists */ }
 
+  // Data migration: update existing questions with correct answer types / parts
+  // Idempotent — only touches rows that still have the default 'text' type or NULL parts
+  try {
+    await getClient().executeMultiple(`
+      -- Q2: radio Oui/Non
+      UPDATE questions SET answer_type = 'radio', answer_options = '["Oui","Non"]' WHERE id = 2 AND answer_type = 'text';
+      -- Q5: checkbox (4 formats)
+      UPDATE questions SET answer_type = 'checkbox', answer_options = '["1v1","2v2","FFA","Tournoi"]' WHERE id = 5 AND answer_type = 'text';
+      -- Q6: parts radio + text
+      UPDATE questions SET parts = '[{"label":"Statut de la compétition","type":"radio","options":["En cours","Terminée"]},{"label":"Nombre de joueurs participants","type":"text"}]' WHERE id = 6 AND parts IS NULL;
+      -- Q7: parts radio + text
+      UPDATE questions SET parts = '[{"label":"La page se charge-t-elle correctement ?","type":"radio","options":["Oui","Non"]},{"label":"Décris ce que tu vois","type":"text"}]' WHERE id = 7 AND parts IS NULL;
+      -- Q8: parts radio + text
+      UPDATE questions SET parts = '[{"label":"Peux-tu filtrer ou trier les compétitions ?","type":"radio","options":["Oui","Non"]},{"label":"Si oui, comment ? Si non, trouves-tu cela gênant ?","type":"text"}]' WHERE id = 8 AND parts IS NULL;
+      -- Q9: parts radio + text
+      UPDATE questions SET parts = '[{"label":"Y a-t-il des diffusions en direct ?","type":"radio","options":["Oui","Non"]},{"label":"Décris ce que tu vois","type":"text"}]' WHERE id = 9 AND parts IS NULL;
+      -- Q11: parts radio + text
+      UPDATE questions SET parts = '[{"label":"Un classement ou leaderboard est-il visible ?","type":"radio","options":["Oui","Non"]},{"label":"Si oui, quel est ton rang ? Si non, aimerais-tu en avoir un ?","type":"text"}]' WHERE id = 11 AND parts IS NULL;
+      -- Q12: parts radio + text
+      UPDATE questions SET parts = '[{"label":"L''option de partage est-elle disponible ?","type":"radio","options":["Oui","Non"]},{"label":"Décris ton expérience","type":"text"}]' WHERE id = 12 AND parts IS NULL;
+      -- Q13: dropdown note 1-10
+      UPDATE questions SET answer_type = 'dropdown', answer_options = '["1","2","3","4","5","6","7","8","9","10"]' WHERE id = 13 AND answer_type = 'text';
+      -- Q16: parts radio + text
+      UPDATE questions SET parts = '[{"label":"Recommanderais-tu skyplay.cloud à un ami ?","type":"radio","options":["Oui","Non"]},{"label":"Pourquoi ?","type":"text"}]' WHERE id = 16 AND parts IS NULL;
+      -- Q14, Q15: add reference_link
+      UPDATE questions SET reference_link = 'https://skyplay.cloud/' WHERE id IN (14, 15) AND reference_link IS NULL;
+    `);
+  } catch (e) {
+    console.error("Question type migration error (non-fatal):", e);
+  }
+
   // Campaigns table — always ensure it exists (even on older DBs)
   await getClient().execute(`
     CREATE TABLE IF NOT EXISTS campaigns (
