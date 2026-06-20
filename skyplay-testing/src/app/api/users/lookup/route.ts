@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
-import { verifyPassword } from "@/lib/auth";
+import { verifyPassword, signToken, setAuthCookie } from "@/lib/auth";
 
 export async function GET(request: NextRequest) {
   try {
@@ -48,7 +48,9 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    return NextResponse.json({
+    // Set JWT auth cookie so the session persists across refreshes
+    const token = await signToken({ userId: user.id, role: user.role });
+    const response = NextResponse.json({
       user: {
         id: user.id,
         username: user.username,
@@ -57,6 +59,8 @@ export async function GET(request: NextRequest) {
         created_at: user.created_at,
       },
     });
+    setAuthCookie(response, token);
+    return response;
   } catch (error) {
     console.error("GET /api/users/lookup error:", error);
     return NextResponse.json(

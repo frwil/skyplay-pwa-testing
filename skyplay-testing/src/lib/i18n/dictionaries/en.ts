@@ -30,6 +30,30 @@ const en: Dictionary = {
       subtitle:
         "Select a milestone, answer questions one by one",
     },
+    stepTitles: {
+      jalon_1: "Registration & Onboarding",
+      jalon_2: "Competition Exploration",
+      jalon_3: "Social & Live",
+      jalon_4: "Final Feedback & Suggestions",
+    },
+    questions: {
+      "1": "Create an account on **skyplay.cloud** (the website, not the mobile app). Once registered, provide your username and send a screenshot of your profile page.",
+      "2": "In your profile settings, does the 'Dark mode' option exist? Enable it if possible and send a screenshot.",
+      "3": "On the **skyplay.cloud** homepage, in the 'Supported Games' section, how many games are displayed? List them and send a screenshot.",
+      "4": "On **skyplay.cloud**, click 'Join for free' or 'Create my account'. Describe the page you land on and send a screenshot.",
+      "5": "In the 'Available Formats' section, list the 4 competition formats offered and send a screenshot.",
+      "6": "Find a FIFA competition. What is its status? How many players are participating? Send a screenshot.",
+      "7": "On **skyplay.cloud**, click 'View Competitions'. Does the page load correctly? Describe what you see and send a screenshot.",
+      "8": "Can you filter or sort competitions? If yes, how? If no, do you find this inconvenient? Send a screenshot.",
+      "9": "On **skyplay.cloud**, click the LIVE tab. Are there any live streams? Describe what you see and send a screenshot.",
+      "10": "From the **skyplay.cloud** homepage, can you find the player list? Describe the path and send a screenshot.",
+      "11": "Is there a ranking or leaderboard visible? If yes, what is your rank? If no, would you like to have one? Send a screenshot.",
+      "12": "Try sharing a competition link or your profile (share button, copy link…). Is the option available? Send a screenshot.",
+      "13": "On a scale of 1 to 10, how would you rate the overall **skyplay.cloud** platform experience? Justify your rating in 2-3 sentences.",
+      "14": "Did you encounter any bug or unexpected behavior? Describe it with as much detail as possible (where, when, how).",
+      "15": "What feature would you like to see added as a priority on skyplay.cloud? Briefly describe it.",
+      "16": "Would you recommend skyplay.cloud to a friend? Why?",
+    },
   },
   submissionForm: {
     login: {

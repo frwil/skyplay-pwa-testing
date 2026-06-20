@@ -456,7 +456,7 @@ export default function SubmissionForm({
                 </div>
                 <div className="flex-1 min-w-0">
                   <h3 className="text-sm font-black text-white truncate">
-                    {step.title}
+                    {t.home.stepTitles[step.slug] || step.title}
                   </h3>
                   <div className="flex items-center gap-2 mt-0.5">
                     <div className="h-1 flex-1 max-w-[80px] rounded-full bg-white/[0.06] overflow-hidden">
@@ -512,7 +512,7 @@ export default function SubmissionForm({
                             <span className="font-bold text-white/60">
                               Q{q.sort_order}.
                             </span>{" "}
-                            {q.question_text}
+                            {t.home.questions[String(q.id)] || q.question_text}
                           </p>
                           <span className="inline-block mt-1 text-[9px] font-medium px-1.5 py-0.5 rounded text-white/25 bg-white/[0.03] border border-white/5">
                             {q.parts
@@ -612,7 +612,7 @@ export default function SubmissionForm({
               {/* Full question text */}
               <div>
                 <p className="text-sm sm:text-base text-white/90 leading-relaxed font-medium">
-                  {activeQuestion.question_text}
+                  {t.home.questions[String(activeQuestion.id)] || activeQuestion.question_text}
                 </p>
                 <div className="flex items-center gap-1.5 mt-3">
                   <Trophy

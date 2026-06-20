@@ -30,6 +30,30 @@ const fr: Dictionary = {
       subtitle:
         "Sélectionne un jalon, réponds aux questions une par une",
     },
+    stepTitles: {
+      jalon_1: "Inscription & Onboarding",
+      jalon_2: "Exploration des Compétitions",
+      jalon_3: "Social & Live",
+      jalon_4: "Feedback Final & Suggestions",
+    },
+    questions: {
+      "1": "Crée un compte sur **skyplay.cloud** (le site web, pas l'application mobile). Une fois inscrit, donne ton nom d'utilisateur et envoie une capture de ta page de profil.",
+      "2": "Dans les paramètres de ton profil, l'option 'Mode sombre' existe-t-elle ? Active-la si possible et envoie une capture.",
+      "3": "Sur la page d'accueil de **skyplay.cloud**, dans la section 'Jeux supportés', combien de jeux sont affichés ? Liste-les et envoie une capture.",
+      "4": "Sur **skyplay.cloud**, clique sur 'Rejoindre gratuitement' ou 'Créer mon compte'. Décris la page où tu arrives et envoie une capture.",
+      "5": "Dans la section 'Formats disponibles', liste les 4 formats de compétition proposés et envoie une capture.",
+      "6": "Trouve une compétition FIFA. Quel est son statut ? Combien de joueurs y participent ? Envoie une capture.",
+      "7": "Sur **skyplay.cloud**, clique sur 'Voir les compétitions'. La page se charge-t-elle correctement ? Décris ce que tu vois et envoie une capture.",
+      "8": "Peux-tu filtrer ou trier les compétitions ? Si oui, comment ? Si non, trouves-tu cela gênant ? Envoie une capture.",
+      "9": "Sur **skyplay.cloud**, clique sur l'onglet LIVE. Y a-t-il des diffusions en direct ? Décris ce que tu vois et envoie une capture.",
+      "10": "Depuis la page d'accueil de **skyplay.cloud**, peux-tu trouver la liste des joueurs ? Décris le chemin et envoie une capture.",
+      "11": "Y a-t-il un classement ou leaderboard visible ? Si oui, quel est ton rang ? Si non, aimerais-tu en avoir un ? Envoie une capture.",
+      "12": "Essaie de partager un lien de compétition ou ton profil (bouton de partage, copier le lien…). L'option est-elle disponible ? Envoie une capture.",
+      "13": "Sur une échelle de 1 à 10, quelle note donnes-tu à l'expérience globale de la plateforme **skyplay.cloud** ? Justifie ta note en 2-3 phrases.",
+      "14": "As-tu rencontré un bug ou un comportement inattendu ? Décris-le avec le plus de détails possible (où, quand, comment).",
+      "15": "Quelle fonctionnalité aimerais-tu voir ajoutée en priorité sur skyplay.cloud ? Décris-la brièvement.",
+      "16": "Recommanderais-tu skyplay.cloud à un ami ? Pourquoi ?",
+    },
   },
   submissionForm: {
     login: {

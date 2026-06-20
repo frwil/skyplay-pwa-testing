@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getAuthFromRequest, requireAdmin } from "@/lib/auth";
+import { getAuthFromRequest } from "@/lib/auth";
 import { getDb } from "@/lib/db";
 
 export async function GET(request: NextRequest) {
   const auth = await getAuthFromRequest(request);
 
-  if (!requireAdmin(auth)) {
+  if (!auth) {
     return NextResponse.json(
       { error: "Non authentifié" },
       { status: 401 }

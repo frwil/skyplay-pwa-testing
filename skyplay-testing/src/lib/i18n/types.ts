@@ -27,6 +27,8 @@ export interface Dictionary {
       title: string;
       subtitle: string;
     };
+    stepTitles: Record<string, string>;
+    questions: Record<string, string>;
   };
   submissionForm: {
     login: {

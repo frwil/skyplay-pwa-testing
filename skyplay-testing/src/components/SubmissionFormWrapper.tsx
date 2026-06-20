@@ -58,6 +58,28 @@ export default function SubmissionFormWrapper({
     ? Date.now() > Date.parse(campaignDeadline)
     : false;
 
+  // Try to restore session from existing auth cookie on mount
+  const [sessionChecked, setSessionChecked] = useState(false);
+  useEffect(() => {
+    const restoreSession = async () => {
+      try {
+        const res = await fetch("/api/auth/me", { credentials: "include" });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.user) {
+            setUserId(data.user.id);
+            setUsername(data.user.username || "");
+          }
+        }
+      } catch {
+        // No existing session — user will need to log in
+      } finally {
+        setSessionChecked(true);
+      }
+    };
+    restoreSession();
+  }, []);
+
   // Load completed submissions for this user
   useEffect(() => {
     if (!userId) {
@@ -174,6 +196,15 @@ export default function SubmissionFormWrapper({
         <p className="text-xs text-white/40">
           {t.campaignBanner.campaignEndedThanks}
         </p>
+      </div>
+    );
+  }
+
+  // Show a subtle loading state while checking for existing session
+  if (!sessionChecked) {
+    return (
+      <div className="flex items-center justify-center py-12">
+        <div className="w-5 h-5 border-2 border-[#00c8ff]/30 border-t-[#00c8ff] rounded-full animate-spin" />
       </div>
     );
   }
@@ -404,7 +435,8 @@ export default function SubmissionFormWrapper({
           <span className="font-bold">{username}</span>
         </span>
         <button
-          onClick={() => {
+          onClick={async () => {
+            await fetch("/api/auth/logout", { method: "POST", credentials: "include" });
             setUserId(null);
             setUsername("");
             setEmail("");
