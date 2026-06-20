@@ -3,6 +3,8 @@
 import { useState, useEffect, useCallback } from "react";
 import AdminCard from "@/components/AdminCard";
 import GlowBackground from "@/components/GlowBackground";
+import { useTranslation } from "@/lib/i18n/TranslationContext";
+import LanguageSwitcher from "@/components/LanguageSwitcher";
 import {
   Shield,
   RefreshCw,
@@ -80,6 +82,7 @@ interface AdminUser {
 }
 
 export default function AdminPage() {
+  const { t, locale } = useTranslation();
   const [adminUser, setAdminUser] = useState<AdminUser | null>(null);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -153,7 +156,7 @@ export default function AdminPage() {
         setSubmissions(subsData.submissions);
         setStats(subsData.stats);
       } else {
-        setError(subsData.error || "Erreur de chargement");
+        setError(subsData.error || t.admin.login.loadError);
       }
 
       if (statsRes.ok) {
@@ -172,7 +175,7 @@ export default function AdminPage() {
         }
       }
     } catch {
-      setError("Erreur réseau");
+      setError(t.admin.login.networkError);
     } finally {
       setLoading(false);
     }
@@ -184,7 +187,7 @@ export default function AdminPage() {
 
   const handleLogin = async () => {
     if (!username.trim() || !password.trim()) {
-      setLoginError("Tous les champs sont requis");
+      setLoginError(t.admin.login.allFieldsRequired);
       return;
     }
     setLoginLoading(true);
@@ -200,10 +203,10 @@ export default function AdminPage() {
       if (res.ok) {
         setAdminUser(data.user);
       } else {
-        setLoginError(data.error || "Échec de connexion");
+        setLoginError(data.error || t.admin.login.errorAuth);
       }
     } catch {
-      setLoginError("Erreur réseau");
+      setLoginError(t.admin.login.networkError);
     } finally {
       setLoginLoading(false);
     }
@@ -223,13 +226,13 @@ export default function AdminPage() {
       const data = await res.json();
       if (res.ok) {
         setActiveCampaign(data.campaign);
-        setExtendSuccess("Date limite prolongée avec succès !");
+        setExtendSuccess(t.admin.campaign.extendSuccess);
         setTimeout(() => setExtendSuccess(null), 3000);
       } else {
-        setExtendError(data.error || "Erreur lors de la prolongation");
+        setExtendError(data.error || t.admin.campaign.extendError);
       }
     } catch {
-      setExtendError("Erreur réseau");
+      setExtendError(t.admin.campaign.networkError);
     } finally {
       setExtendLoading(false);
     }
@@ -248,10 +251,10 @@ export default function AdminPage() {
         // Refresh data to reflect the change
         fetchData();
       } else {
-        alert(data.error || "Erreur lors de l'approbation du bonus");
+        alert(data.error || t.admin.dashboard.bonusApproveError);
       }
     } catch {
-      alert("Erreur réseau");
+      alert(t.admin.dashboard.networkError);
     }
   };
 
@@ -265,7 +268,7 @@ export default function AdminPage() {
         headers: { "Content-Type": "application/json" },
         credentials: "same-origin",
         body: JSON.stringify({
-          name: newCampaignName || "Campagne de test",
+          name: newCampaignName || t.admin.campaign.defaultName,
           deadline: new Date(newCampaignDeadline).toISOString(),
         }),
       });
@@ -274,13 +277,13 @@ export default function AdminPage() {
         setActiveCampaign(data.campaign);
         setNewCampaignName("");
         setNewCampaignDeadline("");
-        setCreateSuccess("Nouvelle campagne créée !");
+        setCreateSuccess(t.admin.campaign.createSuccess);
         setTimeout(() => setCreateSuccess(null), 3000);
       } else {
-        setCreateError(data.error || "Erreur lors de la création");
+        setCreateError(data.error || t.admin.campaign.createError);
       }
     } catch {
-      setCreateError("Erreur réseau");
+      setCreateError(t.admin.campaign.networkError);
     } finally {
       setCreateLoading(false);
     }
@@ -324,7 +327,7 @@ export default function AdminPage() {
               SKYPLAY
             </div>
             <p className="text-xs text-white/40 uppercase tracking-[3px]">
-              Admin Panel
+              {t.admin.login.panelSubtitle}
             </p>
           </div>
 
@@ -338,7 +341,7 @@ export default function AdminPage() {
             <div className="flex items-center gap-2 mb-2">
               <Shield className="w-5 h-5 text-[#ffd700]" />
               <h2 className="text-sm font-black uppercase tracking-wider text-white/60">
-                Authentification Admin
+                {t.admin.login.heading}
               </h2>
             </div>
 
@@ -347,7 +350,7 @@ export default function AdminPage() {
               value={username}
               onChange={(e) => { setUsername(e.target.value); setLoginError(null); }}
               onKeyDown={(e) => e.key === "Enter" && handleLogin()}
-              placeholder="Nom d'utilisateur"
+              placeholder={t.admin.login.usernamePlaceholder}
               autoComplete="username"
               className="w-full bg-[#0d1b2e] border border-white/10 rounded-xl p-3.5 text-white placeholder:text-white/25 focus:outline-none focus:border-[#ffd700]/50 focus:ring-1 focus:ring-[#ffd700]/30 transition"
             />
@@ -357,7 +360,7 @@ export default function AdminPage() {
               value={password}
               onChange={(e) => { setPassword(e.target.value); setLoginError(null); }}
               onKeyDown={(e) => e.key === "Enter" && handleLogin()}
-              placeholder="Mot de passe"
+              placeholder={t.admin.login.passwordPlaceholder}
               autoComplete="current-password"
               className="w-full bg-[#0d1b2e] border border-white/10 rounded-xl p-3.5 text-white placeholder:text-white/25 focus:outline-none focus:border-[#ffd700]/50 focus:ring-1 focus:ring-[#ffd700]/30 transition"
             />
@@ -383,11 +386,11 @@ export default function AdminPage() {
               ) : (
                 <Shield className="w-4 h-4" />
               )}
-              {loginLoading ? "Connexion..." : "Se connecter"}
+              {loginLoading ? t.admin.login.submitting : t.admin.login.submit}
             </button>
 
             <p className="text-[10px] text-white/20 text-center">
-              Comptes admin uniquement — les testeurs n&apos;ont pas accès
+              {t.admin.login.adminOnlyHint}
             </p>
           </div>
 
@@ -395,7 +398,7 @@ export default function AdminPage() {
             href="/"
             className="block text-center text-xs text-white/30 hover:text-white/60 transition mt-6"
           >
-            ← Retour au formulaire
+            {t.admin.login.backToForm}
           </a>
         </div>
       </main>
@@ -430,11 +433,12 @@ export default function AdminPage() {
                 color: adminUser.role === "superadmin" ? "#ffd700" : "#00c8ff",
               }}
             >
-              {adminUser.role === "superadmin" ? "SUPERADMIN" : "ADMIN"}
+              {adminUser.role === "superadmin" ? t.admin.dashboard.superadmin : t.admin.dashboard.adminRole}
             </span>
           </div>
 
           <div className="flex items-center gap-3">
+            <LanguageSwitcher />
             <span className="text-xs text-white/40 hidden sm:inline">
               {adminUser.username}
             </span>
@@ -443,7 +447,7 @@ export default function AdminPage() {
               className="flex items-center gap-1.5 text-xs text-white/40 hover:text-white transition"
             >
               <LogOut className="w-3.5 h-3.5" />
-              Déconnexion
+              {t.admin.dashboard.logout}
             </button>
           </div>
         </div>
@@ -451,11 +455,11 @@ export default function AdminPage() {
 
       <div className="relative z-10 max-w-6xl mx-auto px-4 py-8">
         {/* Tab Navigation */}
-        <div className="flex gap-1 p-1 rounded-2xl bg-white/[0.04] border border-white/5 mb-8 max-w-xs">
+        <div className="flex gap-1 p-1 rounded-2xl bg-white/[0.04] border border-white/5 mb-8 max-w-md">
           {([
-            { key: "dashboard", label: "Dashboard", icon: BarChart3 },
-            { key: "submissions", label: "Soumissions", icon: Activity },
-            { key: "campagne", label: "Campagne", icon: Clock },
+            { key: "dashboard", label: t.admin.dashboard.tabs.dashboard, icon: BarChart3 },
+            { key: "submissions", label: t.admin.dashboard.tabs.submissions, icon: Activity },
+            { key: "campagne", label: t.admin.dashboard.tabs.campagne, icon: Clock },
           ] as const).map((t) => (
             <button
               key={t.key}
@@ -479,13 +483,13 @@ export default function AdminPage() {
             {overview && (
               <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-3">
                 {[
-                  { label: "Testeurs", value: overview.total_users, color: "#00c8ff", icon: Users },
-                  { label: "Réponses", value: overview.total_submissions, color: "#ffd700", icon: Activity },
-                  { label: "Approuvés", value: overview.approved_count, color: "#2ecc71", icon: Shield },
-                  { label: "En attente", value: overview.pending_count, color: "#e67e22" },
-                  { label: "Rejetés", value: overview.rejected_count, color: "#FD2E5F" },
-                  { label: "Sky distribués", value: `⚡ ${overview.total_sky_distributed}`, color: "#ffd700", icon: Trophy },
-                  { label: "Bonus en attente", value: overview.pending_bonus_count || 0, color: "#e67e22" },
+                  { label: t.admin.dashboard.overview.testers, value: overview.total_users, color: "#00c8ff", icon: Users },
+                  { label: t.admin.dashboard.overview.answers, value: overview.total_submissions, color: "#ffd700", icon: Activity },
+                  { label: t.admin.dashboard.overview.approved, value: overview.approved_count, color: "#2ecc71", icon: Shield },
+                  { label: t.admin.dashboard.overview.pending, value: overview.pending_count, color: "#e67e22" },
+                  { label: t.admin.dashboard.overview.rejected, value: overview.rejected_count, color: "#FD2E5F" },
+                  { label: t.admin.dashboard.overview.skyDistributed, value: `⚡ ${overview.total_sky_distributed}`, color: "#ffd700", icon: Trophy },
+                  { label: t.admin.dashboard.overview.pendingBonus, value: overview.pending_bonus_count || 0, color: "#e67e22" },
                 ].map((s) => (
                   <div
                     key={s.label}
@@ -512,7 +516,7 @@ export default function AdminPage() {
               <div>
                 <h2 className="text-lg font-black text-white mb-4 flex items-center gap-2">
                   <BarChart3 className="w-5 h-5 text-[#00c8ff]" />
-                  Progression par Jalon
+                  {t.admin.dashboard.phaseBreakdown}
                 </h2>
                 <div className="grid sm:grid-cols-2 gap-4">
                   {phases.map((phase) => {
@@ -536,7 +540,7 @@ export default function AdminPage() {
                       >
                         <div className="flex items-center justify-between mb-3">
                           <h3 className="text-sm font-black text-white">
-                            {phase.slug.replace("jalon_", "Jalon ")} — {phase.title}
+                            {t.admin.dashboard.phasePrefix(phase.slug)} — {phase.title}
                           </h3>
                           <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-[#ffd700]/10 text-[#ffd700]">
                             ⚡ {phase.total_rewards} Sky
@@ -545,9 +549,9 @@ export default function AdminPage() {
 
                         <div className="grid grid-cols-3 gap-3 text-center mb-3">
                           {[
-                            { label: "Réponses", value: phase.total_submissions, color: "#00c8ff" },
-                            { label: "Approuvés", value: phase.approved, color: "#2ecc71" },
-                            { label: "En attente", value: phase.pending, color: "#e67e22" },
+                            { label: t.admin.dashboard.overview.answers, value: phase.total_submissions, color: "#00c8ff" },
+                            { label: t.admin.dashboard.overview.approved, value: phase.approved, color: "#2ecc71" },
+                            { label: t.admin.dashboard.overview.pending, value: phase.pending, color: "#e67e22" },
                           ].map((m) => (
                             <div key={m.label}>
                               <p className="text-lg font-black" style={{ color: m.color }}>
@@ -561,7 +565,7 @@ export default function AdminPage() {
                         {/* Approval bar */}
                         <div className="space-y-1">
                           <div className="flex justify-between text-[10px]">
-                            <span className="text-white/30">Taux d&apos;approbation</span>
+                            <span className="text-white/30">{t.admin.dashboard.approvalRate}</span>
                             <span className="font-bold text-[#2ecc71]">{approvalRate}%</span>
                           </div>
                           <div className="h-1.5 rounded-full bg-white/[0.06] overflow-hidden">
@@ -586,13 +590,22 @@ export default function AdminPage() {
               <div>
                 <h2 className="text-lg font-black text-white mb-4 flex items-center gap-2">
                   <Trophy className="w-5 h-5 text-[#ffd700]" />
-                  Classement des Testeurs
+                  {t.admin.dashboard.leaderboard}
                 </h2>
                 <div className="overflow-x-auto rounded-2xl border" style={{ borderColor: "rgba(255,255,255,0.06)" }}>
                   <table className="w-full text-xs">
                     <thead>
                       <tr className="border-b border-white/5 bg-white/[0.02]">
-                        {["Rang", "Utilisateur", "Email", "Réponses", "Approuvés", "Sky gagnés", "Prime de participation", "Jalons"].map((h) => (
+                        {[
+                          t.admin.dashboard.leaderboardHeaders.rank,
+                          t.admin.dashboard.leaderboardHeaders.user,
+                          t.admin.dashboard.leaderboardHeaders.email,
+                          t.admin.dashboard.leaderboardHeaders.answers,
+                          t.admin.dashboard.leaderboardHeaders.approved,
+                          t.admin.dashboard.leaderboardHeaders.skyEarned,
+                          t.admin.dashboard.leaderboardHeaders.bonus,
+                          t.admin.dashboard.leaderboardHeaders.milestones,
+                        ].map((h) => (
                           <th
                             key={h}
                             className="text-left px-4 py-3 font-bold text-white/30 uppercase tracking-wider"
@@ -638,7 +651,7 @@ export default function AdminPage() {
                               <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-[#2ecc71]/10 text-[#2ecc71] inline-flex items-center gap-1">
                                 ✅ {u.participation_bonus || 250} ⚡
                               </span>
-                            ) : u.bonus_status === "PENDING" ? (
+                            ) : u.completed_phases && u.completed_phases.includes("jalon_1") ? (
                               <div className="flex items-center gap-1.5">
                                 <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-[#e67e22]/10 text-[#e67e22]">
                                   {u.participation_bonus || 250} ⚡
@@ -647,11 +660,13 @@ export default function AdminPage() {
                                   onClick={() => handleApproveBonus(u.id)}
                                   className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-[#e67e22]/10 text-[#e67e22] border border-[#e67e22]/20 hover:bg-[#e67e22]/25 transition"
                                 >
-                                  Valider
+                                  {t.admin.dashboard.validate}
                                 </button>
                               </div>
                             ) : (
-                              <span className="text-white/15 text-[9px]">—</span>
+                              <span className="text-white/50 text-[9px] leading-tight max-w-[140px] inline-block">
+                                {t.admin.dashboard.pendingAccount}
+                              </span>
                             )}
                           </td>
                           <td className="px-4 py-3">
@@ -662,7 +677,7 @@ export default function AdminPage() {
                                       key={slug}
                                       className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-[#2ecc71]/10 text-[#2ecc71]"
                                     >
-                                      {slug.replace("jalon_", "J")}
+                                      {t.admin.dashboard.milePrefix(slug)}
                                     </span>
                                   ))
                                 : <span className="text-white/15">—</span>}
@@ -691,10 +706,10 @@ export default function AdminPage() {
             {stats && (
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-8">
                 {[
-                  { label: "Total", value: stats.total, color: "#00c8ff" },
-                  { label: "En attente", value: stats.pending, color: "#e67e22" },
-                  { label: "Approuvés", value: stats.approved, color: "#2ecc71" },
-                  { label: "Rejetés", value: stats.rejected, color: "#FD2E5F" },
+                  { label: t.admin.submissions.total, value: stats.total, color: "#00c8ff" },
+                  { label: t.admin.submissions.pending, value: stats.pending, color: "#e67e22" },
+                  { label: t.admin.submissions.approved, value: stats.approved, color: "#2ecc71" },
+                  { label: t.admin.submissions.rejected, value: stats.rejected, color: "#FD2E5F" },
                 ].map((s) => (
                   <div
                     key={s.label}
@@ -719,7 +734,7 @@ export default function AdminPage() {
             <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
               <h2 className="text-lg font-black text-white flex items-center gap-2">
                 <Filter className="w-5 h-5 text-[#00c8ff]" />
-                Soumissions
+                {t.admin.submissions.title}
               </h2>
 
               <div className="flex items-center gap-2 flex-wrap">
@@ -733,7 +748,7 @@ export default function AdminPage() {
                         : "text-white/30 hover:text-white/60 border border-transparent"
                     }`}
                   >
-                    {f === "ALL" ? "Tous" : f}
+                    {f === "ALL" ? t.admin.submissions.all : f}
                   </button>
                 ))}
 
@@ -746,7 +761,7 @@ export default function AdminPage() {
                 >
                   {stepSlugs.map((slug) => (
                     <option key={slug} value={slug} className="bg-[#0d1b2e] text-white">
-                      {slug === "ALL" ? "Tous les jalons" : slug.replace("jalon_", "Jalon ")}
+                      {slug === "ALL" ? t.admin.submissions.allSteps : t.admin.submissions.stepPrefix(slug)}
                     </option>
                   ))}
                 </select>
@@ -771,12 +786,13 @@ export default function AdminPage() {
             {loading && submissions.length === 0 ? (
               <div className="text-center py-20">
                 <Loader2 className="w-8 h-8 mx-auto mb-4 animate-spin text-[#00c8ff]" />
-                <p className="text-white/40 text-sm">Chargement...</p>
+                <p className="text-white/40 text-sm">{t.admin.submissions.loading}</p>
               </div>
             ) : filteredSubmissions.length === 0 ? (
               <div className="text-center py-20">
                 <p className="text-white/20 text-lg font-bold">
-                  Aucune soumission {filter !== "ALL" || stepFilter !== "ALL" ? "avec ces filtres" : ""}
+                  {t.admin.submissions.noSubmissions}{" "}
+                  {filter !== "ALL" || stepFilter !== "ALL" ? t.admin.submissions.withFilters : ""}
                 </p>
               </div>
             ) : (
@@ -807,15 +823,15 @@ export default function AdminPage() {
               >
                 <h2 className="text-lg font-black text-white mb-4 flex items-center gap-2">
                   <Clock className="w-5 h-5 text-[#00c8ff]" />
-                  Campagne active
+                  {t.admin.campaign.active}
                 </h2>
 
                 <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
                   {[
-                    { label: "Nom", value: activeCampaign.name, color: "#00c8ff" },
+                    { label: t.admin.campaign.campaignNameLabel, value: activeCampaign.name, color: "#00c8ff" },
                     {
-                      label: "Date limite",
-                      value: new Date(activeCampaign.deadline).toLocaleDateString("fr-FR", {
+                      label: t.admin.campaign.deadline,
+                      value: new Date(activeCampaign.deadline).toLocaleDateString(locale || "fr", {
                         day: "numeric",
                         month: "long",
                         year: "numeric",
@@ -825,13 +841,13 @@ export default function AdminPage() {
                       color: "#ffd700",
                     },
                     {
-                      label: "Statut",
-                      value: activeCampaign.expired ? "Terminée" : "En cours",
+                      label: t.admin.campaign.status,
+                      value: activeCampaign.expired ? t.admin.campaign.endedStatus : t.admin.campaign.activeStatus,
                       color: activeCampaign.expired ? "#FD2E5F" : "#2ecc71",
                     },
                     {
-                      label: "Créée le",
-                      value: new Date(activeCampaign.createdAt).toLocaleDateString("fr-FR", {
+                      label: t.admin.campaign.createdAt,
+                      value: new Date(activeCampaign.createdAt).toLocaleDateString(locale || "fr", {
                         day: "numeric",
                         month: "long",
                         year: "numeric",
@@ -856,12 +872,12 @@ export default function AdminPage() {
                 {/* Extend deadline form */}
                 <div className="pt-6 border-t border-white/5">
                   <h3 className="text-sm font-black text-white mb-3">
-                    Prolonger la campagne
+                    {t.admin.campaign.extend}
                   </h3>
                   <div className="flex items-end gap-3 flex-wrap">
                     <div className="flex-1 min-w-[220px]">
                       <label className="block text-[10px] text-white/30 uppercase tracking-wider mb-1">
-                        Nouvelle date limite
+                        {t.admin.campaign.newDeadline}
                       </label>
                       <input
                         type="datetime-local"
@@ -882,7 +898,7 @@ export default function AdminPage() {
                       {extendLoading ? (
                         <Loader2 className="w-4 h-4 animate-spin" />
                       ) : (
-                        "Prolonger"
+                        t.admin.campaign.extendButton
                       )}
                     </button>
                   </div>
@@ -909,7 +925,7 @@ export default function AdminPage() {
               >
                 <Clock className="w-10 h-10 mx-auto mb-3 text-white/15" />
                 <p className="text-white/40 font-medium">
-                  Aucune campagne active
+                  {t.admin.campaign.noActive}
                 </p>
               </div>
             )}
@@ -925,16 +941,16 @@ export default function AdminPage() {
               >
                 <h2 className="text-sm font-black text-white mb-4 flex items-center gap-2">
                   <Shield className="w-4 h-4 text-[#ffd700]" />
-                  Nouvelle campagne
+                  {t.admin.campaign.newCampaign}
                   <span className="text-[10px] text-[#ffd700]/60 font-normal">
-                    (superadmin)
+                    {t.admin.campaign.superadminOnly}
                   </span>
                 </h2>
 
                 <div className="space-y-4">
                   <div>
                     <label className="block text-[10px] text-white/30 uppercase tracking-wider mb-1">
-                      Nom de la campagne
+                      {t.admin.campaign.campaignName}
                     </label>
                     <input
                       type="text"
@@ -943,14 +959,14 @@ export default function AdminPage() {
                         setNewCampaignName(e.target.value);
                         setCreateError(null);
                       }}
-                      placeholder="Campagne de test #2"
+                      placeholder={t.admin.campaign.campaignNamePlaceholder}
                       className="w-full bg-[#0d1b2e] border border-white/10 rounded-xl p-3 text-white text-sm focus:outline-none focus:border-[#ffd700]/50 focus:ring-1 focus:ring-[#ffd700]/30 transition"
                     />
                   </div>
 
                   <div>
                     <label className="block text-[10px] text-white/30 uppercase tracking-wider mb-1">
-                      Date limite (minimum 7 jours)
+                      {t.admin.campaign.deadlineMin}
                     </label>
                     <input
                       type="datetime-local"
@@ -974,7 +990,7 @@ export default function AdminPage() {
                     {createLoading ? (
                       <Loader2 className="w-4 h-4 animate-spin mx-auto" />
                     ) : (
-                      "Créer la campagne"
+                      t.admin.campaign.createButton
                     )}
                   </button>
 

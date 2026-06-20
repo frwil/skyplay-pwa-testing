@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import SubmissionForm from "./SubmissionForm";
 import { LogIn, UserPlus, AlertTriangle } from "lucide-react";
+import { useTranslation } from "@/lib/i18n/TranslationContext";
 
 interface Question {
   id: number;
@@ -37,6 +38,7 @@ export default function SubmissionFormWrapper({
   steps,
   campaignDeadline = null,
 }: SubmissionFormWrapperProps) {
+  const { t } = useTranslation();
   const [userId, setUserId] = useState<number | null>(null);
   const [mode, setMode] = useState<"login" | "register">("login");
   const [username, setUsername] = useState("");
@@ -88,12 +90,12 @@ export default function SubmissionFormWrapper({
 
   const handleRegister = async () => {
     if (!username.trim() || !email.trim()) {
-      setError("Tous les champs sont requis");
+      setError(t.submissionForm.errors.allFieldsRequired);
       return;
     }
 
     if (!email.includes("@")) {
-      setError("Email invalide");
+      setError(t.submissionForm.errors.invalidEmail);
       return;
     }
 
@@ -116,10 +118,10 @@ export default function SubmissionFormWrapper({
         setUserId(data.user.id);
         setRegisteredPin(data.message);
       } else {
-        setError(data.error || "Erreur d'inscription");
+        setError(data.error || t.submissionForm.register.errorGeneric);
       }
     } catch {
-      setError("Erreur réseau");
+      setError(t.submissionForm.errors.networkError);
     } finally {
       setLoading(false);
     }
@@ -127,7 +129,7 @@ export default function SubmissionFormWrapper({
 
   const handleLogin = async () => {
     if (!username.trim() || !pin.trim()) {
-      setError("Nom d'utilisateur et code PIN requis");
+      setError(t.submissionForm.errors.usernameAndPinRequired);
       return;
     }
 
@@ -145,10 +147,10 @@ export default function SubmissionFormWrapper({
       if (res.ok && data.user) {
         setUserId(data.user.id);
       } else {
-        setError(data.error || "Identifiants invalides");
+        setError(data.error || t.submissionForm.login.errorAuth);
       }
     } catch {
-      setError("Erreur réseau");
+      setError(t.submissionForm.errors.networkError);
     } finally {
       setLoading(false);
     }
@@ -165,12 +167,12 @@ export default function SubmissionFormWrapper({
         }}
       >
         <AlertTriangle className="w-10 h-10 mx-auto text-[#FD2E5F]" />
-        <h3 className="text-lg font-black text-white">Campagne terminée</h3>
+        <h3 className="text-lg font-black text-white">{t.submissionForm.steps.campaignEndedTitle}</h3>
         <p className="text-sm text-white/60">
-          La campagne de test est terminée. Les soumissions sont fermées.
+          {t.submissionForm.steps.campaignEndedDesc}
         </p>
         <p className="text-xs text-white/40">
-          Merci pour ta participation ! Reviens lors de la prochaine campagne.
+          {t.campaignBanner.campaignEndedThanks}
         </p>
       </div>
     );
@@ -193,7 +195,7 @@ export default function SubmissionFormWrapper({
             }`}
           >
             <LogIn className="w-4 h-4" />
-            Connexion
+            {t.submissionForm.login.tabLabel}
           </button>
           <button
             onClick={() => {
@@ -207,7 +209,7 @@ export default function SubmissionFormWrapper({
             }`}
           >
             <UserPlus className="w-4 h-4" />
-            Inscription
+            {t.submissionForm.register.tabLabel}
           </button>
         </div>
 
@@ -219,7 +221,7 @@ export default function SubmissionFormWrapper({
               setUsername(e.target.value);
               setError(null);
             }}
-            placeholder="Nom d'utilisateur"
+            placeholder={t.submissionForm.login.usernamePlaceholder}
             className="w-full bg-[#0d1b2e] border border-white/10 rounded-2xl p-3.5 text-white placeholder:text-white/25 focus:outline-none focus:border-[#00c8ff]/50 focus:ring-1 focus:ring-[#00c8ff]/30 transition"
           />
 
@@ -231,7 +233,7 @@ export default function SubmissionFormWrapper({
                 setEmail(e.target.value);
                 setError(null);
               }}
-              placeholder="Email"
+              placeholder={t.submissionForm.register.emailPlaceholder}
               className="w-full bg-[#0d1b2e] border border-white/10 rounded-2xl p-3.5 text-white placeholder:text-white/25 focus:outline-none focus:border-[#00c8ff]/50 focus:ring-1 focus:ring-[#00c8ff]/30 transition"
               style={{ animation: "fadeInUp 0.3s ease-out" }}
             />
@@ -246,16 +248,16 @@ export default function SubmissionFormWrapper({
                   className="p-3 rounded-xl border text-center animate-fade-in-up"
                   style={{ backgroundColor: "rgba(46,204,113,0.08)", borderColor: "rgba(46,204,113,0.3)" }}
                 >
-                  <p className="text-xs text-[#2ecc71] font-bold">✅ Email envoyé</p>
+                  <p className="text-xs text-[#2ecc71] font-bold">{t.submissionForm.forgotPin.emailSent}</p>
                   <p className="text-[11px] text-white/50 mt-1">
-                    Vérifie tes emails et reconnecte-toi avec ton nouveau PIN.
+                    {t.submissionForm.forgotPin.checkEmailAndReconnect}
                   </p>
                   <button
                     type="button"
                     onClick={() => { setResetSuccess(false); setPin(""); setShowResetEmail(false); setEmail(""); }}
                     className="mt-2 text-xs text-[#00c8ff] hover:underline"
                   >
-                    Revenir à la connexion
+                    {t.submissionForm.forgotPin.reconnect}
                   </button>
                 </div>
               ) : showResetEmail ? (
@@ -265,14 +267,14 @@ export default function SubmissionFormWrapper({
                     type="email"
                     value={email}
                     onChange={(e) => { setEmail(e.target.value); setError(null); }}
-                    placeholder="Ton email d'inscription"
+                    placeholder={t.submissionForm.forgotPin.resetEmailPlaceholder}
                     className="w-full bg-[#0d1b2e] border border-white/10 rounded-xl p-2.5 text-sm text-white placeholder:text-white/25 focus:outline-none focus:border-[#ffd700]/50 transition"
                   />
                   <div className="flex gap-2">
                     <button
                       type="button"
                       onClick={async () => {
-                        if (!email.trim()) { setError("Email requis"); return; }
+                        if (!email.trim()) { setError(t.submissionForm.errors.emailRequired); return; }
                         setLoading(true); setError(null);
                         try {
                           const res = await fetch("/api/users/reset-pin", {
@@ -282,26 +284,26 @@ export default function SubmissionFormWrapper({
                           });
                           const data = await res.json();
                           if (!res.ok) {
-                            setError(data.error || "Réinitialisation impossible");
+                            setError(data.error || t.submissionForm.forgotPin.errorResetImpossible);
                           } else if (!data.emailSent) {
-                            setError(data.message || "PIN réinitialisé mais l'email n'a pas pu être envoyé. Contacte l'admin.");
+                            setError(data.message || t.submissionForm.forgotPin.pinResetButEmailFailed);
                           } else {
                             setResetSuccess(true);
                           }
-                        } catch { setError("Erreur réseau"); }
+                        } catch { setError(t.submissionForm.errors.networkError); }
                         finally { setLoading(false); }
                       }}
                       disabled={loading}
                       className="flex-1 py-2 rounded-full text-xs font-bold bg-[#ffd700]/15 border border-[#ffd700]/30 text-[#ffd700] hover:bg-[#ffd700]/25 transition disabled:opacity-50"
                     >
-                      Réinitialiser mon PIN
+                      {t.submissionForm.forgotPin.resetPinButton}
                     </button>
                     <button
                       type="button"
                       onClick={() => { setShowResetEmail(false); setEmail(""); }}
                       className="py-2 px-3 rounded-full text-xs text-white/30 hover:text-white/60 transition"
                     >
-                      Annuler
+                      {t.submissionForm.forgotPin.cancel}
                     </button>
                   </div>
                 </div>
@@ -319,7 +321,7 @@ export default function SubmissionFormWrapper({
                       setPin(v);
                       setError(null);
                     }}
-                    placeholder="Code PIN (4 chiffres)"
+                    placeholder={t.submissionForm.login.pinPlaceholderFull}
                     autoComplete="off"
                     className="w-full bg-[#0d1b2e] border border-white/10 rounded-2xl p-3.5 text-white placeholder:text-white/25 focus:outline-none focus:border-[#ffd700]/50 focus:ring-1 focus:ring-[#ffd700]/30 transition font-mono tracking-[4px] text-center text-lg"
                   />
@@ -328,7 +330,7 @@ export default function SubmissionFormWrapper({
                     onClick={() => setShowResetEmail(true)}
                     className="text-[10px] text-white/20 hover:text-[#ffd700]/60 transition text-left"
                   >
-                    PIN oublié ?
+                    {t.submissionForm.login.forgotPin}
                   </button>
                 </>
               )}
@@ -345,13 +347,13 @@ export default function SubmissionFormWrapper({
               }}
             >
               <p className="text-xs text-[#2ecc71] font-bold uppercase tracking-wider">
-                ✅ Compte créé
+                {t.submissionForm.register.accountCreated}
               </p>
               <p className="text-sm text-white/70">
                 {registeredPin}
               </p>
               <p className="text-[10px] text-white/30">
-                Vérifie tes emails (spams inclus)
+                {t.submissionForm.register.checkEmail}
               </p>
             </div>
           )}
@@ -376,11 +378,11 @@ export default function SubmissionFormWrapper({
             }}
           >
             {loading ? (
-              <span className="animate-pulse">Chargement...</span>
+              <span className="animate-pulse">{t.submissionForm.login.loading}</span>
             ) : mode === "login" ? (
-              "Se connecter"
+              t.submissionForm.login.submit
             ) : (
-              "S'inscrire"
+              t.submissionForm.register.submit
             )}
           </button>
         </div>
@@ -398,7 +400,7 @@ export default function SubmissionFormWrapper({
         }}
       >
         <span className="text-sm text-[#2ecc71] font-medium">
-          ✅ Connecté en tant que{" "}
+          {"✅ "}{t.submissionForm.login.connectedAs}{" "}
           <span className="font-bold">{username}</span>
         </span>
         <button
@@ -409,7 +411,7 @@ export default function SubmissionFormWrapper({
           }}
           className="text-xs text-white/40 hover:text-white transition"
         >
-          Déconnexion
+          {t.submissionForm.login.logout}
         </button>
       </div>
       <SubmissionForm

@@ -14,13 +14,13 @@ const nextLocale: Record<Locale, Locale> = {
 };
 
 export default function LanguageSwitcher() {
-  const { locale, setLocale } = useTranslation();
+  const { t, locale, setLocale } = useTranslation();
 
   return (
     <button
       onClick={() => setLocale(nextLocale[locale])}
       className="text-sm px-2 py-1 rounded-lg border border-white/10 bg-white/[0.03] hover:bg-white/[0.08] transition"
-      title={locale === "fr" ? "Switch to English" : "Passer en français"}
+      title={locale === "fr" ? t.languageSwitcher.switchToEn : t.languageSwitcher.switchToFr}
     >
       {flags[locale]}
     </button>

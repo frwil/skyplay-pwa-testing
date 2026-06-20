@@ -2,7 +2,10 @@ import { getDb } from "@/lib/db";
 import GlowBackground from "@/components/GlowBackground";
 import SubmissionFormWrapper from "@/components/SubmissionFormWrapper";
 import CampaignBanner from "@/components/CampaignBanner";
+import LanguageSwitcher from "@/components/LanguageSwitcher";
 import { Activity, Trophy, Users } from "lucide-react";
+import { cookies } from "next/headers";
+import { getDictionary } from "@/lib/i18n/server";
 
 export const dynamic = "force-dynamic";
 
@@ -95,6 +98,11 @@ export default async function HomePage() {
     ? Date.now() > Date.parse(campaignDeadline)
     : false;
 
+  // i18n — server-side dictionary lookup via cookie
+  const cookieStore = await cookies();
+  const localeCookie = cookieStore.get("skyplay-locale")?.value;
+  const dict = getDictionary(localeCookie === "en" ? "en" : "fr");
+
   return (
     <main className="relative min-h-screen">
       <GlowBackground />
@@ -112,28 +120,29 @@ export default async function HomePage() {
                 WebkitTextFillColor: "transparent",
               }}
             >
-              SKYPLAY
+              {dict.common.siteTitle}
             </div>
             <div
               className="uppercase tracking-[4px] mt-0.5"
               style={{ fontSize: "8px", color: "rgba(255,255,255,0.4)" }}
             >
-              PWA Compagnon
+              {dict.common.siteSubtitle}
             </div>
           </a>
 
           <div className="flex items-center gap-4">
+            <LanguageSwitcher />
             <a
               href="/faq"
               className="text-xs text-white/40 hover:text-white transition font-medium"
             >
-              FAQ
+              {dict.common.faq}
             </a>
             <a
               href="/admin"
               className="text-xs text-white/40 hover:text-white transition font-medium"
             >
-              Admin
+              {dict.common.admin}
             </a>
             <span
               className="px-3 py-1 rounded-full text-xs font-bold flex items-center gap-1.5"
@@ -147,7 +156,7 @@ export default async function HomePage() {
                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#00c8ff] opacity-75" />
                 <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-[#00c8ff]" />
               </span>
-              TEST
+              {dict.common.testBadge}
             </span>
           </div>
         </div>
@@ -167,11 +176,11 @@ export default async function HomePage() {
           }}
         >
           <Activity className="w-3.5 h-3.5" />
-          PHASE DE TEST UTILISATEUR — 16 QUESTIONS
+          {dict.home.heroBadge}
         </div>
 
         <h1 className="text-3xl sm:text-4xl md:text-5xl font-black leading-[1.1] mb-4 tracking-tight">
-          Teste la plateforme,
+          {dict.home.heroTitle1}
           <br />
           <span
             style={{
@@ -181,7 +190,7 @@ export default async function HomePage() {
               WebkitTextFillColor: "transparent",
             }}
           >
-            gagne des Sky
+            {dict.home.heroTitle2}
           </span>
         </h1>
 
@@ -189,9 +198,9 @@ export default async function HomePage() {
           className="text-base max-w-xl mx-auto leading-relaxed"
           style={{ color: "rgba(255,255,255,0.5)" }}
         >
-          Réponds aux 16 questions réparties sur 4 jalons. Chaque réponse validée
-          te rapporte des <span style={{ color: "#ffd700" }}>Sky</span>. N&apos;oublie
-          pas d&apos;ajouter une capture d&apos;écran comme preuve !
+          {dict.home.heroDescription}
+          <span style={{ color: "#ffd700" }}>{dict.home.heroDescriptionSky}</span>
+          {dict.home.heroDescriptionExtra}
         </p>
 
         {/* Mini stats */}
@@ -199,24 +208,24 @@ export default async function HomePage() {
           <div className="text-center">
             <Users className="w-4 h-4 mx-auto mb-1 text-[#00c8ff]" />
             <p className="text-lg font-black text-white">{stats.users}</p>
-            <p className="text-[10px] text-white/30 uppercase tracking-wider">Testeurs</p>
+            <p className="text-[10px] text-white/30 uppercase tracking-wider">{dict.home.stats.testers}</p>
           </div>
           <div className="text-center">
             <Activity className="w-4 h-4 mx-auto mb-1 text-[#ffd700]" />
             <p className="text-lg font-black text-white">{stats.submissions}</p>
-            <p className="text-[10px] text-white/30 uppercase tracking-wider">Réponses</p>
+            <p className="text-[10px] text-white/30 uppercase tracking-wider">{dict.home.stats.answers}</p>
           </div>
           <div className="text-center">
             <Trophy className="w-4 h-4 mx-auto mb-1 text-[#2ecc71]" />
             <p className="text-lg font-black text-white">{stats.approved}</p>
-            <p className="text-[10px] text-white/30 uppercase tracking-wider">Validées</p>
+            <p className="text-[10px] text-white/30 uppercase tracking-wider">{dict.home.stats.approved}</p>
           </div>
           <div className="text-center">
             <span className="text-lg font-black" style={{ color: "#ffd700" }}>
               ⚡
             </span>
             <p className="text-lg font-black text-white">{stats.totalSky}</p>
-            <p className="text-[10px] text-white/30 uppercase tracking-wider">Sky distribués</p>
+            <p className="text-[10px] text-white/30 uppercase tracking-wider">{dict.home.stats.skyDistributed}</p>
           </div>
         </div>
       </section>
@@ -232,10 +241,10 @@ export default async function HomePage() {
         >
           <div className="mb-6">
             <h2 className="text-lg font-black mb-1 text-white">
-              Formulaire de test
+              {dict.home.form.title}
             </h2>
             <p className="text-xs text-white/40">
-              Sélectionne un jalon, réponds aux questions une par une
+              {dict.home.form.subtitle}
             </p>
           </div>
 
@@ -249,7 +258,7 @@ export default async function HomePage() {
       {/* Footer */}
       <footer className="relative z-10 border-t border-white/5 py-6 px-4 text-center">
         <p className="text-xs text-white/20">
-          © 2026 SKY PLAY ENTERTAINMENT — PWA Compagnon de Test
+          {dict.common.footer}
         </p>
       </footer>
     </main>

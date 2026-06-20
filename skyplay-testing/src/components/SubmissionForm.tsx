@@ -16,6 +16,7 @@ import {
   X,
   ChevronLeft,
 } from "lucide-react";
+import { useTranslation } from "@/lib/i18n/TranslationContext";
 
 interface Question {
   id: number;
@@ -54,6 +55,7 @@ export default function SubmissionForm({
   completedMap,
   apiUrl = "/api/submit",
 }: SubmissionFormProps) {
+  const { t } = useTranslation();
   const [activeQuestionId, setActiveQuestionId] = useState<number | null>(null);
   const [answerText, setAnswerText] = useState("");
   const [screenshot, setScreenshot] = useState<string | null>(null);
@@ -193,7 +195,7 @@ export default function SubmissionForm({
     if (!isImage && !isVideo) {
       setResult({
         type: "error",
-        message: "Format non supporté. Utilise une image ou une vidéo.",
+        message: t.submissionForm.modal.unsupportedFormat,
       });
       return;
     }
@@ -204,8 +206,8 @@ export default function SubmissionForm({
       setResult({
         type: "error",
         message: isVideo
-          ? "La vidéo ne doit pas dépasser 40 Mo"
-          : "L'image ne doit pas dépasser 10 Mo",
+          ? t.submissionForm.modal.videoTooLarge
+          : t.submissionForm.modal.imageTooLarge,
       });
       return;
     }
@@ -218,7 +220,7 @@ export default function SubmissionForm({
         if (videoEl.duration > 10) {
           setResult({
             type: "error",
-            message: `La vidéo dure ${Math.round(videoEl.duration)}s. Maximum autorisé : 10 secondes.`,
+            message: t.submissionForm.modal.videoTooLong(Math.round(videoEl.duration)),
           });
           URL.revokeObjectURL(videoEl.src);
           return;
@@ -231,7 +233,7 @@ export default function SubmissionForm({
         URL.revokeObjectURL(videoEl.src);
         setResult({
           type: "error",
-          message: "Impossible de lire cette vidéo. Vérifie le format.",
+          message: t.submissionForm.modal.cannotReadVideo,
         });
       };
       videoEl.src = URL.createObjectURL(file);
@@ -252,7 +254,7 @@ export default function SubmissionForm({
     reader.onerror = () => {
       setResult({
         type: "error",
-        message: "Erreur lors de la lecture du fichier.",
+        message: t.submissionForm.modal.fileReadError,
       });
     };
     reader.readAsDataURL(file);
@@ -264,7 +266,7 @@ export default function SubmissionForm({
     if (!activeQuestionId || !activeQuestion) {
       setResult({
         type: "error",
-        message: "Sélectionne une question à répondre",
+        message: t.submissionForm.modal.selectQuestionFirst,
       });
       return;
     }
@@ -276,19 +278,19 @@ export default function SubmissionForm({
       const parts = JSON.parse(activeQuestion.parts) as { label: string; type: string; options?: string[] }[];
       const emptyParts = parts.filter((p) => !partsAnswer[p.label]?.trim());
       if (emptyParts.length > 0) {
-        setResult({ type: "error", message: `Réponds à : ${emptyParts[0].label}` });
+        setResult({ type: "error", message: t.submissionForm.modal.partsValidation(emptyParts[0].label) });
         return;
       }
       finalAnswerText = JSON.stringify(partsAnswer);
     } else if (activeQuestion.answer_type === 'checkbox') {
       if (checkboxAnswer.length === 0) {
-        setResult({ type: "error", message: "Sélectionne au moins une option" });
+        setResult({ type: "error", message: t.submissionForm.modal.checkboxValidation });
         return;
       }
       finalAnswerText = JSON.stringify(checkboxAnswer);
     } else {
       if (!answerText.trim()) {
-        setResult({ type: "error", message: "Rédige ta réponse" });
+        setResult({ type: "error", message: t.submissionForm.modal.textValidation });
         return;
       }
       finalAnswerText = answerText.trim();
@@ -318,20 +320,20 @@ export default function SubmissionForm({
         });
         setResult({
           type: "success",
-          message: `Réponse soumise ! +${data.submission.reward} Sky — En attente de validation.`,
+          message: t.submissionForm.modal.success.replace("{reward}", String(data.submission.reward)),
         });
         setAnswerText("");
         setScreenshot(null);
       } else {
         setResult({
           type: "error",
-          message: data.error || "Erreur lors de la soumission",
+          message: data.error || t.submissionForm.modal.errorGeneric,
         });
       }
     } catch {
       setResult({
         type: "error",
-        message: "Erreur réseau. Vérifie ta connexion.",
+        message: t.submissionForm.modal.errorNetwork,
       });
     } finally {
       setLoading(false);
@@ -361,10 +363,10 @@ export default function SubmissionForm({
       <div className="space-y-2">
         <div className="flex items-center justify-between text-xs">
           <span className="text-white/40 uppercase tracking-[2px] font-bold">
-            🏆 Progression
+            {t.submissionForm.steps.progress}
           </span>
           <span className="font-black" style={{ color: "#ffd700" }}>
-            {completedCount}/{totalQuestions} questions
+            {t.submissionForm.steps.questionCount(completedCount, totalQuestions)}
           </span>
         </div>
         <div className="h-2 rounded-full bg-white/[0.05] overflow-hidden border border-white/5">
@@ -390,16 +392,13 @@ export default function SubmissionForm({
         >
           <div className="text-4xl">🎉</div>
           <h3 className="text-lg font-black text-white">
-            Félicitations&nbsp;!
+            {t.submissionForm.steps.congratulations}
           </h3>
           <p className="text-sm text-white/70 leading-relaxed">
-            Tu as répondu aux <span className="font-bold text-[#ffd700]">16 questions</span> du
-            programme de test. Merci pour ta précieuse contribution&nbsp;!
+            {t.submissionForm.steps.congratulationsDesc(totalQuestions)}
           </p>
           <p className="text-xs text-white/40 leading-relaxed">
-            L&rsquo;équipe <span className="font-bold text-[#00c8ff]">skyplay.cloud</span> va
-            examiner tes réponses. Tu recevras une notification très bientôt avec le
-            récapitulatif de tes gains en <span style={{ color: "#ffd700" }}>Sky</span>.
+            {t.submissionForm.steps.congratulationsSub}
           </p>
           <div
             className="inline-flex items-center gap-2 px-4 py-2 rounded-full text-xs font-bold"
@@ -410,7 +409,7 @@ export default function SubmissionForm({
             }}
           >
             <Trophy className="w-4 h-4" />
-            Test terminé — en attente de validation
+            {t.submissionForm.steps.testCompletedPending}
           </div>
         </div>
       )}
@@ -569,7 +568,7 @@ export default function SubmissionForm({
                     color: "#00c8ff",
                   }}
                 >
-                  {activeStep.slug.replace("jalon_", "JALON ")}
+                  {t.submissionForm.steps.stepLabel(activeStep.slug)}
                 </span>
                 <span className="text-[10px] text-white/30 truncate">
                   Q{activeQuestion.sort_order}/{activeStep.questions.length}
@@ -581,7 +580,7 @@ export default function SubmissionForm({
                   onClick={() => navigateQuestion("prev")}
                   disabled={!canGoPrev}
                   className="p-2 rounded-full text-white/30 hover:text-white hover:bg-white/5 transition disabled:opacity-20"
-                  aria-label="Question précédente"
+                  aria-label={t.submissionForm.modal.prevAria}
                 >
                   <ChevronLeft className="w-5 h-5" />
                 </button>
@@ -589,14 +588,14 @@ export default function SubmissionForm({
                   onClick={() => navigateQuestion("next")}
                   disabled={!canGoNext}
                   className="p-2 rounded-full text-white/30 hover:text-white hover:bg-white/5 transition disabled:opacity-20"
-                  aria-label="Question suivante"
+                  aria-label={t.submissionForm.modal.nextAria}
                 >
                   <ChevronRight className="w-5 h-5" />
                 </button>
                 <button
                   onClick={closeModal}
                   className="p-2 rounded-full text-white/40 hover:text-white hover:bg-white/5 transition ml-1"
-                  aria-label="Fermer"
+                  aria-label={t.submissionForm.modal.closeAria}
                 >
                   <X className="w-5 h-5" />
                 </button>
@@ -633,7 +632,7 @@ export default function SubmissionForm({
                     rel="noopener noreferrer"
                     className="inline-flex items-center gap-1.5 text-xs px-3 py-2 rounded-full border border-[#00c8ff]/30 text-[#00c8ff] hover:bg-[#00c8ff]/10 transition"
                   >
-                    🔗 Ouvrir skyplay.cloud →
+                    {t.submissionForm.modal.openSkyplay}
                   </a>
                 </div>
               )}
@@ -641,7 +640,7 @@ export default function SubmissionForm({
               {/* Answer text */}
               <div className="space-y-1.5">
                 <label className="block text-[11px] font-bold uppercase tracking-[2px] text-white/30">
-                  Ta réponse
+                  {t.submissionForm.modal.yourAnswer}
                 </label>
 
                 {/* Multi-part questions */}
@@ -658,7 +657,7 @@ export default function SubmissionForm({
                               setPartsAnswer(prev => ({ ...prev, [part.label]: e.target.value }));
                               setResult(null);
                             }}
-                            placeholder="Écris ta réponse..."
+                            placeholder={t.submissionForm.modal.textPlaceholder}
                             className="w-full bg-[#070f1e] border border-white/10 rounded-xl p-3 text-sm text-white placeholder:text-white/20 focus:outline-none focus:border-[#00c8ff]/50 focus:ring-1 focus:ring-[#00c8ff]/30 transition resize-none"
                           />
                         ) : part.type === 'radio' ? (
@@ -700,7 +699,7 @@ export default function SubmissionForm({
                     }}
                     className="w-full bg-[#070f1e] border border-white/10 rounded-xl p-3.5 text-sm text-white focus:outline-none focus:border-[#00c8ff]/50 focus:ring-1 focus:ring-[#00c8ff]/30 transition"
                   >
-                    <option value="" disabled className="text-white/20">Choisis une option...</option>
+                    <option value="" disabled className="text-white/20">{t.submissionForm.modal.dropdownPlaceholder}</option>
                     {activeQuestion.answer_options ? (
                       (JSON.parse(activeQuestion.answer_options) as string[]).map((opt: string) => (
                         <option key={opt} value={opt} className="bg-[#070f1e] text-white">
@@ -776,7 +775,7 @@ export default function SubmissionForm({
                       setAnswerText(e.target.value);
                       setResult(null);
                     }}
-                    placeholder="Écris ta réponse ici..."
+                    placeholder={t.submissionForm.modal.textPlaceholder}
                     className="w-full bg-[#070f1e] border border-white/10 rounded-xl p-3.5 text-sm text-white placeholder:text-white/20 focus:outline-none focus:border-[#00c8ff]/50 focus:ring-1 focus:ring-[#00c8ff]/30 transition resize-none"
                   />
                 )}
@@ -786,7 +785,7 @@ export default function SubmissionForm({
               {activeQuestion.requires_screenshot !== 0 && (
                 <div className="space-y-1.5">
                   <label className="block text-[11px] font-bold uppercase tracking-[2px] text-white/30">
-                    Preuve (capture d&apos;écran ou courte vidéo)
+                    {t.submissionForm.modal.screenshotLabel}
                   </label>
                   <input
                     ref={fileInputRef}
@@ -844,7 +843,7 @@ export default function SubmissionForm({
                         }}
                         className="absolute top-2 right-2 px-3 py-1.5 rounded-full bg-red-500/80 text-white text-xs font-bold hover:bg-red-600 transition z-10"
                       >
-                        ✕ Supprimer
+                        {t.submissionForm.modal.deleteMedia}
                       </button>
                       <div className="absolute bottom-2 left-2 px-3 py-1 rounded-full bg-[#2ecc71]/20 border border-[#2ecc71]/40 text-[#2ecc71] text-[10px] font-bold flex items-center gap-1">
                         {mediaType === "video" ? (
@@ -852,7 +851,7 @@ export default function SubmissionForm({
                         ) : (
                           <CheckCircle className="w-3 h-3" />
                         )}
-                        {mediaType === "video" ? "Vidéo prête" : "Capture prête"}
+                        {mediaType === "video" ? t.submissionForm.modal.videoReady : t.submissionForm.modal.imageReady}
                       </div>
                     </div>
                   ) : (
@@ -866,10 +865,10 @@ export default function SubmissionForm({
                         >
                           <Camera className="w-8 h-8 text-[#00c8ff]/60 group-hover:text-[#00c8ff] transition" />
                           <span className="text-xs font-bold text-white/50 group-hover:text-white transition">
-                            Photo
+                            {t.submissionForm.modal.photo}
                           </span>
                           <span className="text-[10px] text-white/20">
-                            Appareil photo
+                            {t.submissionForm.modal.camera}
                           </span>
                         </button>
 
@@ -880,10 +879,10 @@ export default function SubmissionForm({
                         >
                           <Video className="w-8 h-8 text-[#FD2E5F]/50 group-hover:text-[#FD2E5F] transition" />
                           <span className="text-xs font-bold text-white/50 group-hover:text-white transition">
-                            Vidéo
+                            {t.submissionForm.modal.video}
                           </span>
                           <span className="text-[10px] text-white/20">
-                            Max 10 secondes
+                            {t.submissionForm.modal.maxVideoDuration}
                           </span>
                         </button>
                       </div>
@@ -894,7 +893,7 @@ export default function SubmissionForm({
                         onClick={() => fileInputRef.current?.click()}
                         className="w-full py-3 rounded-xl text-xs text-white/25 hover:text-white/50 transition text-center"
                       >
-                        ou choisir depuis la galerie…
+                        {t.submissionForm.modal.chooseFromGallery}
                       </button>
                     </div>
                   )}
@@ -902,7 +901,7 @@ export default function SubmissionForm({
               )}
               {activeQuestion.requires_screenshot === 0 && (
                 <div className="px-3 py-2 rounded-xl bg-white/[0.02] border border-white/5 text-[11px] text-white/25 italic text-center">
-                  Aucune capture requise pour cette question — réponse texte uniquement.
+                  {t.submissionForm.modal.noScreenshotRequired}
                 </div>
               )}
 
@@ -934,7 +933,7 @@ export default function SubmissionForm({
                   onClick={() => navigateQuestion("prev")}
                   disabled={!canGoPrev}
                   className="shrink-0 flex items-center justify-center w-11 h-11 rounded-full text-white/40 hover:text-white border border-white/10 hover:border-white/20 transition disabled:opacity-15"
-                  aria-label="Précédente"
+                  aria-label={t.submissionForm.modal.prevAria}
                 >
                   <ChevronLeft className="w-5 h-5" />
                 </button>
@@ -957,17 +956,17 @@ export default function SubmissionForm({
                   {loading ? (
                     <>
                       <Loader2 className="w-4 h-4 animate-spin" />
-                      Envoi...
+                      {t.submissionForm.modal.submitting}
                     </>
                   ) : getQuestionStatus(activeQuestionId) !== "idle" ? (
                     <>
                       <CheckCircle className="w-4 h-4" />
-                      Déjà répondu
+                      {t.submissionForm.modal.alreadyAnswered}
                     </>
                   ) : (
                     <>
                       <Send className="w-4 h-4" />
-                      Soumettre +{activeQuestion.reward_amount} Sky
+                      {t.submissionForm.modal.submitReward(activeQuestion.reward_amount)}
                     </>
                   )}
                 </button>
@@ -977,7 +976,7 @@ export default function SubmissionForm({
                   onClick={() => navigateQuestion("next")}
                   disabled={!canGoNext}
                   className="shrink-0 flex items-center justify-center w-11 h-11 rounded-full text-white/40 hover:text-white border border-white/10 hover:border-white/20 transition disabled:opacity-15"
-                  aria-label="Suivante"
+                  aria-label={t.submissionForm.modal.nextAria}
                 >
                   <ChevronRight className="w-5 h-5" />
                 </button>
@@ -1003,17 +1002,17 @@ export default function SubmissionForm({
                   {loading ? (
                     <>
                       <Loader2 className="w-4 h-4 animate-spin" />
-                      Envoi...
+                      {t.submissionForm.modal.submitting}
                     </>
                   ) : getQuestionStatus(activeQuestionId) !== "idle" ? (
                     <>
                       <CheckCircle className="w-4 h-4" />
-                      Déjà répondu
+                      {t.submissionForm.modal.alreadyAnswered}
                     </>
                   ) : (
                     <>
                       <Send className="w-4 h-4" />
-                      Soumettre +{activeQuestion.reward_amount} Sky
+                      {t.submissionForm.modal.submitReward(activeQuestion.reward_amount)}
                     </>
                   )}
                 </button>
@@ -1026,7 +1025,7 @@ export default function SubmissionForm({
                     className="flex-1 flex items-center justify-center gap-1.5 py-3 rounded-full text-sm font-bold text-white/50 hover:text-white border border-white/10 hover:border-white/20 transition disabled:opacity-15 min-h-[44px]"
                   >
                     <ChevronLeft className="w-4 h-4" />
-                    Précédente
+                    {t.submissionForm.modal.prev}
                   </button>
                   <button
                     type="button"
@@ -1034,7 +1033,7 @@ export default function SubmissionForm({
                     disabled={!canGoNext}
                     className="flex-1 flex items-center justify-center gap-1.5 py-3 rounded-full text-sm font-bold text-white/50 hover:text-white border border-white/10 hover:border-white/20 transition disabled:opacity-15 min-h-[44px]"
                   >
-                    Suivante
+                    {t.submissionForm.modal.next}
                     <ChevronRight className="w-4 h-4" />
                   </button>
                 </div>

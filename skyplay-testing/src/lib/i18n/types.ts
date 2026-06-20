@@ -16,6 +16,7 @@ export interface Dictionary {
     heroTitle2: string;
     heroDescription: string;
     heroDescriptionSky: string;
+    heroDescriptionExtra: string;
     stats: {
       testers: string;
       answers: string;
@@ -41,6 +42,12 @@ export interface Dictionary {
       errorAuth: string;
       pinSent: string;
       haveAccount: string;
+      tabLabel: string;
+      usernamePlaceholder: string;
+      pinPlaceholderFull: string;
+      loading: string;
+      connectedAs: string;
+      logout: string;
     };
     register: {
       title: string;
@@ -56,6 +63,9 @@ export interface Dictionary {
       success: string;
       pinSent: string;
       usernameHint: string;
+      tabLabel: string;
+      accountCreated: string;
+      checkEmail: string;
     };
     forgotPin: {
       title: string;
@@ -66,6 +76,21 @@ export interface Dictionary {
       success: string;
       errorNotFound: string;
       errorGeneric: string;
+      emailSent: string;
+      checkEmailAndReconnect: string;
+      reconnect: string;
+      cancel: string;
+      resetPinButton: string;
+      resetEmailPlaceholder: string;
+      errorResetImpossible: string;
+      pinResetButEmailFailed: string;
+    };
+    errors: {
+      allFieldsRequired: string;
+      invalidEmail: string;
+      emailRequired: string;
+      networkError: string;
+      usernameAndPinRequired: string;
     };
     steps: {
       expand: string;
@@ -81,6 +106,15 @@ export interface Dictionary {
       campaignEnded: string;
       allDone: string;
       allDoneDesc: string;
+      progress: string;
+      questionCount: (completed: number, total: number) => string;
+      congratulations: string;
+      congratulationsDesc: (count: number) => string;
+      congratulationsSub: string;
+      testCompletedPending: string;
+      campaignEndedTitle: string;
+      campaignEndedDesc: string;
+      stepLabel: (slug: string) => string;
     };
     modal: {
       reward: string;
@@ -105,22 +139,68 @@ export interface Dictionary {
       textValidation: string;
       dropdownPlaceholder: string;
       textPlaceholder: string;
+      photo: string;
+      video: string;
+      camera: string;
+      maxVideoDuration: string;
+      chooseFromGallery: string;
+      deleteMedia: string;
+      imageReady: string;
+      videoReady: string;
+      noScreenshotRequired: string;
+      alreadyAnswered: string;
+      submitReward: (reward: number) => string;
+      unsupportedFormat: string;
+      imageTooLarge: string;
+      videoTooLarge: string;
+      videoTooLong: (seconds: number) => string;
+      cannotReadVideo: string;
+      fileReadError: string;
+      selectQuestionFirst: string;
+      prevAria: string;
+      nextAria: string;
+      closeAria: string;
     };
   };
   admin: {
     login: {
       title: string;
+      panelSubtitle: string;
+      heading: string;
       usernameLabel: string;
       usernamePlaceholder: string;
       passwordLabel: string;
       passwordPlaceholder: string;
       submit: string;
+      submitting: string;
       errorAuth: string;
       errorGeneric: string;
+      allFieldsRequired: string;
+      networkError: string;
+      adminOnlyHint: string;
+      backToForm: string;
+      loadError: string;
     };
     dashboard: {
       title: string;
       subtitle: string;
+      logout: string;
+      superadmin: string;
+      adminRole: string;
+      tabs: {
+        dashboard: string;
+        submissions: string;
+        campagne: string;
+      };
+      overview: {
+        testers: string;
+        answers: string;
+        approved: string;
+        pending: string;
+        rejected: string;
+        skyDistributed: string;
+        pendingBonus: string;
+      };
       totalSky: string;
       skyDistributed: string;
       submissions: string;
@@ -150,6 +230,24 @@ export interface Dictionary {
       networkError: string;
       approveSuccess: string;
       rejectSuccess: string;
+      phaseBreakdown: string;
+      phasePrefix: (slug: string) => string;
+      approvalRate: string;
+      leaderboard: string;
+      leaderboardHeaders: {
+        rank: string;
+        user: string;
+        email: string;
+        answers: string;
+        approved: string;
+        skyEarned: string;
+        bonus: string;
+        milestones: string;
+      };
+      validate: string;
+      pendingAccount: string;
+      milePrefix: (slug: string) => string;
+      bonusApproveError: string;
       bonus: {
         title: string;
         description: string;
@@ -162,6 +260,44 @@ export interface Dictionary {
         submissions: string;
       };
     };
+    submissions: {
+      total: string;
+      pending: string;
+      approved: string;
+      rejected: string;
+      title: string;
+      all: string;
+      allSteps: string;
+      stepPrefix: (slug: string) => string;
+      loading: string;
+      noSubmissions: string;
+      withFilters: string;
+    };
+    campaign: {
+      active: string;
+      noActive: string;
+      newCampaign: string;
+      campaignName: string;
+      campaignNameLabel: string;
+      campaignNamePlaceholder: string;
+      deadline: string;
+      deadlineMin: string;
+      status: string;
+      createdAt: string;
+      activeStatus: string;
+      endedStatus: string;
+      extend: string;
+      newDeadline: string;
+      extendButton: string;
+      extendSuccess: string;
+      extendError: string;
+      networkError: string;
+      createButton: string;
+      defaultName: string;
+      createSuccess: string;
+      createError: string;
+      superadminOnly: string;
+    };
   };
   faq: {
     title: string;
@@ -170,6 +306,10 @@ export interface Dictionary {
       question: string;
       answer: string;
     }>;
+  };
+  languageSwitcher: {
+    switchToFr: string;
+    switchToEn: string;
   };
   campaignBanner: {
     campaign: string;
@@ -180,6 +320,7 @@ export interface Dictionary {
     seconds: string;
     expired: string;
     expiredDesc: string;
+    campaignEndedThanks: string;
   };
   email: {
     subjectPin: (pin: string) => string;
