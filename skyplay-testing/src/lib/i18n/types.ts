@@ -115,6 +115,13 @@ export interface Dictionary {
       campaignEndedTitle: string;
       campaignEndedDesc: string;
       stepLabel: (slug: string) => string;
+      answerType: {
+        text: string;
+        radio: string;
+        checkbox: string;
+        dropdown: string;
+        parts: string;
+      };
     };
     modal: {
       reward: string;
@@ -148,6 +155,7 @@ export interface Dictionary {
       imageReady: string;
       videoReady: string;
       noScreenshotRequired: string;
+      skyplayReference: string;
       alreadyAnswered: string;
       submitReward: (reward: number) => string;
       unsupportedFormat: string;

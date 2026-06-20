@@ -122,6 +122,13 @@ const fr: Dictionary = {
       campaignEndedTitle: "Campagne terminée",
       campaignEndedDesc: "La campagne de test est terminée. Les soumissions sont fermées.",
       stepLabel: (slug: string) => slug.replace("jalon_", "JALON "),
+      answerType: {
+        text: "Texte libre",
+        radio: "Choix unique",
+        checkbox: "Choix multiple",
+        dropdown: "Note",
+        parts: "QCM + Texte",
+      },
     },
     modal: {
       reward: "Récompense",
@@ -156,6 +163,7 @@ const fr: Dictionary = {
       videoReady: "Vidéo prête",
       noScreenshotRequired:
         "Aucune capture requise pour cette question — réponse texte uniquement.",
+      skyplayReference: "🔗 Ouvre skyplay.cloud dans un nouvel onglet pour répondre — tu testes la plateforme, pas ton téléphone !",
       alreadyAnswered: "Déjà répondu",
       submitReward: (reward: number) => `Soumettre +${reward} Sky`,
       unsupportedFormat: "Format non supporté. Utilise une image ou une vidéo.",

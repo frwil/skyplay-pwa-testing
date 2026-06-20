@@ -514,6 +514,11 @@ export default function SubmissionForm({
                             </span>{" "}
                             {q.question_text}
                           </p>
+                          <span className="inline-block mt-1 text-[9px] font-medium px-1.5 py-0.5 rounded text-white/25 bg-white/[0.03] border border-white/5">
+                            {q.parts
+                              ? t.submissionForm.steps.answerType.parts
+                              : t.submissionForm.steps.answerType[q.answer_type as keyof typeof t.submissionForm.steps.answerType] || q.answer_type}
+                          </span>
                         </div>
                         <span
                           className={`shrink-0 text-[10px] font-black px-2 py-0.5 rounded-full mt-0.5 ${
@@ -623,16 +628,22 @@ export default function SubmissionForm({
                 </div>
               </div>
 
-              {/* Reference link */}
+              {/* Reference link — skyplay.cloud */}
               {activeQuestion.reference_link && (
-                <div>
+                <div className="space-y-2">
+                  <p className="text-[11px] text-[#00c8ff]/70 leading-relaxed">
+                    {t.submissionForm.modal.skyplayReference}
+                  </p>
                   <a
                     href={activeQuestion.reference_link}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="inline-flex items-center gap-1.5 text-xs px-3 py-2 rounded-full border border-[#00c8ff]/30 text-[#00c8ff] hover:bg-[#00c8ff]/10 transition"
+                    className="inline-flex items-center gap-2 text-sm font-bold px-4 py-2.5 rounded-xl border-2 border-[#00c8ff]/40 text-[#00c8ff] hover:bg-[#00c8ff]/10 hover:border-[#00c8ff]/60 transition"
                   >
                     {t.submissionForm.modal.openSkyplay}
+                    <span className="text-[10px] text-[#00c8ff]/50 font-normal">
+                      ({new URL(activeQuestion.reference_link).hostname})
+                    </span>
                   </a>
                 </div>
               )}

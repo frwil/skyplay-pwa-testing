@@ -123,6 +123,13 @@ const en: Dictionary = {
       campaignEndedTitle: "Campaign Ended",
       campaignEndedDesc: "The testing campaign has ended. Submissions are closed.",
       stepLabel: (slug: string) => slug.replace("jalon_", "MILESTONE "),
+      answerType: {
+        text: "Free text",
+        radio: "Single choice",
+        checkbox: "Multiple choice",
+        dropdown: "Rating",
+        parts: "Multi + Text",
+      },
     },
     modal: {
       reward: "Reward",
@@ -157,6 +164,7 @@ const en: Dictionary = {
       videoReady: "Video ready",
       noScreenshotRequired:
         "No screenshot required for this question — text answer only.",
+      skyplayReference: "🔗 Open skyplay.cloud in a new tab to answer — you're testing the platform, not your phone!",
       alreadyAnswered: "Already answered",
       submitReward: (reward: number) => `Submit +${reward} Sky`,
       unsupportedFormat: "Unsupported format. Use an image or video.",
