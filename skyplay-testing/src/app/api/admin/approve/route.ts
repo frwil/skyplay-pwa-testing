@@ -32,11 +32,11 @@ export async function POST(request: NextRequest) {
     const db = await getDb();
 
     const subRs = await db.execute({
-      sql: "SELECT id, status, user_id, step_id FROM submissions WHERE id = ?",
+      sql: "SELECT id, status, user_id, step_id, question_id FROM submissions WHERE id = ?",
       args: [submissionId],
     });
     const submission = subRs.rows[0] as unknown as
-      | { id: number; status: string; user_id: number; step_id: number }
+      | { id: number; status: string; user_id: number; step_id: number; question_id: number }
       | undefined;
 
     if (!submission) {
@@ -58,6 +58,14 @@ export async function POST(request: NextRequest) {
       sql: "UPDATE submissions SET status = ? WHERE id = ?",
       args: [status, submissionId],
     });
+
+    // Auto-approve participation bonus when Q1 (account creation) is approved
+    if (status === "APPROVED" && submission.question_id === 1) {
+      await db.execute({
+        sql: "UPDATE users SET bonus_status = 'APPROVED' WHERE id = ? AND bonus_status = 'PENDING'",
+        args: [submission.user_id],
+      });
+    }
 
     // Récupérer la soumission mise à jour
     const updatedRs = await db.execute({

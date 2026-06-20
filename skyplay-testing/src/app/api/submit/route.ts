@@ -7,9 +7,9 @@ export async function POST(request: NextRequest) {
     const { userId, questionId, answerText, screenshot } = body;
 
     // Validation
-    if (!userId || !questionId || !answerText || !screenshot) {
+    if (!userId || !questionId || !answerText) {
       return NextResponse.json(
-        { error: "Tous les champs sont requis : userId, questionId, answerText, screenshot" },
+        { error: "Champs requis : userId, questionId, answerText" },
         { status: 400 }
       );
     }
@@ -28,11 +28,13 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    if (typeof screenshot !== "string" || (!screenshot.startsWith("data:image") && !screenshot.startsWith("data:video"))) {
-      return NextResponse.json(
-        { error: "La preuve doit être une image ou une vidéo encodée en Base64" },
-        { status: 400 }
-      );
+    if (screenshot && typeof screenshot === "string" && screenshot.length > 0) {
+      if (!screenshot.startsWith("data:image") && !screenshot.startsWith("data:video")) {
+        return NextResponse.json(
+          { error: "La preuve doit être une image ou une vidéo encodée en Base64" },
+          { status: 400 }
+        );
+      }
     }
 
     const db = await getDb();
@@ -99,11 +101,11 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Insertion
+    // Insertion — screenshot is optional (store "" if not provided)
     const result = await db.execute({
       sql: `INSERT INTO submissions (user_id, step_id, question_id, answer_text, screenshot_base64, status)
             VALUES (?, ?, ?, ?, ?, 'PENDING')`,
-      args: [userId, question.step_id, questionId, answerText.trim(), screenshot],
+      args: [userId, question.step_id, questionId, answerText.trim(), screenshot || ""],
     });
 
     return NextResponse.json(

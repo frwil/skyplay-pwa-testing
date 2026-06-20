@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { Check, X, Loader2, Image as ImageIcon, MessageSquare } from "lucide-react";
+import { useTranslation } from "@/lib/i18n/TranslationContext";
 
 interface Submission {
   id: number;
@@ -24,7 +25,50 @@ interface AdminCardProps {
   onStatusChange: () => void;
 }
 
+function formatAnswer(answerText: string): React.ReactNode {
+  try {
+    const parsed = JSON.parse(answerText);
+    if (Array.isArray(parsed)) {
+      // Checkbox answers — show as badges
+      return (
+        <div className="flex flex-wrap gap-1.5">
+          {(parsed as string[]).map((v) => (
+            <span
+              key={v}
+              className="px-2.5 py-1 rounded-full text-xs font-bold border"
+              style={{
+                backgroundColor: "rgba(0,200,255,0.1)",
+                borderColor: "rgba(0,200,255,0.3)",
+                color: "#00c8ff",
+              }}
+            >
+              {v}
+            </span>
+          ))}
+        </div>
+      );
+    }
+    if (typeof parsed === "object" && parsed !== null) {
+      // Multi-part answers — show as label/value pairs
+      return (
+        <div className="space-y-2.5">
+          {Object.entries(parsed).map(([label, value]) => (
+            <div key={label}>
+              <p className="text-xs text-white/40 font-medium mb-0.5">{label}</p>
+              <p className="text-sm text-white/80 font-semibold">{String(value ?? "—")}</p>
+            </div>
+          ))}
+        </div>
+      );
+    }
+  } catch {
+    // Not JSON — fall through to plain text
+  }
+  return <span className="text-sm text-white/80 leading-relaxed">{answerText}</span>;
+}
+
 export default function AdminCard({ submission, onStatusChange }: AdminCardProps) {
+  const { t, locale } = useTranslation();
   const [loading, setLoading] = useState(false);
   const [showScreenshot, setShowScreenshot] = useState(false);
   const [screenshotSrc, setScreenshotSrc] = useState<string | null>(null);
@@ -52,7 +96,7 @@ export default function AdminCard({ submission, onStatusChange }: AdminCardProps
 
       if (res.ok) {
         setLocalStatus(status);
-        setSuccessMsg(data.message || (status === "APPROVED" ? "✅ Approuvé !" : "❌ Rejeté"));
+        setSuccessMsg(data.message || (status === "APPROVED" ? t.admin.dashboard.approveSuccess : t.admin.dashboard.rejectSuccess));
         setLoading(false);
         // Refresh parent data after a brief delay so the user sees the confirmation
         setTimeout(() => {
@@ -60,11 +104,11 @@ export default function AdminCard({ submission, onStatusChange }: AdminCardProps
           setSuccessMsg(null);
         }, 1200);
       } else {
-        setError(data.error || "Erreur lors de la mise à jour");
+        setError(data.error || t.admin.dashboard.updateError);
         setLoading(false);
       }
     } catch {
-      setError("Erreur réseau");
+      setError(t.admin.dashboard.networkError);
       setLoading(false);
     }
   };
@@ -74,20 +118,23 @@ export default function AdminCard({ submission, onStatusChange }: AdminCardProps
       bg: "rgba(230,126,34,0.15)",
       border: "rgba(230,126,34,0.4)",
       color: "#e67e22",
-      label: "EN ATTENTE",
     },
     APPROVED: {
       bg: "rgba(46,204,113,0.15)",
       border: "rgba(46,204,113,0.4)",
       color: "#2ecc71",
-      label: "APPROUVÉ",
     },
     REJECTED: {
       bg: "rgba(253,46,95,0.15)",
       border: "rgba(253,46,95,0.4)",
       color: "#FD2E5F",
-      label: "REJETÉ",
     },
+  };
+
+  const statusLabels: Record<string, string> = {
+    PENDING: t.admin.dashboard.pendingLabel,
+    APPROVED: t.admin.dashboard.approvedLabel,
+    REJECTED: t.admin.dashboard.rejectedLabel,
   };
 
   const config =
@@ -114,10 +161,10 @@ export default function AdminCard({ submission, onStatusChange }: AdminCardProps
                 color: config.color,
               }}
             >
-              {config.label}
+              {statusLabels[effectiveStatus]}
             </span>
             <span className="text-xs font-bold text-white/30 uppercase tracking-wider">
-              {submission.step_slug.replace("jalon_", "JALON ")}
+              {`${t.admin.dashboard.step} ${submission.step_slug.replace("jalon_", "")}`}
             </span>
           </div>
           <h3 className="font-black text-white text-base">{submission.step_title}</h3>
@@ -127,7 +174,7 @@ export default function AdminCard({ submission, onStatusChange }: AdminCardProps
             <span>{submission.email}</span>
             <span>·</span>
             <span>
-              {new Date(submission.submitted_at).toLocaleDateString("fr-FR", {
+              {new Date(submission.submitted_at).toLocaleDateString(locale === "en" ? "en-US" : "fr-FR", {
                 day: "numeric",
                 month: "short",
                 hour: "2-digit",
@@ -161,7 +208,7 @@ export default function AdminCard({ submission, onStatusChange }: AdminCardProps
               ) : (
                 <Check className="w-3.5 h-3.5" />
               )}
-              Approuver
+              {t.admin.dashboard.approve}
             </button>
             <button
               onClick={() => handleAction("REJECTED")}
@@ -178,12 +225,12 @@ export default function AdminCard({ submission, onStatusChange }: AdminCardProps
               ) : (
                 <X className="w-3.5 h-3.5" />
               )}
-              Rejeter
+              {t.admin.dashboard.reject}
             </button>
           </div>
         )}
         {effectiveStatus !== "PENDING" && (
-          <span className="text-xs text-white/30 italic">Traité</span>
+          <span className="text-xs text-white/30 italic">{t.admin.dashboard.processed}</span>
         )}
       </div>
 
@@ -211,9 +258,9 @@ export default function AdminCard({ submission, onStatusChange }: AdminCardProps
 
       {/* Answer */}
       <div className="px-5 pt-3 pb-3">
-        <p className="text-sm text-white/80 bg-white/[0.03] rounded-xl p-4 border border-white/5 leading-relaxed">
-          {submission.answer_text}
-        </p>
+        <div className="bg-white/[0.03] rounded-xl p-4 border border-white/5">
+          {formatAnswer(submission.answer_text)}
+        </div>
       </div>
 
       {/* Screenshot toggle — lazy-loaded on demand */}
@@ -242,7 +289,7 @@ export default function AdminCard({ submission, onStatusChange }: AdminCardProps
           className="flex items-center gap-2 text-xs font-bold text-[#00c8ff] hover:text-white transition"
         >
           <ImageIcon className="w-4 h-4" />
-          {showScreenshot ? "Masquer la capture" : "Voir la capture d'écran"}
+          {showScreenshot ? t.admin.dashboard.hideScreenshot : t.admin.dashboard.viewScreenshot}
         </button>
 
         {showScreenshot && (
@@ -255,12 +302,12 @@ export default function AdminCard({ submission, onStatusChange }: AdminCardProps
               /* eslint-disable-next-line @next/next/no-img-element */
               <img
                 src={screenshotSrc}
-                alt="Capture d'écran"
+                alt={t.admin.dashboard.viewScreenshot}
                 className="w-full max-h-96 object-contain bg-black/40"
               />
             ) : (
               <div className="flex items-center justify-center h-20 bg-black/40 text-white/30 text-xs">
-                Capture indisponible
+                {t.admin.dashboard.screenshotUnavailable}
               </div>
             )}
           </div>

@@ -22,6 +22,11 @@ interface Question {
   question_text: string;
   reward_amount: number;
   sort_order: number;
+  requires_screenshot: number;
+  answer_type: string;
+  answer_options: string | null;
+  reference_link: string | null;
+  parts: string | null;
 }
 
 interface StepWithQuestions {
@@ -53,6 +58,8 @@ export default function SubmissionForm({
   const [answerText, setAnswerText] = useState("");
   const [screenshot, setScreenshot] = useState<string | null>(null);
   const [mediaType, setMediaType] = useState<"image" | "video" | null>(null);
+  const [checkboxAnswer, setCheckboxAnswer] = useState<string[]>([]);
+  const [partsAnswer, setPartsAnswer] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<{
     type: "success" | "error";
@@ -145,6 +152,8 @@ export default function SubmissionForm({
     if (getQuestionStatus(questionId) !== "idle") return;
     setActiveQuestionId(questionId);
     setAnswerText("");
+    setCheckboxAnswer([]);
+    setPartsAnswer({});
     setScreenshot(null);
     setMediaType(null);
     setResult(null);
@@ -252,7 +261,7 @@ export default function SubmissionForm({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    if (!activeQuestionId) {
+    if (!activeQuestionId || !activeQuestion) {
       setResult({
         type: "error",
         message: "Sélectionne une question à répondre",
@@ -260,17 +269,29 @@ export default function SubmissionForm({
       return;
     }
 
-    if (!answerText.trim()) {
-      setResult({ type: "error", message: "Rédige ta réponse" });
-      return;
-    }
-
-    if (!screenshot) {
-      setResult({
-        type: "error",
-        message: "Ajoute une capture d'écran comme preuve",
-      });
-      return;
+    // Determine answer text based on question type
+    let finalAnswerText: string;
+    if (activeQuestion.parts) {
+      // Validate all parts have answers
+      const parts = JSON.parse(activeQuestion.parts) as { label: string; type: string; options?: string[] }[];
+      const emptyParts = parts.filter((p) => !partsAnswer[p.label]?.trim());
+      if (emptyParts.length > 0) {
+        setResult({ type: "error", message: `Réponds à : ${emptyParts[0].label}` });
+        return;
+      }
+      finalAnswerText = JSON.stringify(partsAnswer);
+    } else if (activeQuestion.answer_type === 'checkbox') {
+      if (checkboxAnswer.length === 0) {
+        setResult({ type: "error", message: "Sélectionne au moins une option" });
+        return;
+      }
+      finalAnswerText = JSON.stringify(checkboxAnswer);
+    } else {
+      if (!answerText.trim()) {
+        setResult({ type: "error", message: "Rédige ta réponse" });
+        return;
+      }
+      finalAnswerText = answerText.trim();
     }
 
     setLoading(true);
@@ -283,7 +304,7 @@ export default function SubmissionForm({
         body: JSON.stringify({
           userId,
           questionId: activeQuestionId,
-          answerText: answerText.trim(),
+          answerText: finalAnswerText,
           screenshot,
         }),
       });
@@ -603,139 +624,287 @@ export default function SubmissionForm({
                 </div>
               </div>
 
+              {/* Reference link */}
+              {activeQuestion.reference_link && (
+                <div>
+                  <a
+                    href={activeQuestion.reference_link}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1.5 text-xs px-3 py-2 rounded-full border border-[#00c8ff]/30 text-[#00c8ff] hover:bg-[#00c8ff]/10 transition"
+                  >
+                    🔗 Ouvrir skyplay.cloud →
+                  </a>
+                </div>
+              )}
+
               {/* Answer text */}
               <div className="space-y-1.5">
                 <label className="block text-[11px] font-bold uppercase tracking-[2px] text-white/30">
                   Ta réponse
                 </label>
-                <textarea
-                  rows={4}
-                  value={answerText}
-                  onChange={(e) => {
-                    setAnswerText(e.target.value);
-                    setResult(null);
-                  }}
-                  placeholder="Écris ta réponse ici..."
-                  className="w-full bg-[#070f1e] border border-white/10 rounded-xl p-3.5 text-sm text-white placeholder:text-white/20 focus:outline-none focus:border-[#00c8ff]/50 focus:ring-1 focus:ring-[#00c8ff]/30 transition resize-none"
-                />
-              </div>
 
-              {/* Media upload (image or short video) */}
-              <div className="space-y-1.5">
-                <label className="block text-[11px] font-bold uppercase tracking-[2px] text-white/30">
-                  Preuve (capture d&apos;écran ou courte vidéo)
-                </label>
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept="image/*,video/*"
-                  onChange={handleFileChange}
-                  className="hidden"
-                />
-                {/* Hidden inputs */}
-                <input
-                  ref={cameraInputRef}
-                  type="file"
-                  accept="image/*"
-                  capture="environment"
-                  onChange={handleFileChange}
-                  className="hidden"
-                />
-                <input
-                  ref={videoCameraInputRef}
-                  type="file"
-                  accept="video/*"
-                  capture="environment"
-                  onChange={handleFileChange}
-                  className="hidden"
-                />
-                {screenshot ? (
-                  <div className="relative rounded-xl overflow-hidden border border-[#2ecc71]/30">
-                    {mediaType === "video" ? (
-                      /* eslint-disable-next-line @next/next/no-img-element */
-                      <video
-                        src={screenshot}
-                        controls
-                        className="w-full max-h-56 bg-black/30"
-                        preload="metadata"
-                      />
-                    ) : (
-                      /* eslint-disable-next-line @next/next/no-img-element */
-                      <img
-                        src={screenshot}
-                        alt="Capture"
-                        className="w-full max-h-56 object-contain bg-black/30"
-                      />
-                    )}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setScreenshot(null);
-                        setMediaType(null);
-                        if (fileInputRef.current)
-                          fileInputRef.current.value = "";
-                        if (cameraInputRef.current)
-                          cameraInputRef.current.value = "";
-                        if (videoCameraInputRef.current)
-                          videoCameraInputRef.current.value = "";
-                      }}
-                      className="absolute top-2 right-2 px-3 py-1.5 rounded-full bg-red-500/80 text-white text-xs font-bold hover:bg-red-600 transition z-10"
-                    >
-                      ✕ Supprimer
-                    </button>
-                    <div className="absolute bottom-2 left-2 px-3 py-1 rounded-full bg-[#2ecc71]/20 border border-[#2ecc71]/40 text-[#2ecc71] text-[10px] font-bold flex items-center gap-1">
-                      {mediaType === "video" ? (
-                        <Video className="w-3 h-3" />
-                      ) : (
-                        <CheckCircle className="w-3 h-3" />
-                      )}
-                      {mediaType === "video" ? "Vidéo prête" : "Capture prête"}
-                    </div>
+                {/* Multi-part questions */}
+                {activeQuestion.parts ? (
+                  <div className="space-y-4">
+                    {(JSON.parse(activeQuestion.parts) as { label: string; type: string; options?: string[] }[]).map((part, i) => (
+                      <div key={i} className="space-y-1.5">
+                        <p className="text-xs text-white/60 font-medium">{part.label}</p>
+                        {part.type === 'text' ? (
+                          <textarea
+                            rows={2}
+                            value={partsAnswer[part.label] || ''}
+                            onChange={(e) => {
+                              setPartsAnswer(prev => ({ ...prev, [part.label]: e.target.value }));
+                              setResult(null);
+                            }}
+                            placeholder="Écris ta réponse..."
+                            className="w-full bg-[#070f1e] border border-white/10 rounded-xl p-3 text-sm text-white placeholder:text-white/20 focus:outline-none focus:border-[#00c8ff]/50 focus:ring-1 focus:ring-[#00c8ff]/30 transition resize-none"
+                          />
+                        ) : part.type === 'radio' ? (
+                          <div className="flex flex-wrap gap-2">
+                            {part.options?.map((opt: string) => (
+                              <label
+                                key={opt}
+                                className={`flex items-center gap-1.5 px-3 py-2 rounded-lg border text-xs font-medium cursor-pointer transition ${
+                                  partsAnswer[part.label] === opt
+                                    ? 'bg-[#00c8ff]/15 border-[#00c8ff]/50 text-[#00c8ff]'
+                                    : 'bg-white/[0.02] border-white/10 text-white/50 hover:border-white/20'
+                                }`}
+                              >
+                                <input
+                                  type="radio"
+                                  name={`part-${i}`}
+                                  value={opt}
+                                  checked={partsAnswer[part.label] === opt}
+                                  onChange={(e) => {
+                                    setPartsAnswer(prev => ({ ...prev, [part.label]: e.target.value }));
+                                    setResult(null);
+                                  }}
+                                  className="sr-only"
+                                />
+                                {opt}
+                              </label>
+                            ))}
+                          </div>
+                        ) : null}
+                      </div>
+                    ))}
+                  </div>
+                ) : activeQuestion.answer_type === 'dropdown' ? (
+                  <select
+                    value={answerText}
+                    onChange={(e) => {
+                      setAnswerText(e.target.value);
+                      setResult(null);
+                    }}
+                    className="w-full bg-[#070f1e] border border-white/10 rounded-xl p-3.5 text-sm text-white focus:outline-none focus:border-[#00c8ff]/50 focus:ring-1 focus:ring-[#00c8ff]/30 transition"
+                  >
+                    <option value="" disabled className="text-white/20">Choisis une option...</option>
+                    {activeQuestion.answer_options ? (
+                      (JSON.parse(activeQuestion.answer_options) as string[]).map((opt: string) => (
+                        <option key={opt} value={opt} className="bg-[#070f1e] text-white">
+                          {opt}
+                        </option>
+                      ))
+                    ) : null}
+                  </select>
+                ) : activeQuestion.answer_type === 'radio' ? (
+                  <div className="flex flex-wrap gap-2">
+                    {activeQuestion.answer_options ? (
+                      (JSON.parse(activeQuestion.answer_options) as string[]).map((opt: string) => (
+                        <label
+                          key={opt}
+                          className={`flex items-center gap-1.5 px-4 py-2.5 rounded-lg border text-xs font-medium cursor-pointer transition ${
+                            answerText === opt
+                              ? 'bg-[#00c8ff]/15 border-[#00c8ff]/50 text-[#00c8ff]'
+                              : 'bg-white/[0.02] border-white/10 text-white/50 hover:border-white/20'
+                          }`}
+                        >
+                          <input
+                            type="radio"
+                            name="answer-radio"
+                            value={opt}
+                            checked={answerText === opt}
+                            onChange={(e) => {
+                              setAnswerText(e.target.value);
+                              setResult(null);
+                            }}
+                            className="sr-only"
+                          />
+                          {opt}
+                        </label>
+                      ))
+                    ) : null}
+                  </div>
+                ) : activeQuestion.answer_type === 'checkbox' ? (
+                  <div className="flex flex-wrap gap-2">
+                    {activeQuestion.answer_options ? (
+                      (JSON.parse(activeQuestion.answer_options) as string[]).map((opt: string) => (
+                        <label
+                          key={opt}
+                          className={`flex items-center gap-1.5 px-4 py-2.5 rounded-lg border text-xs font-medium cursor-pointer transition ${
+                            checkboxAnswer.includes(opt)
+                              ? 'bg-[#00c8ff]/15 border-[#00c8ff]/50 text-[#00c8ff]'
+                              : 'bg-white/[0.02] border-white/10 text-white/50 hover:border-white/20'
+                          }`}
+                        >
+                          <input
+                            type="checkbox"
+                            value={opt}
+                            checked={checkboxAnswer.includes(opt)}
+                            onChange={(e) => {
+                              setCheckboxAnswer(prev =>
+                                e.target.checked
+                                  ? [...prev, opt]
+                                  : prev.filter(v => v !== opt)
+                              );
+                              setResult(null);
+                            }}
+                            className="sr-only"
+                          />
+                          {opt}
+                        </label>
+                      ))
+                    ) : null}
                   </div>
                 ) : (
-                  <div className="space-y-3">
-                    {/* Photo + Video camera buttons */}
-                    <div className="grid grid-cols-2 gap-3">
-                      <button
-                        type="button"
-                        onClick={() => cameraInputRef.current?.click()}
-                        className="flex flex-col items-center justify-center gap-2 py-7 rounded-xl border-2 border-dashed border-[#00c8ff]/25 hover:border-[#00c8ff]/50 hover:bg-[#00c8ff]/5 transition active:bg-[#00c8ff]/10 group"
-                      >
-                        <Camera className="w-8 h-8 text-[#00c8ff]/60 group-hover:text-[#00c8ff] transition" />
-                        <span className="text-xs font-bold text-white/50 group-hover:text-white transition">
-                          Photo
-                        </span>
-                        <span className="text-[10px] text-white/20">
-                          Appareil photo
-                        </span>
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => videoCameraInputRef.current?.click()}
-                        className="flex flex-col items-center justify-center gap-2 py-7 rounded-xl border-2 border-dashed border-[#FD2E5F]/20 hover:border-[#FD2E5F]/40 hover:bg-[#FD2E5F]/5 transition active:bg-[#FD2E5F]/10 group"
-                      >
-                        <Video className="w-8 h-8 text-[#FD2E5F]/50 group-hover:text-[#FD2E5F] transition" />
-                        <span className="text-xs font-bold text-white/50 group-hover:text-white transition">
-                          Vidéo
-                        </span>
-                        <span className="text-[10px] text-white/20">
-                          Max 10 secondes
-                        </span>
-                      </button>
-                    </div>
-
-                    {/* Gallery fallback */}
-                    <button
-                      type="button"
-                      onClick={() => fileInputRef.current?.click()}
-                      className="w-full py-3 rounded-xl text-xs text-white/25 hover:text-white/50 transition text-center"
-                    >
-                      ou choisir depuis la galerie…
-                    </button>
-                  </div>
+                  <textarea
+                    rows={4}
+                    value={answerText}
+                    onChange={(e) => {
+                      setAnswerText(e.target.value);
+                      setResult(null);
+                    }}
+                    placeholder="Écris ta réponse ici..."
+                    className="w-full bg-[#070f1e] border border-white/10 rounded-xl p-3.5 text-sm text-white placeholder:text-white/20 focus:outline-none focus:border-[#00c8ff]/50 focus:ring-1 focus:ring-[#00c8ff]/30 transition resize-none"
+                  />
                 )}
               </div>
+
+              {/* Media upload — only shown for questions that require a screenshot */}
+              {activeQuestion.requires_screenshot !== 0 && (
+                <div className="space-y-1.5">
+                  <label className="block text-[11px] font-bold uppercase tracking-[2px] text-white/30">
+                    Preuve (capture d&apos;écran ou courte vidéo)
+                  </label>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept="image/*,video/*"
+                    onChange={handleFileChange}
+                    className="hidden"
+                  />
+                  {/* Hidden inputs */}
+                  <input
+                    ref={cameraInputRef}
+                    type="file"
+                    accept="image/*"
+                    capture="environment"
+                    onChange={handleFileChange}
+                    className="hidden"
+                  />
+                  <input
+                    ref={videoCameraInputRef}
+                    type="file"
+                    accept="video/*"
+                    capture="environment"
+                    onChange={handleFileChange}
+                    className="hidden"
+                  />
+                  {screenshot ? (
+                    <div className="relative rounded-xl overflow-hidden border border-[#2ecc71]/30">
+                      {mediaType === "video" ? (
+                        /* eslint-disable-next-line @next/next/no-img-element */
+                        <video
+                          src={screenshot}
+                          controls
+                          className="w-full max-h-56 bg-black/30"
+                          preload="metadata"
+                        />
+                      ) : (
+                        /* eslint-disable-next-line @next/next/no-img-element */
+                        <img
+                          src={screenshot}
+                          alt="Capture"
+                          className="w-full max-h-56 object-contain bg-black/30"
+                        />
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setScreenshot(null);
+                          setMediaType(null);
+                          if (fileInputRef.current)
+                            fileInputRef.current.value = "";
+                          if (cameraInputRef.current)
+                            cameraInputRef.current.value = "";
+                          if (videoCameraInputRef.current)
+                            videoCameraInputRef.current.value = "";
+                        }}
+                        className="absolute top-2 right-2 px-3 py-1.5 rounded-full bg-red-500/80 text-white text-xs font-bold hover:bg-red-600 transition z-10"
+                      >
+                        ✕ Supprimer
+                      </button>
+                      <div className="absolute bottom-2 left-2 px-3 py-1 rounded-full bg-[#2ecc71]/20 border border-[#2ecc71]/40 text-[#2ecc71] text-[10px] font-bold flex items-center gap-1">
+                        {mediaType === "video" ? (
+                          <Video className="w-3 h-3" />
+                        ) : (
+                          <CheckCircle className="w-3 h-3" />
+                        )}
+                        {mediaType === "video" ? "Vidéo prête" : "Capture prête"}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      {/* Photo + Video camera buttons */}
+                      <div className="grid grid-cols-2 gap-3">
+                        <button
+                          type="button"
+                          onClick={() => cameraInputRef.current?.click()}
+                          className="flex flex-col items-center justify-center gap-2 py-7 rounded-xl border-2 border-dashed border-[#00c8ff]/25 hover:border-[#00c8ff]/50 hover:bg-[#00c8ff]/5 transition active:bg-[#00c8ff]/10 group"
+                        >
+                          <Camera className="w-8 h-8 text-[#00c8ff]/60 group-hover:text-[#00c8ff] transition" />
+                          <span className="text-xs font-bold text-white/50 group-hover:text-white transition">
+                            Photo
+                          </span>
+                          <span className="text-[10px] text-white/20">
+                            Appareil photo
+                          </span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => videoCameraInputRef.current?.click()}
+                          className="flex flex-col items-center justify-center gap-2 py-7 rounded-xl border-2 border-dashed border-[#FD2E5F]/20 hover:border-[#FD2E5F]/40 hover:bg-[#FD2E5F]/5 transition active:bg-[#FD2E5F]/10 group"
+                        >
+                          <Video className="w-8 h-8 text-[#FD2E5F]/50 group-hover:text-[#FD2E5F] transition" />
+                          <span className="text-xs font-bold text-white/50 group-hover:text-white transition">
+                            Vidéo
+                          </span>
+                          <span className="text-[10px] text-white/20">
+                            Max 10 secondes
+                          </span>
+                        </button>
+                      </div>
+
+                      {/* Gallery fallback */}
+                      <button
+                        type="button"
+                        onClick={() => fileInputRef.current?.click()}
+                        className="w-full py-3 rounded-xl text-xs text-white/25 hover:text-white/50 transition text-center"
+                      >
+                        ou choisir depuis la galerie…
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+              {activeQuestion.requires_screenshot === 0 && (
+                <div className="px-3 py-2 rounded-xl bg-white/[0.02] border border-white/5 text-[11px] text-white/25 italic text-center">
+                  Aucune capture requise pour cette question — réponse texte uniquement.
+                </div>
+              )}
 
               {/* Result feedback */}
               {result && (

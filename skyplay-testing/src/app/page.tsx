@@ -11,6 +11,11 @@ interface Question {
   question_text: string;
   reward_amount: number;
   sort_order: number;
+  requires_screenshot: number;
+  answer_type: string;
+  answer_options: string | null;
+  reference_link: string | null;
+  parts: string | null;
 }
 
 interface StepWithQuestions {
@@ -30,7 +35,7 @@ export default async function HomePage() {
         s.id, s.slug, s.title,
         COALESCE(
           json_group_array(
-            json_object('id', q.id, 'question_text', q.question_text, 'reward_amount', q.reward_amount, 'sort_order', q.sort_order)
+            json_object('id', q.id, 'question_text', q.question_text, 'reward_amount', q.reward_amount, 'sort_order', q.sort_order, 'requires_screenshot', q.requires_screenshot, 'answer_type', q.answer_type, 'answer_options', q.answer_options, 'reference_link', q.reference_link, 'parts', q.parts)
           ),
           '[]'
         ) as questions_json
@@ -47,7 +52,10 @@ export default async function HomePage() {
         (SELECT COALESCE(SUM(q.reward_amount), 0)
          FROM submissions s
          JOIN questions q ON s.question_id = q.id
-         WHERE s.status = 'APPROVED') as totalSky`
+         WHERE s.status = 'APPROVED')
+         +
+        COALESCE((SELECT SUM(participation_bonus) FROM users WHERE bonus_status = 'APPROVED'), 0)
+        as totalSky`
     ),
     db.execute(
       `SELECT id, name, deadline, created_at
@@ -115,6 +123,12 @@ export default async function HomePage() {
           </a>
 
           <div className="flex items-center gap-4">
+            <a
+              href="/faq"
+              className="text-xs text-white/40 hover:text-white transition font-medium"
+            >
+              FAQ
+            </a>
             <a
               href="/admin"
               className="text-xs text-white/40 hover:text-white transition font-medium"

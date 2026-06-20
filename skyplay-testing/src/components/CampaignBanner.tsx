@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { Clock, AlertTriangle } from "lucide-react";
+import { useTranslation } from "@/lib/i18n/TranslationContext";
 
 interface CampaignBannerProps {
   deadline: string | null;
@@ -9,6 +10,7 @@ interface CampaignBannerProps {
 }
 
 export default function CampaignBanner({ deadline, name }: CampaignBannerProps) {
+  const { t } = useTranslation();
   const [remaining, setRemaining] = useState<{
     days: number;
     hours: number;
@@ -59,7 +61,7 @@ export default function CampaignBanner({ deadline, name }: CampaignBannerProps) 
         >
           <div className="flex items-center justify-center gap-2 text-sm font-bold text-[#FD2E5F]">
             <AlertTriangle className="w-4 h-4" />
-            {name || "Campagne"} terminée — les soumissions sont fermées
+            {t.campaignBanner.expired}
           </div>
         </div>
       );
@@ -68,10 +70,10 @@ export default function CampaignBanner({ deadline, name }: CampaignBannerProps) 
   }
 
   const parts = [
-    { label: "Jours", value: remaining.days },
-    { label: "Heures", value: remaining.hours },
-    { label: "Min", value: remaining.minutes },
-    { label: "Sec", value: remaining.seconds },
+    { label: t.campaignBanner.days, value: remaining.days },
+    { label: t.campaignBanner.hours, value: remaining.hours },
+    { label: t.campaignBanner.minutes, value: remaining.minutes },
+    { label: t.campaignBanner.seconds, value: remaining.seconds },
   ];
 
   return (
@@ -84,7 +86,7 @@ export default function CampaignBanner({ deadline, name }: CampaignBannerProps) 
     >
       <Clock className="w-4 h-4 text-[#00c8ff]" />
       <span className="text-xs text-white/50 font-medium">
-        {name || "Campagne"} —
+        {name || t.campaignBanner.campaign} — {t.campaignBanner.endsIn}
       </span>
       {parts.map((p, i) => (
         <span key={p.label} className="inline-flex items-baseline gap-1">

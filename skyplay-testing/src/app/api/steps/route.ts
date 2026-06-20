@@ -10,7 +10,7 @@ export async function GET() {
         s.id, s.slug, s.title,
         COALESCE(
           json_group_array(
-            json_object('id', q.id, 'question_text', q.question_text, 'reward_amount', q.reward_amount, 'sort_order', q.sort_order)
+            json_object('id', q.id, 'question_text', q.question_text, 'reward_amount', q.reward_amount, 'sort_order', q.sort_order, 'requires_screenshot', q.requires_screenshot, 'answer_type', q.answer_type, 'answer_options', q.answer_options, 'reference_link', q.reference_link, 'parts', q.parts)
           ),
           '[]'
         ) as questions_json

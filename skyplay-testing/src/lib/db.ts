@@ -55,6 +55,7 @@ async function initializeSchema(): Promise<void> {
       question_text TEXT NOT NULL,
       reward_amount INTEGER NOT NULL DEFAULT 200,
       sort_order INTEGER NOT NULL DEFAULT 0,
+      requires_screenshot INTEGER NOT NULL DEFAULT 1,
       FOREIGN KEY (step_id) REFERENCES steps(id)
     );
 
@@ -64,7 +65,7 @@ async function initializeSchema(): Promise<void> {
       step_id INTEGER NOT NULL,
       question_id INTEGER NOT NULL,
       answer_text TEXT NOT NULL,
-      screenshot_base64 TEXT NOT NULL,
+      screenshot_base64 TEXT,
       status VARCHAR(20) DEFAULT 'PENDING',
       submitted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (user_id) REFERENCES users(id),
@@ -84,6 +85,47 @@ async function initializeSchema(): Promise<void> {
   try {
     await getClient().execute(
       "ALTER TABLE users ADD COLUMN password_hash TEXT"
+    );
+  } catch { /* column already exists */ }
+
+  // requires_screenshot flag (migration for existing DBs)
+  try {
+    await getClient().execute(
+      "ALTER TABLE questions ADD COLUMN requires_screenshot INTEGER NOT NULL DEFAULT 1"
+    );
+  } catch { /* column already exists */ }
+
+  // Answer type system columns (migration for existing DBs)
+  try {
+    await getClient().execute(
+      "ALTER TABLE questions ADD COLUMN answer_type TEXT NOT NULL DEFAULT 'text'"
+    );
+  } catch { /* column already exists */ }
+  try {
+    await getClient().execute(
+      "ALTER TABLE questions ADD COLUMN answer_options TEXT DEFAULT NULL"
+    );
+  } catch { /* column already exists */ }
+  try {
+    await getClient().execute(
+      "ALTER TABLE questions ADD COLUMN reference_link TEXT DEFAULT NULL"
+    );
+  } catch { /* column already exists */ }
+  try {
+    await getClient().execute(
+      "ALTER TABLE questions ADD COLUMN parts TEXT DEFAULT NULL"
+    );
+  } catch { /* column already exists */ }
+
+  // Participation bonus columns (migration for existing DBs)
+  try {
+    await getClient().execute(
+      "ALTER TABLE users ADD COLUMN participation_bonus INTEGER NOT NULL DEFAULT 0"
+    );
+  } catch { /* column already exists */ }
+  try {
+    await getClient().execute(
+      "ALTER TABLE users ADD COLUMN bonus_status TEXT DEFAULT NULL"
     );
   } catch { /* column already exists */ }
 
@@ -128,31 +170,31 @@ async function seedData(): Promise<void> {
 
       -- Jalon 1: Inscription & Onboarding
       INSERT INTO steps (slug, title) VALUES ('jalon_1', 'Inscription & Onboarding');
-      INSERT INTO questions (step_id, question_text, reward_amount, sort_order) VALUES (1, 'Crée un compte sur skyplay.cloud. Une fois inscrit, donne ton nom d''utilisateur et envoie une capture de ta page de profil.', 200, 1);
-      INSERT INTO questions (step_id, question_text, reward_amount, sort_order) VALUES (1, 'Dans les paramètres de ton profil, l''option ''Mode sombre'' existe-t-elle ? Active-la si possible et envoie une capture.', 150, 2);
-      INSERT INTO questions (step_id, question_text, reward_amount, sort_order) VALUES (1, 'Sur la page d''accueil, dans la section ''Jeux supportés'', combien de jeux sont affichés ? Liste-les et envoie une capture.', 150, 3);
-      INSERT INTO questions (step_id, question_text, reward_amount, sort_order) VALUES (1, 'Clique sur ''Rejoindre gratuitement'' ou ''Créer mon compte''. Décris la page où tu arrives et envoie une capture.', 200, 4);
+      INSERT INTO questions (step_id, question_text, reward_amount, sort_order, answer_type, answer_options, reference_link, parts) VALUES (1, 'Crée un compte sur **skyplay.cloud** (le site web, pas l''application mobile). Une fois inscrit, donne ton nom d''utilisateur et envoie une capture de ta page de profil.', 200, 1, 'text', NULL, 'https://skyplay.cloud/register', NULL);
+      INSERT INTO questions (step_id, question_text, reward_amount, sort_order, answer_type, answer_options, reference_link, parts) VALUES (1, 'Dans les paramètres de ton profil, l''option ''Mode sombre'' existe-t-elle ? Active-la si possible et envoie une capture.', 150, 2, 'radio', '["Oui","Non"]', 'https://skyplay.cloud/profile/settings', NULL);
+      INSERT INTO questions (step_id, question_text, reward_amount, sort_order, answer_type, answer_options, reference_link, parts) VALUES (1, 'Sur la page d''accueil de **skyplay.cloud**, dans la section ''Jeux supportés'', combien de jeux sont affichés ? Liste-les et envoie une capture.', 150, 3, 'text', NULL, 'https://skyplay.cloud/', NULL);
+      INSERT INTO questions (step_id, question_text, reward_amount, sort_order, answer_type, answer_options, reference_link, parts) VALUES (1, 'Sur **skyplay.cloud**, clique sur ''Rejoindre gratuitement'' ou ''Créer mon compte''. Décris la page où tu arrives et envoie une capture.', 200, 4, 'text', NULL, 'https://skyplay.cloud/register', NULL);
 
       -- Jalon 2: Exploration des Compétitions
       INSERT INTO steps (slug, title) VALUES ('jalon_2', 'Exploration des Compétitions');
-      INSERT INTO questions (step_id, question_text, reward_amount, sort_order) VALUES (2, 'Dans la section ''Formats disponibles'', liste les 4 formats de compétition proposés et envoie une capture.', 250, 1);
-      INSERT INTO questions (step_id, question_text, reward_amount, sort_order) VALUES (2, 'Trouve une compétition FIFA. Quel est son statut (en cours / terminée) ? Combien de joueurs y participent ? Envoie une capture.', 300, 2);
-      INSERT INTO questions (step_id, question_text, reward_amount, sort_order) VALUES (2, 'Clique sur ''Voir les compétitions''. La page se charge-t-elle correctement ? Décris ce que tu vois et envoie une capture.', 250, 3);
-      INSERT INTO questions (step_id, question_text, reward_amount, sort_order) VALUES (2, 'Peux-tu filtrer ou trier les compétitions par jeu ou par type ? Si oui, comment ? Si non, trouves-tu cela gênant ? Envoie une capture.', 200, 4);
+      INSERT INTO questions (step_id, question_text, reward_amount, sort_order, answer_type, answer_options, reference_link, parts) VALUES (2, 'Dans la section ''Formats disponibles'', liste les 4 formats de compétition proposés et envoie une capture.', 250, 1, 'checkbox', '["1v1","2v2","FFA","Tournoi"]', 'https://skyplay.cloud/competitions', NULL);
+      INSERT INTO questions (step_id, question_text, reward_amount, sort_order, answer_type, answer_options, reference_link, parts) VALUES (2, 'Trouve une compétition FIFA. Quel est son statut ? Combien de joueurs y participent ? Envoie une capture.', 300, 2, 'text', NULL, 'https://skyplay.cloud/competitions', '[{"label":"Statut de la compétition","type":"radio","options":["En cours","Terminée"]},{"label":"Nombre de joueurs participants","type":"text"}]');
+      INSERT INTO questions (step_id, question_text, reward_amount, sort_order, answer_type, answer_options, reference_link, parts) VALUES (2, 'Sur **skyplay.cloud**, clique sur ''Voir les compétitions''. La page se charge-t-elle correctement ? Décris ce que tu vois et envoie une capture.', 250, 3, 'text', NULL, 'https://skyplay.cloud/competitions', NULL);
+      INSERT INTO questions (step_id, question_text, reward_amount, sort_order, answer_type, answer_options, reference_link, parts) VALUES (2, 'Peux-tu filtrer ou trier les compétitions ? Si oui, comment ? Si non, trouves-tu cela gênant ? Envoie une capture.', 200, 4, 'text', NULL, 'https://skyplay.cloud/competitions', '[{"label":"Peux-tu filtrer ou trier les compétitions ?","type":"radio","options":["Oui","Non"]},{"label":"Si oui, comment ? Si non, trouves-tu cela gênant ?","type":"text"}]');
 
       -- Jalon 3: Social & Live
       INSERT INTO steps (slug, title) VALUES ('jalon_3', 'Social & Live');
-      INSERT INTO questions (step_id, question_text, reward_amount, sort_order) VALUES (3, 'Trouve la section ''LIVE'' ou ''Regarde les matchs''. Y a-t-il des streams en direct actuellement ? Décris ce que tu vois et envoie une capture.', 300, 1);
-      INSERT INTO questions (step_id, question_text, reward_amount, sort_order) VALUES (3, 'Cherche un autre joueur (via la barre de recherche si elle existe). Peux-tu voir son profil ? Décris l''expérience et envoie une capture.', 300, 2);
-      INSERT INTO questions (step_id, question_text, reward_amount, sort_order) VALUES (3, 'Y a-t-il un classement ou leaderboard visible ? Si oui, quel est ton rang actuel ? Si non, aimerais-tu en avoir un ? Envoie une capture.', 300, 3);
-      INSERT INTO questions (step_id, question_text, reward_amount, sort_order) VALUES (3, 'Essaie de partager un lien de compétition ou ton profil (bouton de partage, copier le lien…). L''option est-elle disponible ? Envoie une capture.', 250, 4);
+      INSERT INTO questions (step_id, question_text, reward_amount, sort_order, answer_type, answer_options, reference_link, parts) VALUES (3, 'Sur **skyplay.cloud**, clique sur l''onglet LIVE. Y a-t-il des diffusions en direct ? Décris ce que tu vois et envoie une capture.', 300, 1, 'text', NULL, 'https://skyplay.cloud/live', NULL);
+      INSERT INTO questions (step_id, question_text, reward_amount, sort_order, answer_type, answer_options, reference_link, parts) VALUES (3, 'Depuis la page d''accueil de **skyplay.cloud**, peux-tu trouver la liste des joueurs ? Décris le chemin et envoie une capture.', 300, 2, 'text', NULL, 'https://skyplay.cloud/players', NULL);
+      INSERT INTO questions (step_id, question_text, reward_amount, sort_order, answer_type, answer_options, reference_link, parts) VALUES (3, 'Y a-t-il un classement ou leaderboard visible ? Si oui, quel est ton rang ? Si non, aimerais-tu en avoir un ? Envoie une capture.', 300, 3, 'text', NULL, 'https://skyplay.cloud/leaderboard', '[{"label":"Un classement ou leaderboard est-il visible ?","type":"radio","options":["Oui","Non"]},{"label":"Si oui, quel est ton rang ? Si non, aimerais-tu en avoir un ?","type":"text"}]');
+      INSERT INTO questions (step_id, question_text, reward_amount, sort_order, answer_type, answer_options, reference_link, parts) VALUES (3, 'Essaie de partager un lien de compétition ou ton profil (bouton de partage, copier le lien…). L''option est-elle disponible ? Envoie une capture.', 250, 4, 'text', NULL, 'https://skyplay.cloud/competitions', NULL);
 
-      -- Jalon 4: Feedback Final & Suggestions
+      -- Jalon 4: Feedback Final & Suggestions (pas de capture nécessaire)
       INSERT INTO steps (slug, title) VALUES ('jalon_4', 'Feedback Final & Suggestions');
-      INSERT INTO questions (step_id, question_text, reward_amount, sort_order) VALUES (4, 'Sur une échelle de 1 à 10, quelle note donnes-tu à l''expérience globale de skyplay.cloud ? Justifie ta note en 2-3 phrases.', 300, 1);
-      INSERT INTO questions (step_id, question_text, reward_amount, sort_order) VALUES (4, 'As-tu rencontré un bug ou un comportement inattendu ? Décris-le avec le plus de détails possible (où, quand, comment).', 400, 2);
-      INSERT INTO questions (step_id, question_text, reward_amount, sort_order) VALUES (4, 'Quelle fonctionnalité aimerais-tu voir ajoutée en priorité sur skyplay.cloud ? Décris-la brièvement.', 300, 3);
-      INSERT INTO questions (step_id, question_text, reward_amount, sort_order) VALUES (4, 'Recommanderais-tu skyplay.cloud à un ami ? Pourquoi ?', 300, 4);
+      INSERT INTO questions (step_id, question_text, reward_amount, sort_order, requires_screenshot, answer_type, answer_options, reference_link, parts) VALUES (4, 'Sur une échelle de 1 à 10, quelle note donnes-tu à l''expérience globale de la plateforme **skyplay.cloud** ? Justifie ta note en 2-3 phrases.', 300, 1, 0, 'dropdown', '["1","2","3","4","5","6","7","8","9","10"]', 'https://skyplay.cloud/', NULL);
+      INSERT INTO questions (step_id, question_text, reward_amount, sort_order, requires_screenshot, answer_type, answer_options, reference_link, parts) VALUES (4, 'As-tu rencontré un bug ou un comportement inattendu ? Décris-le avec le plus de détails possible (où, quand, comment).', 400, 2, 0, 'text', NULL, NULL, NULL);
+      INSERT INTO questions (step_id, question_text, reward_amount, sort_order, requires_screenshot, answer_type, answer_options, reference_link, parts) VALUES (4, 'Quelle fonctionnalité aimerais-tu voir ajoutée en priorité sur skyplay.cloud ? Décris-la brièvement.', 300, 3, 0, 'text', NULL, NULL, NULL);
+      INSERT INTO questions (step_id, question_text, reward_amount, sort_order, requires_screenshot, answer_type, answer_options, reference_link, parts) VALUES (4, 'Recommanderais-tu skyplay.cloud à un ami ? Pourquoi ?', 300, 4, 0, 'text', NULL, NULL, '[{"label":"Recommanderais-tu skyplay.cloud à un ami ?","type":"radio","options":["Oui","Non"]},{"label":"Pourquoi ?","type":"text"}]');
 
       COMMIT;
     `);

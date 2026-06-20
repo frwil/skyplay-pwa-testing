@@ -9,6 +9,11 @@ interface Question {
   question_text: string;
   reward_amount: number;
   sort_order: number;
+  requires_screenshot: number;
+  answer_type: string;
+  answer_options: string | null;
+  reference_link: string | null;
+  parts: string | null;
 }
 
 interface StepWithQuestions {

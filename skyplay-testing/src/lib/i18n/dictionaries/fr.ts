@@ -1,0 +1,250 @@
+import type { Dictionary } from "../types";
+
+const fr: Dictionary = {
+  common: {
+    siteTitle: "SKYPLAY",
+    siteSubtitle: "PWA Compagnon",
+    testBadge: "TEST",
+    faq: "FAQ",
+    admin: "Admin",
+    back: "Retour",
+    footer: "© 2026 SKY PLAY ENTERTAINMENT — PWA Compagnon de Test",
+  },
+  home: {
+    heroBadge: "PHASE DE TEST UTILISATEUR — 16 QUESTIONS",
+    heroTitle1: "Teste la plateforme,",
+    heroTitle2: "gagne des Sky",
+    heroDescription:
+      "Réponds aux 16 questions réparties sur 4 jalons. Chaque réponse validée te rapporte des ",
+    heroDescriptionSky: "Sky",
+    stats: {
+      testers: "Testeurs",
+      answers: "Réponses",
+      approved: "Validées",
+      skyDistributed: "Sky distribués",
+    },
+    form: {
+      title: "Formulaire de test",
+      subtitle:
+        "Sélectionne un jalon, réponds aux questions une par une",
+    },
+  },
+  submissionForm: {
+    login: {
+      title: "Connecte-toi pour commencer",
+      emailLabel: "Adresse email",
+      emailPlaceholder: "ton@email.com",
+      pinLabel: "Code PIN à 4 chiffres",
+      pinPlaceholder: "••••",
+      submit: "Se connecter",
+      forgotPin: "PIN oublié ?",
+      errorEmail: "Entre ton adresse email",
+      errorPin: "Entre ton code PIN à 4 chiffres",
+      errorAuth: "Email ou PIN incorrect",
+      pinSent: "PIN envoyé par email",
+      haveAccount: "Pas encore de compte ? S'inscrire",
+    },
+    register: {
+      title: "Créer un compte",
+      usernameLabel: "Nom d'utilisateur",
+      usernamePlaceholder: "Ton pseudo",
+      emailLabel: "Adresse email",
+      emailPlaceholder: "ton@email.com",
+      submit: "S'inscrire",
+      haveAccount: "Déjà un compte ? Se connecter",
+      errorUsername:
+        "Nom d'utilisateur requis (3-30 caractères, lettres, chiffres, tirets, underscores)",
+      errorEmail: "Entre une adresse email valide",
+      errorGeneric: "Erreur lors de l'inscription",
+      success: "Compte créé ! Vérifie tes emails pour ton code PIN.",
+      pinSent: "Un code PIN a été envoyé à ton adresse email",
+      usernameHint: "3-30 caractères, lettres, chiffres, tirets, underscores",
+    },
+    forgotPin: {
+      title: "PIN oublié",
+      emailLabel: "Adresse email de ton compte",
+      emailPlaceholder: "ton@email.com",
+      submit: "Recevoir un nouveau PIN",
+      back: "Retour à la connexion",
+      success: "Un nouveau PIN a été envoyé à ton adresse email",
+      errorNotFound: "Aucun compte trouvé avec cette adresse email",
+      errorGeneric: "Erreur lors de l'envoi. Réessaie.",
+    },
+    steps: {
+      expand: "Déplier",
+      collapse: "Replier",
+      question: "Question",
+      sky: "Sky",
+      completed: "Complété",
+      pending: "En attente",
+      awaiting: "À répondre",
+      answer: "Répondre",
+      totalSky: "Total disponible",
+      of: "sur",
+      campaignEnded: "La campagne est terminée. Les réponses ne sont plus acceptées.",
+      allDone: "Toutes les questions sont complétées !",
+      allDoneDesc:
+        "Toutes tes réponses ont été soumises. Elles seront examinées par nos administrateurs.",
+    },
+    modal: {
+      reward: "Récompense",
+      yourAnswer: "Ta réponse",
+      openSkyplay: "🔗 Ouvrir skyplay.cloud →",
+      screenshotLabel: "Capture d'écran ou vidéo",
+      screenshotHint: "Glisse-dépose ou clique pour ajouter un fichier",
+      maxSize: "Max 10 Mo (image) / 40 Mo (vidéo)",
+      videoText: "Vidéo sélectionnée",
+      imageText: "Image sélectionnée",
+      changeMedia: "Changer de fichier",
+      submit: "Envoyer ma réponse",
+      submitting: "Envoi en cours...",
+      success: "Réponse soumise ! +{reward} Sky — En attente de validation.",
+      errorGeneric: "Erreur lors de la soumission",
+      errorNetwork: "Erreur réseau. Vérifie ta connexion.",
+      prev: "Précédente",
+      next: "Suivante",
+      close: "Fermer",
+      partsValidation: (label: string) => `Réponds à : ${label}`,
+      checkboxValidation: "Sélectionne au moins une option",
+      textValidation: "Rédige ta réponse",
+      dropdownPlaceholder: "Choisis une option...",
+      textPlaceholder: "Écris ta réponse ici...",
+    },
+  },
+  admin: {
+    login: {
+      title: "Connexion Admin",
+      usernameLabel: "Nom d'utilisateur",
+      usernamePlaceholder: "admin ou superadmin",
+      passwordLabel: "Mot de passe",
+      passwordPlaceholder: "••••••••",
+      submit: "Se connecter",
+      errorAuth: "Identifiants incorrects",
+      errorGeneric: "Erreur de connexion",
+    },
+    dashboard: {
+      title: "Panneau d'administration",
+      subtitle: "Gère les soumissions et les bonus de participation",
+      totalSky: "Total Sky",
+      skyDistributed: "Sky Distribués",
+      submissions: "Soumissions",
+      pending: "En attente",
+      approved: "Approuvées",
+      rejected: "Rejetées",
+      testers: "Testeurs",
+      filters: {
+        all: "Toutes",
+        pending: "En attente",
+        approved: "Approuvées",
+        rejected: "Rejetées",
+      },
+      approvedLabel: "APPROUVÉ",
+      rejectedLabel: "REJETÉ",
+      pendingLabel: "EN ATTENTE",
+      processed: "Traité",
+      approve: "Approuver",
+      reject: "Rejeter",
+      viewScreenshot: "Voir la capture d'écran",
+      hideScreenshot: "Masquer la capture",
+      screenshotUnavailable: "Capture indisponible",
+      loading: "Chargement...",
+      noSubmissions: "Aucune soumission trouvée",
+      step: "JALON",
+      updateError: "Erreur lors de la mise à jour",
+      networkError: "Erreur réseau",
+      approveSuccess: "✅ Approuvé !",
+      rejectSuccess: "❌ Rejeté",
+      bonus: {
+        title: "Bonus de participation",
+        description:
+          "Les testeurs ayant soumis toutes les réponses sont éligibles à un bonus de 250 Sky.",
+        eligible: "Éligible au bonus",
+        approve: "Accorder le bonus",
+        revoke: "Révoquer le bonus",
+        approved: "Bonus accordé",
+        notEligible: "Non éligible",
+        user: "Utilisateur",
+        submissions: "Soumissions",
+      },
+    },
+  },
+  faq: {
+    title: "Foire Aux Questions",
+    subtitle: "Tout ce que tu dois savoir sur la phase de test de Skyplay",
+    entries: [
+      {
+        question: "C'est quoi Skyplay ?",
+        answer:
+          "Skyplay est une plateforme de compétition gaming en ligne. Actuellement en phase de test utilisateur, nous recueillons des retours pour améliorer l'expérience avant le lancement officiel. La plateforme permet aux joueurs de s'affronter dans divers jeux et formats de compétition.",
+      },
+      {
+        question: "Comment participer à la phase de test ?",
+        answer:
+          "Crée un compte avec ton adresse email et reçois ton code PIN. Connecte-toi, puis réponds aux 16 questions réparties sur 4 jalons. Chaque jalon explore une partie différente de la plateforme : inscription, compétitions, social/live, et feedback final.",
+      },
+      {
+        question: "Comment obtenir mon code PIN ?",
+        answer:
+          "Après avoir rempli le formulaire d'inscription avec ton email, un code PIN à 4 chiffres est automatiquement envoyé à cette adresse. Vérifie tes spams si tu ne le trouves pas. Si le problème persiste, contacte un administrateur.",
+      },
+      {
+        question: "C'est quoi les Sky ?",
+        answer:
+          "Les Sky sont la monnaie virtuelle de la plateforme. Pendant la phase de test, tu gagnes des Sky pour chaque réponse validée par un administrateur. Tu reçois également un bonus de participation de 250 Sky une fois que toutes tes réponses ont été examinées. Le montant gagné par question est indiqué sur chaque carte.",
+      },
+      {
+        question: "Comment faire une capture d'écran ?",
+        answer:
+          "Sur Windows : touche Impr. écran ou Win + Maj + S. Sur Mac : Cmd + Maj + 4. Sur Android : bouton Power + Volume bas. Sur iPhone : bouton latéral + Volume haut. Tu peux aussi enregistrer une courte vidéo de ton écran si c'est plus simple.",
+      },
+      {
+        question:
+          "Quels types de fichiers sont acceptés pour les preuves ?",
+        answer:
+          "Les images (PNG, JPG, GIF, WebP) jusqu'à 10 Mo et les vidéos (MP4, WebM) jusqu'à 40 Mo sont acceptées. Pour les questions du Jalon 4 (feedback final), aucune capture n'est requise.",
+      },
+      {
+        question: "Puis-je modifier ma réponse après soumission ?",
+        answer:
+          "Non, une seule soumission est autorisée par question. Prends le temps de bien vérifier ta réponse et ta capture d'écran avant d'envoyer. Si tu as fait une erreur, contacte un administrateur.",
+      },
+      {
+        question: "Quand les Sky sont-ils crédités ?",
+        answer:
+          "Les Sky sont crédités dès qu'un administrateur approuve ta réponse. Le total de tes Sky cumulés s'affiche en haut de la page principale. Le bonus de participation de 250 Sky est ajouté une fois que toutes tes soumissions ont été traitées.",
+      },
+      {
+        question: "J'ai oublié mon code PIN, que faire ?",
+        answer:
+          'Sur le formulaire de connexion, utilise le bouton "PIN oublié". Un nouveau code te sera envoyé par email. Si tu ne reçois rien, vérifie tes spams ou contacte un administrateur.',
+      },
+      {
+        question:
+          "Une question ou une page ne fonctionne pas, que faire ?",
+        answer:
+          "Décris le problème dans ta réponse à la question concernée (Jalon 4, question sur les bugs). Précise où et quand le problème est survenu, ce que tu essayais de faire, et ce qui s'est passé. Un administrateur examinera ton signalement.",
+      },
+    ],
+  },
+  campaignBanner: {
+    campaign: "Campagne",
+    endsIn: "Se termine dans",
+    days: "j",
+    hours: "h",
+    minutes: "min",
+    seconds: "s",
+    expired: "Campagne terminée",
+    expiredDesc: "Cette campagne de test est terminée. Les réponses ne sont plus acceptées.",
+  },
+  email: {
+    subjectPin: (pin: string) => `Skyplay — Ton code PIN : ${pin}`,
+    bodyPin: (pin: string) =>
+      `Bienvenue sur la phase de test Skyplay !\n\nTon code PIN est : ${pin}\n\nUtilise ce code pour te connecter sur https://skyplay-testing.vercel.app\n\n— L'équipe Skyplay`,
+    subjectBonus: "Skyplay — Bonus de participation !",
+    bodyBonus: (totalSky: number) =>
+      `Félicitations ! Toutes tes réponses ont été validées et tu reçois un bonus de participation de 250 Sky.\n\nTon total de Sky est maintenant de ${totalSky} Sky.\n\nConnecte-toi pour voir ton solde : https://skyplay-testing.vercel.app\n\n— L'équipe Skyplay`,
+    registrationSubject: "Skyplay — Bienvenue à la phase de test !",
+  },
+};
+
+export default fr;

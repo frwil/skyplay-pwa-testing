@@ -58,6 +58,8 @@ interface UserStats {
   total_submissions: number;
   approved_submissions: number;
   total_rewards: number;
+  participation_bonus: number;
+  bonus_status: string | null;
   completed_phases: string | null;
 }
 
@@ -68,6 +70,7 @@ interface OverviewStats {
   pending_count: number;
   rejected_count: number;
   total_sky_distributed: number;
+  pending_bonus_count: number;
 }
 
 interface AdminUser {
@@ -229,6 +232,26 @@ export default function AdminPage() {
       setExtendError("Erreur réseau");
     } finally {
       setExtendLoading(false);
+    }
+  };
+
+  const handleApproveBonus = async (userId: number) => {
+    try {
+      const res = await fetch("/api/admin/approve-bonus", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({ userId }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        // Refresh data to reflect the change
+        fetchData();
+      } else {
+        alert(data.error || "Erreur lors de l'approbation du bonus");
+      }
+    } catch {
+      alert("Erreur réseau");
     }
   };
 
@@ -462,6 +485,7 @@ export default function AdminPage() {
                   { label: "En attente", value: overview.pending_count, color: "#e67e22" },
                   { label: "Rejetés", value: overview.rejected_count, color: "#FD2E5F" },
                   { label: "Sky distribués", value: `⚡ ${overview.total_sky_distributed}`, color: "#ffd700", icon: Trophy },
+                  { label: "Bonus en attente", value: overview.pending_bonus_count || 0, color: "#e67e22" },
                 ].map((s) => (
                   <div
                     key={s.label}
@@ -568,7 +592,7 @@ export default function AdminPage() {
                   <table className="w-full text-xs">
                     <thead>
                       <tr className="border-b border-white/5 bg-white/[0.02]">
-                        {["Rang", "Utilisateur", "Email", "Réponses", "Approuvés", "Sky gagnés", "Jalons"].map((h) => (
+                        {["Rang", "Utilisateur", "Email", "Réponses", "Approuvés", "Sky gagnés", "Prime de participation", "Jalons"].map((h) => (
                           <th
                             key={h}
                             className="text-left px-4 py-3 font-bold text-white/30 uppercase tracking-wider"
@@ -608,6 +632,27 @@ export default function AdminPage() {
                           </td>
                           <td className="px-4 py-3">
                             <span className="text-[#ffd700] font-bold">⚡ {u.total_rewards || 0}</span>
+                          </td>
+                          <td className="px-4 py-3">
+                            {u.bonus_status === "APPROVED" ? (
+                              <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-[#2ecc71]/10 text-[#2ecc71] inline-flex items-center gap-1">
+                                ✅ {u.participation_bonus || 250} ⚡
+                              </span>
+                            ) : u.bonus_status === "PENDING" ? (
+                              <div className="flex items-center gap-1.5">
+                                <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-[#e67e22]/10 text-[#e67e22]">
+                                  {u.participation_bonus || 250} ⚡
+                                </span>
+                                <button
+                                  onClick={() => handleApproveBonus(u.id)}
+                                  className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-[#e67e22]/10 text-[#e67e22] border border-[#e67e22]/20 hover:bg-[#e67e22]/25 transition"
+                                >
+                                  Valider
+                                </button>
+                              </div>
+                            ) : (
+                              <span className="text-white/15 text-[9px]">—</span>
+                            )}
                           </td>
                           <td className="px-4 py-3">
                             <div className="flex gap-1">

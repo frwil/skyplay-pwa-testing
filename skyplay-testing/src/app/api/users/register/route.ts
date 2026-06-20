@@ -21,6 +21,15 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // Validate username: no spaces, no special characters
+    const usernameRegex = /^[a-zA-Z0-9._]+$/;
+    if (!usernameRegex.test(username)) {
+      return NextResponse.json(
+        { error: "Le nom d'utilisateur ne doit contenir que des lettres, chiffres, points et underscores (pas d'espaces ni de caractères spéciaux)" },
+        { status: 400 }
+      );
+    }
+
     if (typeof email !== "string" || !email.includes("@")) {
       return NextResponse.json(
         { error: "Email invalide" },
@@ -58,7 +67,7 @@ export async function POST(request: NextRequest) {
     const pinHash = await hashPassword(pin);
 
     const result = await db.execute({
-      sql: "INSERT INTO users (username, email, role, password_hash) VALUES (?, ?, 'user', ?)",
+      sql: "INSERT INTO users (username, email, role, password_hash, participation_bonus, bonus_status) VALUES (?, ?, 'user', ?, 250, 'PENDING')",
       args: [username.trim(), email.trim(), pinHash],
     });
 
