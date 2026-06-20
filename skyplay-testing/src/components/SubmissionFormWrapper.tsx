@@ -163,7 +163,7 @@ export default function SubmissionFormWrapper({
         username: username.trim(),
         pin: pin.trim(),
       });
-      const res = await fetch(`/api/users/lookup?${params}`);
+      const res = await fetch(`/api/users/lookup?${params}`, { credentials: "include" });
       const data = await res.json();
 
       if (res.ok && data.user) {

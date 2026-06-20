@@ -1,5 +1,6 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { useTranslation } from "@/lib/i18n/TranslationContext";
 import type { Locale } from "@/lib/i18n/types";
 
@@ -15,10 +16,16 @@ const nextLocale: Record<Locale, Locale> = {
 
 export default function LanguageSwitcher() {
   const { t, locale, setLocale } = useTranslation();
+  const router = useRouter();
+
+  const handleSwitch = () => {
+    setLocale(nextLocale[locale]);
+    router.refresh();
+  };
 
   return (
     <button
-      onClick={() => setLocale(nextLocale[locale])}
+      onClick={handleSwitch}
       className="text-sm px-2 py-1 rounded-lg border border-white/10 bg-white/[0.03] hover:bg-white/[0.08] transition"
       title={locale === "fr" ? t.languageSwitcher.switchToEn : t.languageSwitcher.switchToFr}
     >
