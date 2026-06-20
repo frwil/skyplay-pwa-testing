@@ -124,12 +124,17 @@ export default function AdminPage() {
   useEffect(() => {
     const checkAuth = async () => {
       try {
-        const res = await fetch("/api/auth/me", { credentials: "same-origin" });
+        const res = await fetch("/api/auth/me", { credentials: "include" });
         if (res.ok) {
           const data = await res.json();
           setAdminUser(data.user);
+        } else {
+          // Session expired or invalid — stay on login screen
+          console.log("Auth check failed:", res.status);
         }
-      } catch { /* not logged in */ }
+      } catch (err) {
+        console.error("Auth check network error:", err);
+      }
     };
     checkAuth();
   }, []);
@@ -139,14 +144,18 @@ export default function AdminPage() {
     setError(null);
     try {
       const [subsRes, statsRes, campaignRes] = await Promise.all([
-        fetch("/api/admin/submissions", { credentials: "same-origin" }),
-        fetch("/api/admin/stats", { credentials: "same-origin" }),
+        fetch("/api/admin/submissions", { credentials: "include" }),
+        fetch("/api/admin/stats", { credentials: "include" }),
         fetch("/api/campaign"),
       ]);
 
       if (subsRes.status === 401 || statsRes.status === 401) {
-        setAdminUser(null);
-        return;
+        // Re-verify auth before logging out (avoid flaky logouts)
+        const authCheck = await fetch("/api/auth/me", { credentials: "include" });
+        if (!authCheck.ok) {
+          setAdminUser(null);
+          return;
+        }
       }
 
       const subsData = await subsRes.json();
@@ -196,7 +205,7 @@ export default function AdminPage() {
       const res = await fetch("/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        credentials: "same-origin",
+        credentials: "include",
         body: JSON.stringify({ username: username.trim(), password }),
       });
       const data = await res.json();
@@ -220,7 +229,7 @@ export default function AdminPage() {
       const res = await fetch("/api/admin/campaign", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        credentials: "same-origin",
+        credentials: "include",
         body: JSON.stringify({ deadline: new Date(newDeadline).toISOString() }),
       });
       const data = await res.json();
@@ -243,7 +252,7 @@ export default function AdminPage() {
       const res = await fetch("/api/admin/approve-bonus", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        credentials: "same-origin",
+        credentials: "include",
         body: JSON.stringify({ userId }),
       });
       const data = await res.json();
@@ -266,7 +275,7 @@ export default function AdminPage() {
       const res = await fetch("/api/admin/campaign", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        credentials: "same-origin",
+        credentials: "include",
         body: JSON.stringify({
           name: newCampaignName || t.admin.campaign.defaultName,
           deadline: new Date(newCampaignDeadline).toISOString(),
@@ -290,7 +299,7 @@ export default function AdminPage() {
   };
 
   const handleLogout = async () => {
-    await fetch("/api/auth/logout", { method: "POST", credentials: "same-origin" });
+    await fetch("/api/auth/logout", { method: "POST", credentials: "include" });
     setAdminUser(null);
     setUsername("");
     setPassword("");

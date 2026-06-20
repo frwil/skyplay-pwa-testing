@@ -14,6 +14,20 @@ export async function GET(request: NextRequest) {
 
     const db = await getDb();
 
+    // Auto-assign 250 Sky participation bonus to users who completed at least milestone 1
+    await db.execute(
+      `UPDATE users
+       SET participation_bonus = 250, bonus_status = 'APPROVED'
+       WHERE (role = 'user' OR role IS NULL)
+         AND COALESCE(bonus_status, '') != 'APPROVED'
+         AND id IN (
+           SELECT DISTINCT s.user_id
+           FROM submissions s
+           JOIN steps st ON st.id = s.step_id
+           WHERE st.slug = 'jalon_1'
+         )`
+    );
+
     // Per-phase stats
     const phasesRs = await db.execute(
       `SELECT
