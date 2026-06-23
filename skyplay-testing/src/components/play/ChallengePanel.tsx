@@ -47,13 +47,17 @@ interface ChallengeDetail {
 interface ChallengePanelProps {
   currentSystem: SystemType;
   onPlayChallenge: (system: SystemType, romName: string) => void;
+  /** Pre-fill the submit modal with an auto-detected result */
+  autoDetectResult?: { result: string; romName: string } | null;
+  /** Called after auto-detect result is consumed */
+  onAutoDetectConsumed?: () => void;
 }
 
 /**
  * Displays active challenges on the /play page.
  * Users can view leaderboards and submit results with a screenshot.
  */
-export default function ChallengePanel({ currentSystem, onPlayChallenge }: ChallengePanelProps) {
+export default function ChallengePanel({ currentSystem, onPlayChallenge, autoDetectResult, onAutoDetectConsumed }: ChallengePanelProps) {
   const { t } = useTranslation();
   const [challenges, setChallenges] = useState<Challenge[]>([]);
   const [loading, setLoading] = useState(true);
@@ -83,6 +87,29 @@ export default function ChallengePanel({ currentSystem, onPlayChallenge }: Chall
   useEffect(() => {
     fetchChallenges();
   }, [fetchChallenges]);
+
+  // ── Auto-detect result handler ──────────────────────────
+
+  useEffect(() => {
+    if (!autoDetectResult?.romName || !autoDetectResult.result) return;
+
+    // Find the matching active challenge for this ROM
+    const match = challenges.find(
+      (c) =>
+        c.system === currentSystem &&
+        (c.romName === autoDetectResult.romName ||
+          autoDetectResult.romName.toLowerCase().includes(c.romName.toLowerCase()) ||
+          c.romName.toLowerCase().includes(autoDetectResult.romName.toLowerCase())),
+    );
+
+    if (match) {
+      // Open detail + pre-fill result
+      openDetail(match.id);
+      setResult(autoDetectResult.result);
+      setShowSubmit(true);
+      onAutoDetectConsumed?.();
+    }
+  }, [autoDetectResult]); // Only trigger when autoDetectResult changes
 
   // ── Fetch challenge detail + leaderboard ──────────────────
 

@@ -78,6 +78,8 @@ export interface EmulatorState {
   // Input (called by keyboard/gamepad hooks)
   buttonDown: (player: 1 | 2, button: number) => void;
   buttonUp: (player: 1 | 2, button: number) => void;
+  /** Read emulated system RAM for auto-detection. Returns null if not available. */
+  readRam: () => Uint8Array | null;
   // Rollback-ready buffers (NES only — null for other systems)
   stateBuffer: StateBufferInterface | null;
   inputBuffer: InputBufferInterface | null;

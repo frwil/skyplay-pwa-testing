@@ -36,6 +36,9 @@ export interface EmulatorAdapter {
   readonly status: EmulatorStatus;
   readonly fps: number;
   readonly currentRom: string | null;
+
+  /** Read the emulated system's RAM. Returns null if not available. */
+  readRam?(): Uint8Array | null;
 }
 
 // ─── System Configurations ─────────────────────────────────────────

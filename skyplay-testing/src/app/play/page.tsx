@@ -15,6 +15,10 @@ export default function PlayPage() {
   const { t } = useTranslation();
   const [system, setSystem] = useState<SystemType>("nes");
   const emu = useEmulator(system);
+  const [autoDetectResult, setAutoDetectResult] = useState<{
+    result: string;
+    romName: string;
+  } | null>(null);
 
   return (
     <main className="relative min-h-screen">
@@ -105,10 +109,22 @@ export default function PlayPage() {
             setSystem(s);
             // The user will select the ROM from the list
           }}
+          autoDetectResult={autoDetectResult}
+          onAutoDetectConsumed={() => setAutoDetectResult(null)}
         />
 
         {/* Emulator */}
-        <EmulatorCore emu={emu} system={system} onSystemChange={setSystem} />
+        <EmulatorCore
+          emu={emu}
+          system={system}
+          onSystemChange={setSystem}
+          onAutoDetectConfirm={(detected) => {
+            setAutoDetectResult({
+              result: detected.trigger.result,
+              romName: detected.profile.romName,
+            });
+          }}
+        />
       </section>
 
       {/* Footer */}

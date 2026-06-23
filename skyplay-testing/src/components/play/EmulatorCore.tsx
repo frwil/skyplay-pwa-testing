@@ -6,11 +6,16 @@ import { useTranslation } from "@/lib/i18n/TranslationContext";
 import { Gamepad2, Pause, RotateCcw } from "lucide-react";
 import GameControls from "./GameControls";
 import TouchControls from "./TouchControls";
+import AutoDetectBanner from "./AutoDetectBanner";
+import { useAutoDetect } from "@/lib/emulator/hooks/useAutoDetect";
+import type { DetectedResult } from "@/lib/emulator/memory-watcher";
 
 interface EmulatorCoreProps {
   emu: EmulatorState;
   system: SystemType;
   onSystemChange: (s: SystemType) => void;
+  /** Called when memory watcher detects a result and user confirms */
+  onAutoDetectConfirm?: (result: DetectedResult) => void;
 }
 
 /**
@@ -20,9 +25,17 @@ interface EmulatorCoreProps {
  * and landscape hint. Uses the exact same card/glow design patterns
  * as the rest of the app.
  */
-export default function EmulatorCore({ emu, system, onSystemChange }: EmulatorCoreProps) {
+export default function EmulatorCore({ emu, system, onSystemChange, onAutoDetectConfirm }: EmulatorCoreProps) {
   const { t } = useTranslation();
   const cfg = SYSTEM_CONFIGS[system];
+
+  // ─── Memory Auto-Detection ──────────────────────────────
+  const autoDetect = useAutoDetect(
+    emu.readRam,
+    emu.currentRom,
+    system,
+    emu.status === "running",
+  );
 
   // Show the idle/loading/error overlay
   const showPlaceholder =
@@ -255,6 +268,13 @@ export default function EmulatorCore({ emu, system, onSystemChange }: EmulatorCo
           </div>
         </div>
       )}
+
+      {/* ─── Auto-Detect Banner ─────────────────────────── */}
+      <AutoDetectBanner
+        detected={autoDetect.pending}
+        onConfirm={(result) => onAutoDetectConfirm?.(result)}
+        onDismiss={autoDetect.dismiss}
+      />
     </div>
   );
 }

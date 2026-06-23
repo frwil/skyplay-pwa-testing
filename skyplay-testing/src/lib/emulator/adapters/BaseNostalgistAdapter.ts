@@ -246,4 +246,54 @@ export abstract class BaseNostalgistAdapter implements EmulatorAdapter {
   get currentRom(): string | null {
     return this._currentRom;
   }
+
+  /**
+   * Read the emulated system's RAM via RetroArch's libretro API.
+   *
+   * Uses retro_get_memory_data(RETRO_MEMORY_SYSTEM_RAM = 0)
+   * to get a pointer into WASM linear memory, then copies the
+   * bytes into a fresh Uint8Array.
+   */
+  readRam(): Uint8Array | null {
+    try {
+      const nostalgist = this.nostalgist;
+      if (!nostalgist) return null;
+
+      const module = nostalgist.getEmscriptenModule?.() as any;
+      if (!module?.asm) return null;
+
+      // Try different naming conventions for retro_get_memory_data
+      const getData =
+        module.asm.retro_get_memory_data ||
+        module.asm._retro_get_memory_data ||
+        module.asm.__retro_get_memory_data;
+
+      const getSize =
+        module.asm.retro_get_memory_size ||
+        module.asm._retro_get_memory_size ||
+        module.asm.__retro_get_memory_size;
+
+      if (typeof getData !== "function" || typeof getSize !== "function") {
+        return null;
+      }
+
+      // RETRO_MEMORY_SYSTEM_RAM = 0
+      const ptr = getData(0);
+      const size = getSize(0);
+
+      if (!ptr || size <= 0 || size > 128 * 1024 * 1024) {
+        return null; // Invalid pointer or unreasonable size
+      }
+
+      // Copy from WASM heap into a standalone Uint8Array
+      const buffer = new Uint8Array(size);
+      const heap = module.HEAPU8 as Uint8Array | undefined;
+      if (heap) {
+        buffer.set(heap.subarray(ptr, ptr + size));
+      }
+      return buffer;
+    } catch {
+      return null;
+    }
+  }
 }

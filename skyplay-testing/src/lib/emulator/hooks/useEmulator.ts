@@ -523,6 +523,21 @@ export function useEmulator(system: SystemType = "nes") {
     buttonUp,
     stateBuffer: isNes ? stateBufferRef.current : null,
     inputBuffer: isNes ? inputBufferRef.current : null,
+    readRam: () => {
+      if (isNes) {
+        try {
+          const state = nesRef.current?.toJSON();
+          if (!state) return null;
+          // jsnes CPU memory: 64KB array, first 2KB = NES internal RAM ($0000-$07FF)
+          const cpu = state.cpu as { mem?: number[] };
+          if (!cpu?.mem) return null;
+          return new Uint8Array(cpu.mem.slice(0, 0x800));
+        } catch {
+          return null;
+        }
+      }
+      return adapterRef.current?.readRam?.() ?? null;
+    },
   };
 
   return emulatorState;

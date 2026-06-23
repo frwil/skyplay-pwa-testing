@@ -353,6 +353,22 @@ export function useEmulatorDesktop(system: SystemType): DesktopEmulatorState {
     setFps(0);
   }, [isNes]);
 
+  // readRam
+  const readRam = useCallback((): Uint8Array | null => {
+    if (isNes) {
+      try {
+        const state = nesRef.current?.toJSON();
+        if (!state) return null;
+        const cpu = state.cpu as { mem?: number[] };
+        if (!cpu?.mem) return null;
+        return new Uint8Array(cpu.mem.slice(0, 0x800));
+      } catch {
+        return null;
+      }
+    }
+    return adapterRef.current?.readRam?.() ?? null;
+  }, [isNes]);
+
   // Volume
   const setVolume = useCallback((v: number) => {
     const vol = Math.max(0, Math.min(1, v));
@@ -391,5 +407,6 @@ export function useEmulatorDesktop(system: SystemType): DesktopEmulatorState {
     isMuted,
     buttonDown,
     buttonUp,
+    readRam,
   };
 }
