@@ -4,6 +4,7 @@ import { useState } from "react";
 import GlowBackground from "@/components/GlowBackground";
 import LanguageSwitcher from "@/components/LanguageSwitcher";
 import EmulatorCore from "@/components/play/EmulatorCore";
+import DesktopDownloadBanner from "@/components/play/DesktopDownloadBanner";
 import { useEmulator } from "@/lib/emulator/hooks/useEmulator";
 import { useTranslation } from "@/lib/i18n/TranslationContext";
 import { ArrowLeft, Gamepad2 } from "lucide-react";
@@ -92,6 +93,9 @@ export default function PlayPage() {
               : t.play.noRomDescription}
           </p>
         </div>
+
+        {/* Desktop Download Banner */}
+        <DesktopDownloadBanner />
 
         {/* Emulator */}
         <EmulatorCore emu={emu} system={system} onSystemChange={setSystem} />
