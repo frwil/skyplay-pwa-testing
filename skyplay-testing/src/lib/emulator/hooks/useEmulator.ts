@@ -1,7 +1,9 @@
 "use client";
 
 import { useRef, useCallback, useState, useEffect } from "react";
-import type { EmulatorStatus, RomEntry, EmulatorState } from "../types";
+import type { EmulatorStatus, RomEntry, EmulatorState, SystemType } from "../types";
+import type { EmulatorAdapter } from "../EmulatorAdapter";
+import { SYSTEM_CONFIGS } from "../EmulatorAdapter";
 import { StateBuffer } from "../buffers/StateBuffer";
 import { InputBuffer } from "../buffers/InputBuffer";
 import {
@@ -14,6 +16,9 @@ import {
 import { useNesAudio } from "./useNesAudio";
 import { useKeyboard } from "./useKeyboard";
 import { useGamepad } from "./useGamepad";
+import { SnesEmulatorAdapter } from "../adapters/SnesAdapter";
+import { GbEmulatorAdapter } from "../adapters/GbAdapter";
+import { GbaEmulatorAdapter } from "../adapters/GbaAdapter";
 
 // jsnes is a CommonJS module with no types — we declare the interface we need
 interface JsnesNes {
@@ -58,7 +63,9 @@ async function loadJsnes(): Promise<JsnesConstructor> {
  * - Status tracking (idle/loading/running/paused/error)
  * - FPS counter
  */
-export function useEmulator() {
+export function useEmulator(system: SystemType = "nes") {
+  const isNes = system === "nes";
+
   // ─── Refs ──────────────────────────────────────────────────────
   const nesRef = useRef<JsnesNes | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -70,36 +77,47 @@ export function useEmulator() {
   const fpsFrameCountRef = useRef<number>(0);
   const runningRef = useRef<boolean>(false);
 
+  // ─── Nostalgist adapter ref (non-NES systems) ──────────────────
+  const adapterRef = useRef<EmulatorAdapter | null>(null);
+
   // ─── State ─────────────────────────────────────────────────────
   const [status, setStatus] = useState<EmulatorStatus>("idle");
   const [fps, setFps] = useState(0);
   const [currentRom, setCurrentRom] = useState<string | null>(null);
   const [romList, setRomList] = useState<RomEntry[]>([]);
 
-  // ─── Buffers ───────────────────────────────────────────────────
+  // ─── Buffers (NES only) ────────────────────────────────────────
   const stateBufferRef = useRef<StateBuffer>(new StateBuffer());
   const inputBufferRef = useRef<InputBuffer>(new InputBuffer());
 
-  // ─── Audio ─────────────────────────────────────────────────────
+  // ─── Audio (NES only) ──────────────────────────────────────────
   const audio = useNesAudio();
 
   // ─── Input bitmask helpers ─────────────────────────────────────
   const kbBitmaskRef = useRef<() => number>(() => 0);
   const gpBitmaskRef = useRef<() => number>(() => 0);
 
-  // ─── Button handlers (wired to jsnes) ──────────────────────────
+  // ─── Button handlers ───────────────────────────────────────────
   const buttonDown = useCallback((player: 1 | 2, button: number) => {
-    nesRef.current?.buttonDown(player, button);
-  }, []);
+    if (isNes) {
+      nesRef.current?.buttonDown(player, button);
+    } else {
+      adapterRef.current?.buttonDown(player, button);
+    }
+  }, [isNes]);
 
   const buttonUp = useCallback((player: 1 | 2, button: number) => {
-    nesRef.current?.buttonUp(player, button);
-  }, []);
+    if (isNes) {
+      nesRef.current?.buttonUp(player, button);
+    } else {
+      adapterRef.current?.buttonUp(player, button);
+    }
+  }, [isNes]);
 
   // ─── Input hooks ───────────────────────────────────────────────
   const enabled = status === "running";
-  const keyboard = useKeyboard(buttonDown, buttonUp, enabled);
-  const gamepad = useGamepad(buttonDown, buttonUp, enabled);
+  const keyboard = useKeyboard(buttonDown, buttonUp, system, enabled);
+  const gamepad = useGamepad(buttonDown, buttonUp, system, enabled);
 
   // Wire bitmask getters
   kbBitmaskRef.current = keyboard.getP1Bitmask;
@@ -252,12 +270,67 @@ export function useEmulator() {
   const audioCtxRef_ = useRef(audio.audioContext);
   audioCtxRef_.current = audio.audioContext;
 
+  // ─── Create non-NES adapter ────────────────────────────────────
+  const createAdapter = useCallback((): EmulatorAdapter | null => {
+    if (isNes) return null;
+    switch (system) {
+      case "snes":
+        return new SnesEmulatorAdapter({ onStatusChange: setStatus });
+      case "gb":
+      case "gbc":
+        return new GbEmulatorAdapter(system, { onStatusChange: setStatus });
+      case "gba":
+        return new GbaEmulatorAdapter({ onStatusChange: setStatus });
+      default:
+        return null;
+    }
+  }, [isNes, system]);
+
   // ─── Load ROM ──────────────────────────────────────────────────
   const loadRom = useCallback(
     async (rom: RomEntry) => {
       setStatus("loading");
       setCurrentRom(rom.name);
 
+      // ── Non-NES path ──────────────────────────────────────────
+      if (!isNes) {
+        try {
+          // Clean up previous adapter
+          adapterRef.current?.exit();
+          adapterRef.current = null;
+
+          // Initialize canvas for non-NES (set dimensions from config)
+          const canvas = canvasRef.current;
+          if (canvas) {
+            const cfg = SYSTEM_CONFIGS[system];
+            canvas.width = cfg.width;
+            canvas.height = cfg.height;
+            const ctx = canvas.getContext("2d");
+            if (ctx) {
+              ctx.imageSmoothingEnabled = false;
+              ctxRef.current = ctx;
+            }
+          }
+
+          const adapter = createAdapter();
+          if (!adapter) throw new Error(`Unknown system: ${system}`);
+          adapterRef.current = adapter;
+
+          // For Nostalgist, we pass the canvas element
+          if (canvas) {
+            adapter.setCanvas?.(canvas);
+          }
+
+          await adapter.loadRom(rom);
+          setStatus(adapter.status);
+        } catch (err) {
+          console.error(`[useEmulator] Failed to load ${system} ROM:`, err);
+          setStatus("error");
+        }
+        return;
+      }
+
+      // ── NES path ──────────────────────────────────────────────
       try {
         // Ensure jsnes is loaded
         console.log("[useEmulator] Loading jsnes...");
@@ -324,29 +397,43 @@ export function useEmulator() {
         setStatus("error");
       }
     },
-    [gameLoop, initCanvas, renderFrame], // stable — audio accessed via refs
+    [gameLoop, initCanvas, renderFrame, isNes, system, createAdapter], // stable — audio accessed via refs
   );
 
   // ─── Pause / Resume ────────────────────────────────────────────
   const pause = useCallback(() => {
+    if (!isNes) {
+      adapterRef.current?.pause();
+      setStatus(adapterRef.current?.status ?? "paused");
+      return;
+    }
     runningRef.current = false;
     if (rafIdRef.current) {
       cancelAnimationFrame(rafIdRef.current);
       rafIdRef.current = 0;
     }
     setStatus("paused");
-  }, []);
+  }, [isNes]);
 
   const resume = useCallback(() => {
+    if (!isNes) {
+      adapterRef.current?.resume();
+      setStatus(adapterRef.current?.status ?? "running");
+      return;
+    }
     if (!nesRef.current) return;
     runningRef.current = true;
     lastFrameTimeRef.current = performance.now();
     rafIdRef.current = requestAnimationFrame(gameLoop);
     setStatus("running");
-  }, [gameLoop]);
+  }, [gameLoop, isNes]);
 
   // ─── Reset ─────────────────────────────────────────────────────
   const reset = useCallback(() => {
+    if (!isNes) {
+      adapterRef.current?.reset();
+      return;
+    }
     nesRef.current?.reset();
     stateBufferRef.current.clear();
     inputBufferRef.current.clear();
@@ -354,7 +441,7 @@ export function useEmulator() {
     prevP1BitmaskRef.current = 0;
     prevP2BitmaskRef.current = 0;
     lastFrameTimeRef.current = performance.now();
-  }, []);
+  }, [isNes]);
 
   // ─── Fetch ROM list ─────────────────────────────────────────────
   useEffect(() => {
@@ -382,9 +469,39 @@ export function useEmulator() {
 
   // ─── Volume wrapper ────────────────────────────────────────────
   const setVolume = useCallback(
-    (v: number) => audio.setVolume(v),
-    [audio],
+    (v: number) => {
+      if (!isNes) {
+        adapterRef.current?.setVolume(v);
+      } else {
+        audio.setVolume(v);
+      }
+    },
+    [audio, isNes],
   );
+
+  // ─── Exit (clean shutdown) ──────────────────────────────────────
+  const exit = useCallback(() => {
+    if (!isNes) {
+      adapterRef.current?.exit();
+      adapterRef.current = null;
+      setStatus("idle");
+      setCurrentRom(null);
+      setFps(0);
+      return;
+    }
+    runningRef.current = false;
+    if (rafIdRef.current) {
+      cancelAnimationFrame(rafIdRef.current);
+      rafIdRef.current = 0;
+    }
+    audioDestroyRef.current();
+    nesRef.current = null;
+    stateBufferRef.current.clear();
+    inputBufferRef.current.clear();
+    setStatus("idle");
+    setCurrentRom(null);
+    setFps(0);
+  }, [isNes]);
 
   // ─── Exposed State ─────────────────────────────────────────────
   const emulatorState: EmulatorState = {
@@ -392,18 +509,20 @@ export function useEmulator() {
     fps,
     currentRom,
     romList,
+    system,
     canvasRef: canvasRef as React.RefObject<HTMLCanvasElement | null>,
     loadRom,
     pause,
     resume,
     reset,
+    exit,
     setVolume,
-    volume: audio.volume,
-    isMuted: audio.isMuted,
+    volume: isNes ? audio.volume : (adapterRef.current?.volume ?? 1),
+    isMuted: isNes ? audio.isMuted : (adapterRef.current?.isMuted ?? false),
     buttonDown,
     buttonUp,
-    stateBuffer: stateBufferRef.current,
-    inputBuffer: inputBufferRef.current,
+    stateBuffer: isNes ? stateBufferRef.current : null,
+    inputBuffer: isNes ? inputBufferRef.current : null,
   };
 
   return emulatorState;

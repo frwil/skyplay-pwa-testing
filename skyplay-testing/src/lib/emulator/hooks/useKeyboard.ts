@@ -1,19 +1,27 @@
 "use client";
 
 import { useEffect, useRef, useCallback } from "react";
-import { KEY_MAP, BUTTON_INDEX_TO_BIT } from "../constants";
+import { getButtonIndexToBit, SYSTEM_KEY_MAPS } from "../EmulatorAdapter";
+import type { SystemType } from "../types";
 
 /**
- * Keyboard input hook for NES emulator.
+ * Keyboard input hook for emulator.
  *
  * Listens for keydown/keyup events, maps physical keys to
- * NES buttons, and calls the provided buttonDown/buttonUp
- * callbacks. Also tracks the current input bitmask for the
- * game loop to read synchronously.
+ * emulator-specific button indices (via SYSTEM_KEY_MAPS),
+ * and calls the provided buttonDown/buttonUp callbacks.
+ * Also tracks the current input bitmask for the game loop
+ * to read synchronously.
+ *
+ * @param buttonDown - Callback when a button is pressed
+ * @param buttonUp   - Callback when a button is released
+ * @param system     - Target system (determines key→button mapping)
+ * @param enabled    - Whether to capture input (false while loading/idle)
  */
 export function useKeyboard(
   buttonDown: (player: 1 | 2, button: number) => void,
   buttonUp: (player: 1 | 2, button: number) => void,
+  system: SystemType = "nes",
   enabled: boolean = true,
 ) {
   // Track currently held keys to compute input bitmask per player
@@ -21,49 +29,54 @@ export function useKeyboard(
   // Current input bitmask for Player 1 (for game loop)
   const p1BitmaskRef = useRef<number>(0);
 
-  const handleKeyDown = useCallback(
-    (e: KeyboardEvent) => {
-      if (!enabled) return;
-      const mapping = KEY_MAP[e.code];
-      if (!mapping) return;
+  // Stable refs so the effect doesn't need to re-register
+  const buttonDownRef = useRef(buttonDown);
+  buttonDownRef.current = buttonDown;
+  const buttonUpRef = useRef(buttonUp);
+  buttonUpRef.current = buttonUp;
+  const enabledRef = useRef(enabled);
+  enabledRef.current = enabled;
 
-      e.preventDefault();
-      e.stopPropagation();
+  const buttonIndexToBit = getButtonIndexToBit(system);
+  const keyMap = SYSTEM_KEY_MAPS[system];
 
-      const key = `${mapping.player}:${mapping.button}`;
-      if (heldKeysRef.current.has(key)) return; // ignore repeat
+  const handleKeyDown = useCallback((e: KeyboardEvent) => {
+    if (!enabledRef.current) return;
+    const mapping = keyMap[e.code];
+    if (!mapping) return;
 
-      heldKeysRef.current.add(key);
-      buttonDown(mapping.player, mapping.button);
+    e.preventDefault();
+    e.stopPropagation();
 
-      // Update bitmask
-      if (mapping.player === 1) {
-        p1BitmaskRef.current |= BUTTON_INDEX_TO_BIT[mapping.button] ?? 0;
-      }
-    },
-    [buttonDown, enabled],
-  );
+    const key = `${mapping.player}:${mapping.button}`;
+    if (heldKeysRef.current.has(key)) return; // ignore repeat
 
-  const handleKeyUp = useCallback(
-    (e: KeyboardEvent) => {
-      if (!enabled) return;
-      const mapping = KEY_MAP[e.code];
-      if (!mapping) return;
+    heldKeysRef.current.add(key);
+    buttonDownRef.current(mapping.player, mapping.button);
 
-      e.preventDefault();
-      e.stopPropagation();
+    // Update bitmask
+    if (mapping.player === 1) {
+      p1BitmaskRef.current |= buttonIndexToBit[mapping.button] ?? 0;
+    }
+  }, [keyMap, buttonIndexToBit]);
 
-      const key = `${mapping.player}:${mapping.button}`;
-      heldKeysRef.current.delete(key);
-      buttonUp(mapping.player, mapping.button);
+  const handleKeyUp = useCallback((e: KeyboardEvent) => {
+    if (!enabledRef.current) return;
+    const mapping = keyMap[e.code];
+    if (!mapping) return;
 
-      // Update bitmask
-      if (mapping.player === 1) {
-        p1BitmaskRef.current &= ~(BUTTON_INDEX_TO_BIT[mapping.button] ?? 0);
-      }
-    },
-    [buttonUp, enabled],
-  );
+    e.preventDefault();
+    e.stopPropagation();
+
+    const key = `${mapping.player}:${mapping.button}`;
+    heldKeysRef.current.delete(key);
+    buttonUpRef.current(mapping.player, mapping.button);
+
+    // Update bitmask
+    if (mapping.player === 1) {
+      p1BitmaskRef.current &= ~(buttonIndexToBit[mapping.button] ?? 0);
+    }
+  }, [keyMap, buttonIndexToBit]);
 
   useEffect(() => {
     window.addEventListener("keydown", handleKeyDown);

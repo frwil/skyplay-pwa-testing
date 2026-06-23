@@ -329,10 +329,22 @@ export interface Dictionary {
     noRomLoaded: string;
     noRomDescription: string;
     nowPlaying: string;
+    rotateHint: string;
+    systems: {
+      nes: string;
+      snes: string;
+      gb: string;
+      gbc: string;
+      gba: string;
+    };
     controls: {
       title: string;
       a: string;
       b: string;
+      x: string;
+      y: string;
+      l: string;
+      r: string;
       start: string;
       select: string;
       dpad: string;

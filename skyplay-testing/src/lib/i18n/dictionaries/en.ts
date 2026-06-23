@@ -412,10 +412,22 @@ const en: Dictionary = {
     noRomDescription:
       "Select a game from the dropdown above and click 'Load Game' to start playing.",
     nowPlaying: "Now Playing",
+    rotateHint: "Rotate your device to landscape for a better experience",
+    systems: {
+      nes: "NES",
+      snes: "SNES (Super Nintendo)",
+      gb: "Game Boy",
+      gbc: "Game Boy Color",
+      gba: "Game Boy Advance",
+    },
     controls: {
       title: "Controls",
       a: "X / Gamepad A",
       b: "Z / Gamepad B",
+      x: "C / Gamepad X",
+      y: "V / Gamepad Y",
+      l: "A / Gamepad L",
+      r: "S / Gamepad R",
       start: "Enter / Gamepad Start",
       select: "Right Shift / Gamepad Select",
       dpad: "Arrow Keys / D-Pad",

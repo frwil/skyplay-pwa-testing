@@ -414,10 +414,22 @@ const fr: Dictionary = {
     noRomDescription:
       "Sélectionne un jeu dans la liste ci-dessus et clique sur 'Lancer le jeu' pour commencer à jouer.",
     nowPlaying: "En cours",
+    rotateHint: "Tourne ton appareil en paysage pour une meilleure expérience",
+    systems: {
+      nes: "NES",
+      snes: "SNES (Super Nintendo)",
+      gb: "Game Boy",
+      gbc: "Game Boy Color",
+      gba: "Game Boy Advance",
+    },
     controls: {
       title: "Contrôles",
       a: "X / Manette A",
       b: "Z / Manette B",
+      x: "C / Manette X",
+      y: "V / Manette Y",
+      l: "A / Manette L",
+      r: "S / Manette R",
       start: "Entrée / Manette Start",
       select: "Shift Droit / Manette Select",
       dpad: "Flèches / D-Pad",

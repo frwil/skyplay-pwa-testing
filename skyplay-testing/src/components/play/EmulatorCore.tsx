@@ -1,29 +1,34 @@
 "use client";
 
-import type { EmulatorState } from "@/lib/emulator/types";
+import type { EmulatorState, SystemType } from "@/lib/emulator/types";
+import { SYSTEM_CONFIGS } from "@/lib/emulator/EmulatorAdapter";
 import { useTranslation } from "@/lib/i18n/TranslationContext";
-import { NES_WIDTH, NES_HEIGHT } from "@/lib/emulator/constants";
-import { Gamepad2, Pause } from "lucide-react";
+import { Gamepad2, Pause, RotateCcw } from "lucide-react";
 import GameControls from "./GameControls";
 import TouchControls from "./TouchControls";
 
 interface EmulatorCoreProps {
   emu: EmulatorState;
+  system: SystemType;
+  onSystemChange: (s: SystemType) => void;
 }
 
 /**
  * Main emulator display component.
  *
- * Renders the canvas, toolbar, touch overlay, and placeholder states.
- * Uses the exact same card/glow design patterns as the rest of the app.
+ * Renders the canvas, toolbar, touch overlay, placeholder states,
+ * and landscape hint. Uses the exact same card/glow design patterns
+ * as the rest of the app.
  */
-export default function EmulatorCore({ emu }: EmulatorCoreProps) {
+export default function EmulatorCore({ emu, system, onSystemChange }: EmulatorCoreProps) {
   const { t } = useTranslation();
+  const cfg = SYSTEM_CONFIGS[system];
 
   // Show the idle/loading/error overlay
   const showPlaceholder =
     emu.status === "idle" || emu.status === "loading" || emu.status === "error";
   const showTouchControls = emu.status === "running";
+  const gameActive = emu.status === "running" || emu.status === "paused";
 
   return (
     <div className="w-full max-w-[800px] mx-auto">
@@ -35,6 +40,8 @@ export default function EmulatorCore({ emu }: EmulatorCoreProps) {
         fps={emu.fps}
         volume={emu.volume}
         isMuted={emu.isMuted}
+        system={system}
+        onSystemChange={onSystemChange}
         onLoadRom={emu.loadRom}
         onPause={emu.pause}
         onResume={emu.resume}
@@ -42,23 +49,42 @@ export default function EmulatorCore({ emu }: EmulatorCoreProps) {
         onVolumeChange={emu.setVolume}
       />
 
-      {/* ─── Canvas Container ──────────────────────────────────── */}
+      {/* ─── Landscape Hint (mobile portrait) ────────────────── */}
+      {gameActive && (
+        <div
+          className="md:hidden rounded-xl border px-3 py-2 mb-4 text-center"
+          style={{
+            backgroundColor: "rgba(255,215,0,0.08)",
+            borderColor: "rgba(255,215,0,0.2)",
+          }}
+        >
+          <p
+            className="text-xs font-medium flex items-center justify-center gap-2"
+            style={{ color: "rgba(255,215,0,0.8)" }}
+          >
+            <RotateCcw className="w-3.5 h-3.5" />
+            {t.play.rotateHint}
+          </p>
+        </div>
+      )}
+
+      {/* ─── Canvas Container ────────────────────────────────── */}
       <div
         className="relative rounded-3xl border overflow-hidden mx-auto"
         style={{
           backgroundColor: "rgba(13,27,46,0.85)",
           borderColor:
-            emu.status === "running" || emu.status === "paused"
+            gameActive
               ? "rgba(0,200,255,0.25)"
               : "rgba(255,255,255,0.08)",
           boxShadow:
-            emu.status === "running" || emu.status === "paused"
+            gameActive
               ? "0 0 40px rgba(0,200,255,0.15), inset 0 0 40px rgba(0,200,255,0.03)"
               : "0 0 20px rgba(0,0,0,0.3)",
-          aspectRatio: `${NES_WIDTH} / ${NES_HEIGHT}`,
+          aspectRatio: `${cfg.width} / ${cfg.height}`,
         }}
       >
-        {/* Canvas — hidden only during idle/loading/error; visible when running or paused */}
+        {/* Canvas — hidden only during idle/loading/error */}
         <canvas
           ref={emu.canvasRef}
           className="absolute inset-0 w-full h-full block"
@@ -68,7 +94,7 @@ export default function EmulatorCore({ emu }: EmulatorCoreProps) {
           }}
         />
 
-        {/* Scanline overlay — shown when running or paused */}
+        {/* Scanline overlay */}
         <div
           className="absolute inset-0 pointer-events-none z-10"
           style={{
@@ -79,10 +105,7 @@ export default function EmulatorCore({ emu }: EmulatorCoreProps) {
               rgba(0,0,0,0.06) 2px,
               rgba(0,0,0,0.06) 4px
             )`,
-            display:
-              emu.status === "running" || emu.status === "paused"
-                ? "block"
-                : "none",
+            display: gameActive ? "block" : "none",
           }}
         />
 
@@ -114,12 +137,13 @@ export default function EmulatorCore({ emu }: EmulatorCoreProps) {
 
         {/* Touch Controls Overlay */}
         <TouchControls
+          system={system}
           onButtonDown={emu.buttonDown}
           onButtonUp={emu.buttonUp}
           visible={showTouchControls}
         />
 
-        {/* ─── Placeholder / Idle / Loading / Error ────────────── */}
+        {/* ─── Placeholder / Idle / Loading / Error ──────────── */}
         {showPlaceholder && (
           <div className="absolute inset-0 flex flex-col items-center justify-center p-8 text-center">
             {emu.status === "loading" ? (
@@ -195,8 +219,8 @@ export default function EmulatorCore({ emu }: EmulatorCoreProps) {
         )}
       </div>
 
-      {/* ─── Keyboard Controls Hint ─────────────────────────────── */}
-      {(emu.status === "running" || emu.status === "paused") && (
+      {/* ─── Keyboard Controls Hint (per system) ────────────── */}
+      {gameActive && (
         <div
           className="mt-4 rounded-2xl border p-4 hidden md:block"
           style={{
@@ -216,6 +240,18 @@ export default function EmulatorCore({ emu }: EmulatorCoreProps) {
             <ControlKey label={t.play.controls.b} keys="Z" />
             <ControlKey label={t.play.controls.start} keys="Enter" />
             <ControlKey label={t.play.controls.select} keys="Shift" />
+            {(system === "snes" || system === "gba") && (
+              <>
+                {system === "snes" && (
+                  <>
+                    <ControlKey label={t.play.controls.x} keys="C" />
+                    <ControlKey label={t.play.controls.y} keys="V" />
+                  </>
+                )}
+                <ControlKey label={t.play.controls.l} keys="A" />
+                <ControlKey label={t.play.controls.r} keys="S" />
+              </>
+            )}
           </div>
         </div>
       )}

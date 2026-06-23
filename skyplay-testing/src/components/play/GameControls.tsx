@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import type { RomEntry } from "@/lib/emulator/types";
+import type { RomEntry, SystemType } from "@/lib/emulator/types";
 import { useTranslation } from "@/lib/i18n/TranslationContext";
 import {
   Play,
@@ -13,6 +13,8 @@ import {
   Zap,
 } from "lucide-react";
 
+const SYSTEM_LIST: SystemType[] = ["nes", "snes", "gb", "gbc", "gba"];
+
 interface GameControlsProps {
   romList: RomEntry[];
   currentRom: string | null;
@@ -20,6 +22,8 @@ interface GameControlsProps {
   fps: number;
   volume: number;
   isMuted: boolean;
+  system: SystemType;
+  onSystemChange: (s: SystemType) => void;
   onLoadRom: (rom: RomEntry) => void;
   onPause: () => void;
   onResume: () => void;
@@ -34,6 +38,8 @@ export default function GameControls({
   fps,
   volume,
   isMuted,
+  system,
+  onSystemChange,
   onLoadRom,
   onPause,
   onResume,
@@ -47,8 +53,11 @@ export default function GameControls({
   const isLoading = status === "loading";
   const canInteract = status === "running" || status === "paused";
 
+  // Filter ROMs by current system
+  const filteredRoms = romList.filter((r) => r.system === system);
+
   const handleLaunch = () => {
-    const rom = romList.find((r) => r.name === selectedRom);
+    const rom = filteredRoms.find((r) => r.name === selectedRom);
     if (rom) onLoadRom(rom);
   };
 
@@ -60,6 +69,39 @@ export default function GameControls({
         borderColor: "rgba(255,255,255,0.08)",
       }}
     >
+      {/* System Selector */}
+      <div className="flex items-center gap-2">
+        <div className="relative">
+          <select
+            className="w-full appearance-none rounded-xl px-4 py-2.5 pr-10 text-sm font-bold cursor-pointer"
+            style={{
+              backgroundColor: "rgba(0,200,255,0.1)",
+              border: "1px solid rgba(0,200,255,0.3)",
+              color: "#00c8ff",
+            }}
+            value={system}
+            onChange={(e) => {
+              onSystemChange(e.target.value as SystemType);
+              setSelectedRom("");
+            }}
+            disabled={isLoading}
+          >
+            {SYSTEM_LIST.map((s) => {
+              const label = t.play.systems[s] ?? s.toUpperCase();
+              return (
+                <option key={s} value={s}>
+                  {label}
+                </option>
+              );
+            })}
+          </select>
+          <ChevronDown
+            className="w-4 h-4 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none"
+            style={{ color: "rgba(0,200,255,0.5)" }}
+          />
+        </div>
+      </div>
+
       {/* ROM Selector */}
       <div className="flex items-center gap-2 flex-1 min-w-0">
         <div className="relative flex-1 min-w-0">
@@ -77,7 +119,7 @@ export default function GameControls({
             <option value="" disabled>
               {t.play.selectRom}
             </option>
-            {romList.map((rom) => (
+            {filteredRoms.map((rom) => (
               <option key={rom.name} value={rom.name}>
                 {rom.name}
               </option>

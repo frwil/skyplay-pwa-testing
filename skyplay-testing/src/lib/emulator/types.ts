@@ -1,3 +1,6 @@
+// ─── System Type ───────────────────────────────────────────────────
+export type SystemType = "nes" | "snes" | "gb" | "gbc" | "gba";
+
 // ─── Emulator Status ───────────────────────────────────────────────
 export type EmulatorStatus =
   | "idle"      // No ROM loaded, emulator waiting
@@ -8,9 +11,10 @@ export type EmulatorStatus =
 
 // ─── ROM Entry ─────────────────────────────────────────────────────
 export interface RomEntry {
-  name: string;   // Display name (filename without extension)
-  path: string;   // URL path relative to /roms/
-  size: number;   // File size in bytes
+  name: string;       // Display name (filename without extension)
+  path: string;       // URL path relative to /roms/
+  size: number;       // File size in bytes
+  system: SystemType; // Detected system from file extension
 }
 
 // ─── Input Frame (per-frame input record for rollback) ─────────────
@@ -18,6 +22,26 @@ export interface InputFrame {
   frame: number;  // Absolute frame number
   p1: number;     // Player 1 button bitmask
   p2: number;     // Player 2 button bitmask
+}
+
+// ─── System Button Definition ──────────────────────────────────────
+export interface SystemButton {
+  id: string;        // e.g. "A", "B", "X", "Y", "L", "R", "START"
+  index: number;     // Button index for the emulator core
+  bit: number;       // Bitmask position (0x01, 0x02, ...)
+}
+
+// ─── System Configuration ──────────────────────────────────────────
+export interface SystemConfig {
+  type: SystemType;
+  labelKey: string;          // i18n key for system name
+  width: number;
+  height: number;
+  buttonCount: number;
+  buttons: SystemButton[];
+  coreName: string;           // Nostalgist core name (or "jsnes" for NES)
+  romExtensions: string[];    // e.g. [".nes"] or [".sfc", ".smc"]
+  touchLayout: "nes" | "snes" | "gb";  // which touch control layout
 }
 
 // ─── NES Button Constants (bit positions) ──────────────────────────
@@ -39,21 +63,23 @@ export interface EmulatorState {
   fps: number;
   currentRom: string | null;
   romList: RomEntry[];
+  system: SystemType;
   canvasRef: React.RefObject<HTMLCanvasElement | null>;
   // Actions
   loadRom: (rom: RomEntry) => void;
   pause: () => void;
   resume: () => void;
   reset: () => void;
+  exit: () => void;
   setVolume: (v: number) => void;
   volume: number;
   isMuted: boolean;
   // Input (called by keyboard/gamepad hooks)
   buttonDown: (player: 1 | 2, button: number) => void;
   buttonUp: (player: 1 | 2, button: number) => void;
-  // Rollback-ready buffers (exposed for P2P integration)
-  stateBuffer: StateBufferInterface;
-  inputBuffer: InputBufferInterface;
+  // Rollback-ready buffers (NES only — null for other systems)
+  stateBuffer: StateBufferInterface | null;
+  inputBuffer: InputBufferInterface | null;
 }
 
 // ─── Buffer Interfaces ─────────────────────────────────────────────

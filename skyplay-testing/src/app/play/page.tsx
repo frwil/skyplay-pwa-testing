@@ -1,15 +1,18 @@
 "use client";
 
+import { useState } from "react";
 import GlowBackground from "@/components/GlowBackground";
 import LanguageSwitcher from "@/components/LanguageSwitcher";
 import EmulatorCore from "@/components/play/EmulatorCore";
 import { useEmulator } from "@/lib/emulator/hooks/useEmulator";
 import { useTranslation } from "@/lib/i18n/TranslationContext";
 import { ArrowLeft, Gamepad2 } from "lucide-react";
+import type { SystemType } from "@/lib/emulator/types";
 
 export default function PlayPage() {
   const { t } = useTranslation();
-  const emu = useEmulator();
+  const [system, setSystem] = useState<SystemType>("nes");
+  const emu = useEmulator(system);
 
   return (
     <main className="relative min-h-screen">
@@ -91,7 +94,7 @@ export default function PlayPage() {
         </div>
 
         {/* Emulator */}
-        <EmulatorCore emu={emu} />
+        <EmulatorCore emu={emu} system={system} onSystemChange={setSystem} />
       </section>
 
       {/* Footer */}
