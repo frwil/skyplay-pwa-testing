@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import type { SessionConfig, NetplayStatus } from "../types";
 import type { SystemType } from "../../types";
 import { usePresence } from "./usePresence";
@@ -27,7 +27,8 @@ interface UseNetplayResult {
   // Matchmaking
   isSearching: boolean;
   session: SessionConfig | null;
-  startMatchmaking: () => Promise<void>;
+  /** Start matchmaking. Pass opponentId for a targeted challenge. */
+  startMatchmaking: (opponentId?: number) => Promise<void>;
   cancelMatchmaking: () => Promise<void>;
 
   // WebRTC / Netplay
@@ -57,6 +58,11 @@ interface UseNetplayResult {
   /** The NetplayManager or InputDelayManager instance (for wiring into emulator). */
   manager: NetplayManager | InputDelayManager | null;
 
+  /** Result of disconnect detection: who won? */
+  disconnectResult: "win" | "loss" | null;
+  /** Clear the disconnect result (after user dismisses the dialog). */
+  clearDisconnectResult: () => void;
+
   error: string | null;
 }
 
@@ -77,6 +83,7 @@ export function useNetplay({ challengeId, system }: UseNetplayOptions): UseNetpl
   const [isSearching, setIsSearching] = useState(false);
   const [session, setSession] = useState<SessionConfig | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [disconnectResult, setDisconnectResult] = useState<"win" | "loss" | null>(null);
 
   // Emulator deps, set by bindEmulator — state so it triggers re-renders
   const [deps, setDeps] = useState<NetplayEmulatorDeps | InputDelayEmulatorDeps | null>(null);
@@ -84,6 +91,7 @@ export function useNetplay({ challengeId, system }: UseNetplayOptions): UseNetpl
   const sessionIdRef = useRef<number | null>(null);
   const matchmakingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const mountedRef = useRef(true);
+  const prevStatusRef = useRef<NetplayStatus>("idle");
 
   // ── Presence ────────────────────────────────────────────────────
 
@@ -180,11 +188,12 @@ export function useNetplay({ challengeId, system }: UseNetplayOptions): UseNetpl
     setSession(null);
   }, []);
 
-  const startMatchmaking = useCallback(async () => {
+  const startMatchmaking = useCallback(async (opponentId?: number) => {
     console.log("[Netplay:useNetplay] startMatchmaking() called", {
       challengeId,
       participationStatus,
       system,
+      opponentId,
     });
     if (!challengeId || participationStatus === "none") {
       console.log("[Netplay:useNetplay] ❌ startMatchmaking: not participating");
@@ -193,14 +202,18 @@ export function useNetplay({ challengeId, system }: UseNetplayOptions): UseNetpl
     }
 
     setError(null);
+    setDisconnectResult(null);
     setIsSearching(true);
 
     try {
-      // POST /api/netplay/session — either creates WAITING or joins existing
+      // POST /api/netplay/session — creates WAITING, TARGETED, or joins existing
+      const body: Record<string, unknown> = { challengeId };
+      if (opponentId) body.targetPlayerId = opponentId;
+
       const res = await fetch("/api/netplay/session", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ challengeId }),
+        body: JSON.stringify(body),
         credentials: "include",
       });
       console.log("[Netplay:useNetplay] POST /api/netplay/session response:", res.status);
@@ -235,6 +248,69 @@ export function useNetplay({ challengeId, system }: UseNetplayOptions): UseNetpl
           setSession(sessionConfig);
           setParticipationStatus("in_game");
         }
+        return;
+      }
+
+      if (sess.status === "TARGETED") {
+        // Targeted challenge sent — poll for MATCHED or DECLINED
+        console.log("[Netplay:useNetplay] 🎯 TARGETED challenge sent to", sess.targetUsername, "— polling every 2s for response...");
+        sessionIdRef.current = sess.id;
+
+        matchmakingTimerRef.current = setInterval(async () => {
+          if (!mountedRef.current) {
+            clearInterval(matchmakingTimerRef.current!);
+            return;
+          }
+
+          try {
+            const pollRes = await fetch(
+              `/api/netplay/session?id=${sessionIdRef.current}`,
+              { credentials: "include" },
+            );
+            if (!pollRes.ok) return;
+
+            const pollData = await pollRes.json();
+            const pollSess = pollData.session;
+
+            if (pollSess.status === "MATCHED") {
+              console.log("[Netplay:useNetplay] ✅ Challenge accepted! As P1 vs", pollSess.opponent?.username);
+              clearInterval(matchmakingTimerRef.current!);
+              matchmakingTimerRef.current = null;
+              setIsSearching(false);
+
+              if (mountedRef.current) {
+                setSession({
+                  sessionId: pollSess.id,
+                  challengeId,
+                  playerNumber: 1,
+                  opponentId: pollSess.opponent.id,
+                  opponentName: pollSess.opponent.username,
+                });
+                setParticipationStatus("in_game");
+              }
+            }
+
+            if (pollSess.status === "DECLINED") {
+              console.log("[Netplay:useNetplay] ❌ Challenge declined");
+              clearInterval(matchmakingTimerRef.current!);
+              matchmakingTimerRef.current = null;
+              setIsSearching(false);
+              setError("L'adversaire a refusé le défi");
+              setSession(null);
+            }
+
+            if (pollSess.status === "CANCELLED") {
+              console.log("[Netplay:useNetplay] ⚠️ Session cancelled");
+              clearInterval(matchmakingTimerRef.current!);
+              matchmakingTimerRef.current = null;
+              setIsSearching(false);
+              setSession(null);
+            }
+          } catch {
+            // Retry next poll
+          }
+        }, 2000);
+
         return;
       }
 
@@ -275,6 +351,14 @@ export function useNetplay({ challengeId, system }: UseNetplayOptions): UseNetpl
               });
               setParticipationStatus("in_game");
             }
+          }
+
+          if (pollSess.status === "CANCELLED") {
+            console.log("[Netplay:useNetplay] ⚠️ WAITING session cancelled");
+            clearInterval(matchmakingTimerRef.current!);
+            matchmakingTimerRef.current = null;
+            setIsSearching(false);
+            setSession(null);
           }
         } catch (err) {
           console.error("[Netplay:useNetplay] Poll error:", err);
@@ -323,6 +407,61 @@ export function useNetplay({ challengeId, system }: UseNetplayOptions): UseNetpl
     setIsSearching(false);
   }, [webrtc]);
 
+  // ── Disconnect detection: "playing" → "error" = call disconnect API ──
+
+  useEffect(() => {
+    const prev = prevStatusRef.current;
+    prevStatusRef.current = webrtc.status;
+
+    if (prev === "playing" && webrtc.status === "error" && session) {
+      console.log("[Netplay:useNetplay] 🔌 Disconnect detected! Reporting to server...");
+      (async () => {
+        try {
+          const res = await fetch(`/api/netplay/session/${session.sessionId}/disconnect`, {
+            method: "POST",
+            credentials: "include",
+          });
+          if (res.ok) {
+            const data = await res.json().catch(() => ({}));
+            if (data.winner === "me") {
+              console.log("[Netplay:useNetplay] 🏆 Disconnect win confirmed");
+              if (mountedRef.current) setDisconnectResult("win");
+            }
+          } else if (res.status === 409) {
+            // Race condition: we lost
+            console.log("[Netplay:useNetplay] 💔 Disconnect race lost — opponent claimed first");
+            if (mountedRef.current) setDisconnectResult("loss");
+          } else {
+            // Unknown error — assume loss
+            console.log("[Netplay:useNetplay] ⚠️ Disconnect report failed:", res.status);
+            if (mountedRef.current) setDisconnectResult("loss");
+          }
+        } catch {
+          console.log("[Netplay:useNetplay] ⚠️ Disconnect report network error");
+          if (mountedRef.current) setDisconnectResult("loss");
+        }
+      })();
+    }
+  }, [webrtc.status, session]);
+
+  // ── Game-start reporting: "countdown" → "playing" = tell server ──
+
+  useEffect(() => {
+    if (webrtc.status === "playing" && session) {
+      console.log("[Netplay:useNetplay] 🎮 Game started! Reporting IN_PROGRESS to server...");
+      fetch(`/api/netplay/session/${session.sessionId}/start`, {
+        method: "POST",
+        credentials: "include",
+      }).catch(() => {});
+    }
+  }, [webrtc.status, session]);
+
+  // ── Clear disconnect result ─────────────────────────────────────
+
+  const clearDisconnectResult = useCallback(() => {
+    setDisconnectResult(null);
+  }, []);
+
   return {
     participationStatus,
     participate,
@@ -340,6 +479,8 @@ export function useNetplay({ challengeId, system }: UseNetplayOptions): UseNetpl
     startNetplay,
     cleanup,
     manager: webrtc.manager,
+    disconnectResult,
+    clearDisconnectResult,
     error,
   };
 }

@@ -130,7 +130,7 @@ export default function EmulatorCore({
     netplayInfo?.status === "playing" || netplayInfo?.status === "countdown";
 
   return (
-    <div className={isPopup ? "w-full mx-auto" : "w-full max-w-[960px] xl:max-w-[1100px] 2xl:max-w-[1200px] mx-auto"}>
+    <div className={isPopup ? "w-full mx-auto" : "w-full max-w-full mx-auto"}>
       {/* ─── Toolbar ──────────────────────────────────────────── */}
       <GameControls
         romList={emu.romList}

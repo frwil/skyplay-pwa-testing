@@ -8,13 +8,16 @@ import ChallengePanel from "@/components/play/ChallengePanel";
 import CountdownOverlay from "@/components/play/CountdownOverlay";
 import ConnectionStatus from "@/components/play/ConnectionStatus";
 import ParticipationDialog from "@/components/play/ParticipationDialog";
+import ChallengeNotificationDialog from "@/components/play/ChallengeNotificationDialog";
+import DisconnectResultDialog from "@/components/play/DisconnectResultDialog";
 import type { ChallengeInfo } from "@/components/play/ParticipationDialog";
 import { useEmulator } from "@/lib/emulator/hooks/useEmulator";
 import { useNetplay } from "@/lib/emulator/netplay/hooks/useNetplay";
+import { useChallengeNotifications } from "@/lib/emulator/netplay/hooks/useChallengeNotifications";
 import type { NetplayEmulatorDeps } from "@/lib/emulator/netplay/NetplayManager";
 import type { InputDelayEmulatorDeps } from "@/lib/emulator/netplay/InputDelayManager";
 import { useTranslation } from "@/lib/i18n/TranslationContext";
-import { ArrowLeft, Gamepad2, User, LogOut } from "lucide-react";
+import { ArrowLeft, Gamepad2, User } from "lucide-react";
 import type { SystemType } from "@/lib/emulator/types";
 
 export default function PlayPage() {
@@ -82,6 +85,28 @@ export default function PlayPage() {
   const [selectedChallengeId, setSelectedChallengeId] = useState<number | null>(null);
 
   const netplay = useNetplay({ challengeId: selectedChallengeId, system });
+
+  // ── Challenge Notifications (poll for incoming challenges) ─────
+
+  const challengeNotifs = useChallengeNotifications({
+    userId: currentUserId,
+    enabled: !!currentUserId && netplay.participationStatus !== "none",
+  });
+
+  // When P2 accepts a challenge via notification dialog
+  const handleAcceptChallenge = useCallback(async (sessionId: number) => {
+    setSelectedChallengeId(challengeNotifs.pendingChallenge?.challengeId ?? null);
+    const result = await challengeNotifs.acceptChallenge(sessionId);
+    if (result) {
+      // Session is now MATCHED — call startMatchmaking to join it.
+      // The POST handler will find the MATCHED session where we're player2.
+      netplay.startMatchmaking();
+    }
+  }, [challengeNotifs, netplay]);
+
+  const handleDeclineChallenge = useCallback(async (sessionId: number) => {
+    await challengeNotifs.declineChallenge(sessionId);
+  }, [challengeNotifs]);
 
   // ── Participation Dialog ─────────────────────────────────────────
   const [participationChallenge, setParticipationChallenge] = useState<ChallengeInfo | null>(null);
@@ -303,12 +328,20 @@ export default function PlayPage() {
     netplay.participate();
   }, [netplay]);
 
-  const handleStartMatchmaking = useCallback((_arg?: number) => {
+  const handleStartMatchmaking = useCallback((opponentId?: number) => {
     // Guard: emulator must be running before matchmaking
     if (emu.status !== "running") {
       console.warn("[Netplay:Page] ⚠️ Cannot start matchmaking — emulator not running. Status:", emu.status);
     }
-    netplay.startMatchmaking();
+    netplay.startMatchmaking(opponentId);
+  }, [netplay, emu.status]);
+
+  // For the NetplayLobby "Start Now" button (anonymous matchmaking, no specific opponent)
+  const handleLobbyMatchmaking = useCallback(() => {
+    if (emu.status !== "running") {
+      console.warn("[Netplay:Page] ⚠️ Cannot start lobby matchmaking — emulator not running.");
+    }
+    netplay.startMatchmaking(undefined);
   }, [netplay, emu.status]);
 
   const handleCloseParticipation = useCallback(() => {
@@ -342,6 +375,29 @@ export default function PlayPage() {
         countdown={netplay.countdown}
         visible={netplay.netplayStatus === "countdown"}
       />
+
+      {/* Challenge Notification Dialog (shown to P2 when challenged) */}
+      {challengeNotifs.pendingChallenge && (
+        <ChallengeNotificationDialog
+          fromUsername={challengeNotifs.pendingChallenge.fromUsername}
+          onAccept={() => handleAcceptChallenge(challengeNotifs.pendingChallenge!.sessionId)}
+          onDecline={() => handleDeclineChallenge(challengeNotifs.pendingChallenge!.sessionId)}
+          isAccepting={challengeNotifs.isAccepting}
+          isDeclining={challengeNotifs.isDeclining}
+          error={challengeNotifs.error}
+        />
+      )}
+
+      {/* Disconnect Result Dialog (shown when match ends via disconnect) */}
+      {netplay.disconnectResult && (
+        <DisconnectResultDialog
+          result={netplay.disconnectResult}
+          onClose={() => {
+            netplay.clearDisconnectResult();
+            netplay.cleanup();
+          }}
+        />
+      )}
 
       {/* Connection Status Bar — hidden in popup mode */}
       {!isPopup && <ConnectionStatus {...connectionStatus} />}
@@ -427,7 +483,7 @@ export default function PlayPage() {
       )}
 
       {/* Content — full-width in popup mode */}
-      <section className={isPopup ? "relative z-10 w-full px-2 py-4" : "relative z-10 max-w-4xl mx-auto px-4 py-8 pb-20"}>
+      <section className={isPopup ? "relative z-10 w-full px-2 py-4" : "relative z-10 max-w-7xl mx-auto px-4 py-8 pb-20"}>
         {/* Page Title — hidden in popup mode */}
         {!isPopup && (
         <div className="text-center mb-8">
@@ -491,7 +547,7 @@ export default function PlayPage() {
           netplayStatus={netplay.netplayStatus}
           isNetplaySearching={netplay.isSearching}
           onParticipate={handleParticipate}
-          onStartMatchmaking={handleStartMatchmaking}
+          onStartMatchmaking={handleLobbyMatchmaking}
           onCancelMatchmaking={netplay.cancelMatchmaking}
           onSelectChallenge={handleSelectChallenge}
         />

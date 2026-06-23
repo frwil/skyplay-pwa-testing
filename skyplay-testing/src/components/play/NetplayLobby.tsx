@@ -11,7 +11,7 @@ interface NetplayLobbyProps {
   /** Current netplay status */
   netplayStatus: string;
   onParticipate: () => void;
-  onStartMatchmaking: (opponentId?: number) => void;
+  onStartMatchmaking: () => void;
   onCancelMatchmaking: () => void;
 }
 

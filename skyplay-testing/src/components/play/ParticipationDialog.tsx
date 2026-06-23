@@ -65,13 +65,22 @@ export default function ParticipationDialog({
   onClearError,
 }: ParticipationDialogProps) {
   const [selectedOpponent, setSelectedOpponent] = useState<number | null>(null);
+  const [challengeSent, setChallengeSent] = useState(false);
 
   // Reset selection when dialog opens
   useEffect(() => {
     if (isOpen) {
       setSelectedOpponent(null);
+      setChallengeSent(false);
     }
   }, [isOpen]);
+
+  // Reset challengeSent when searching stops (error, match, etc.)
+  useEffect(() => {
+    if (!isSearching) {
+      setChallengeSent(false);
+    }
+  }, [isSearching]);
 
   // Lock body scroll
   useEffect(() => {
@@ -250,7 +259,10 @@ export default function ParticipationDialog({
 
             {/* Start Now button — available for ALL systems */}
             <button
-              onClick={() => onStartMatchmaking(selectedOpponent ?? undefined)}
+              onClick={() => {
+                if (selectedOpponent) setChallengeSent(true);
+                onStartMatchmaking(selectedOpponent ?? undefined);
+              }}
               disabled={isSearching}
               className="w-full rounded-xl px-4 py-3 text-sm font-bold flex items-center justify-center gap-2 transition disabled:opacity-50"
               style={{ backgroundColor: "rgba(0,200,255,0.15)", border: "1px solid rgba(0,200,255,0.3)", color: "#00c8ff" }}
@@ -258,7 +270,9 @@ export default function ParticipationDialog({
               {isSearching ? (
                 <>
                   <Loader2 className="w-4 h-4 animate-spin" />
-                  Recherche d'un adversaire...
+                  {selectedOpponent && challengeSent
+                    ? "En attente de réponse..."
+                    : "Recherche d'un adversaire..."}
                 </>
               ) : (
                 <>

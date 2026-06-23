@@ -62,7 +62,7 @@ interface ChallengePanelProps {
   netplayStatus: string;
   isNetplaySearching: boolean;
   onParticipate: (challengeId: number) => void;
-  onStartMatchmaking: (challengeId: number) => void;
+  onStartMatchmaking: () => void;
   onCancelMatchmaking: () => void;
   /** Called when user clicks a challenge card to view details */
   onSelectChallenge?: (challengeId: number) => void;
@@ -371,7 +371,7 @@ export default function ChallengePanel({
                   isSearching={isNetplaySearching}
                   netplayStatus={netplayStatus}
                   onParticipate={() => onParticipate(selected.challenge.id)}
-                  onStartMatchmaking={() => onStartMatchmaking(selected.challenge.id)}
+                  onStartMatchmaking={() => onStartMatchmaking()}
                   onCancelMatchmaking={onCancelMatchmaking}
                 />
               </div>

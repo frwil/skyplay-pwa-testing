@@ -5,7 +5,10 @@ import { getAuthFromRequest } from "@/lib/auth";
 /**
  * POST /api/netplay/session
  * Create a new netplay session or join an existing WAITING one.
- * Body: { challengeId: number }
+ * Body: { challengeId: number, targetPlayerId?: number }
+ *
+ * If targetPlayerId is provided, creates a TARGETED session for that
+ * specific player (they receive a challenge notification).
  */
 export async function POST(request: NextRequest) {
   try {
@@ -14,7 +17,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Authentification requise" }, { status: 401 });
     }
 
-    const { challengeId } = await request.json();
+    const { challengeId, targetPlayerId } = await request.json();
     if (!challengeId || typeof challengeId !== "number") {
       return NextResponse.json({ error: "challengeId requis (nombre)" }, { status: 400 });
     }
@@ -33,7 +36,102 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Look for an existing WAITING session (not created by this user)
+    // ── Targeted challenge path ────────────────────────────────────
+    if (targetPlayerId && typeof targetPlayerId === "number") {
+      // Verify target is not self
+      if (targetPlayerId === auth.userId) {
+        return NextResponse.json({ error: "Vous ne pouvez pas vous défier vous-même" }, { status: 400 });
+      }
+
+      // Verify target exists and is a participant
+      const targetRs = await db.execute({
+        sql: "SELECT id FROM challenge_participants WHERE challenge_id = ? AND user_id = ?",
+        args: [challengeId, targetPlayerId],
+      });
+      if (targetRs.rows.length === 0) {
+        return NextResponse.json(
+          { error: "L'adversaire ne participe pas à ce challenge" },
+          { status: 400 },
+        );
+      }
+
+      // Fetch target username
+      const userRs = await db.execute({
+        sql: "SELECT username FROM users WHERE id = ?",
+        args: [targetPlayerId],
+      });
+      const targetUsername = userRs.rows.length > 0 ? (userRs.rows[0].username as string) : "?";
+
+      // Fetch challenger username
+      const challengerRs = await db.execute({
+        sql: "SELECT username FROM users WHERE id = ?",
+        args: [auth.userId],
+      });
+      const challengerUsername = challengerRs.rows.length > 0 ? (challengerRs.rows[0].username as string) : "Un joueur";
+
+      // Create TARGETED session
+      const insert = await db.execute({
+        sql: "INSERT INTO netplay_sessions (challenge_id, player1_id, player2_id, status) VALUES (?, ?, ?, 'TARGETED')",
+        args: [challengeId, auth.userId, targetPlayerId],
+      });
+      const sessionId = Number(insert.lastInsertRowid);
+
+      // Insert challenge notification for P2
+      await db.execute({
+        sql: `INSERT INTO netplay_notifications (session_id, user_id, from_user_id, from_username, type, challenge_id, message)
+              VALUES (?, ?, ?, ?, 'challenge', ?, ?)`,
+        args: [
+          sessionId,
+          targetPlayerId,
+          auth.userId,
+          challengerUsername,
+          challengeId,
+          `${challengerUsername} vous a défié !`,
+        ],
+      });
+
+      return NextResponse.json({
+        session: {
+          id: sessionId,
+          challengeId,
+          status: "TARGETED",
+          player1Id: auth.userId,
+          player2Id: targetPlayerId,
+          targetPlayerId,
+          targetUsername,
+        },
+      }, { status: 201 });
+    }
+
+    // ── Anonymous matchmaking path ─────────────────────────────────
+
+    // First, check if caller is already player2 of a MATCHED/TARGETED session
+    // (happens when P2 accepts a challenge, then calls startMatchmaking)
+    const existingRs = await db.execute({
+      sql: `SELECT ns.id, ns.player1_id, ns.player2_id, ns.status, u.username AS player1_username
+            FROM netplay_sessions ns
+            JOIN users u ON ns.player1_id = u.id
+            WHERE ns.challenge_id = ? AND ns.player2_id = ?
+              AND ns.status IN ('MATCHED', 'TARGETED')
+            LIMIT 1`,
+      args: [challengeId, auth.userId],
+    });
+
+    if (existingRs.rows.length > 0) {
+      const sess = existingRs.rows[0];
+      return NextResponse.json({
+        session: {
+          id: sess.id,
+          challengeId,
+          status: sess.status,
+          player1Id: sess.player1_id,
+          player2Id: sess.player2_id,
+          opponent: { id: sess.player1_id as number, username: sess.player1_username as string },
+        },
+      });
+    }
+
+    // Standard anonymous matching: look for WAITING sessions
     const waitingRs = await db.execute({
       sql: `SELECT ns.id, ns.player1_id, u.username AS player1_username
             FROM netplay_sessions ns

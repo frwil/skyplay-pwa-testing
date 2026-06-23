@@ -262,6 +262,21 @@ async function initializeSchema(): Promise<void> {
     );
   `);
 
+  await getClient().execute(`
+    CREATE TABLE IF NOT EXISTS netplay_notifications (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id INTEGER NOT NULL REFERENCES netplay_sessions(id),
+      user_id INTEGER NOT NULL REFERENCES users(id),
+      from_user_id INTEGER NOT NULL REFERENCES users(id),
+      from_username TEXT NOT NULL DEFAULT '',
+      type TEXT NOT NULL DEFAULT 'challenge',
+      challenge_id INTEGER REFERENCES challenges(id),
+      message TEXT DEFAULT '',
+      read INTEGER DEFAULT 0,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+
   // Netplay indexes
   try { await getClient().execute("CREATE INDEX IF NOT EXISTS idx_challenge_participants_challenge ON challenge_participants(challenge_id)"); } catch {}
   try { await getClient().execute("CREATE INDEX IF NOT EXISTS idx_challenge_participants_user ON challenge_participants(user_id)"); } catch {}
@@ -269,6 +284,8 @@ async function initializeSchema(): Promise<void> {
   try { await getClient().execute("CREATE INDEX IF NOT EXISTS idx_netplay_sessions_challenge ON netplay_sessions(challenge_id)"); } catch {}
   try { await getClient().execute("CREATE INDEX IF NOT EXISTS idx_netplay_signals_session ON netplay_signals(session_id, consumed)"); } catch {}
   try { await getClient().execute("CREATE INDEX IF NOT EXISTS idx_netplay_signals_to ON netplay_signals(to_user_id, consumed)"); } catch {}
+  try { await getClient().execute("CREATE INDEX IF NOT EXISTS idx_netplay_notifications_user ON netplay_notifications(user_id, read)"); } catch {}
+  try { await getClient().execute("CREATE INDEX IF NOT EXISTS idx_netplay_notifications_session ON netplay_notifications(session_id)"); } catch {}
 
   // Performance indexes — harmless if already exist (IF NOT EXISTS from SQLite 3.25+,
   // but Turso/libsql supports it; wrapped in try/catch for safety)
