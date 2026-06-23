@@ -139,6 +139,12 @@ export default async function HomePage() {
               {dict.common.faq}
             </a>
             <a
+              href="/play"
+              className="text-xs text-white/40 hover:text-white transition font-medium"
+            >
+              Play
+            </a>
+            <a
               href="/admin"
               className="text-xs text-white/40 hover:text-white transition font-medium"
             >

@@ -399,6 +399,28 @@ const en: Dictionary = {
       },
     ],
   },
+  play: {
+    title: "Retro Gaming",
+    selectRom: "Select a ROM",
+    loadRom: "Load Game",
+    pause: "Pause",
+    resume: "Resume",
+    reset: "Reset",
+    fps: "FPS",
+    volume: "Volume",
+    noRomLoaded: "No ROM loaded",
+    noRomDescription:
+      "Select a game from the dropdown above and click 'Load Game' to start playing.",
+    nowPlaying: "Now Playing",
+    controls: {
+      title: "Controls",
+      a: "X / Gamepad A",
+      b: "Z / Gamepad B",
+      start: "Enter / Gamepad Start",
+      select: "Right Shift / Gamepad Select",
+      dpad: "Arrow Keys / D-Pad",
+    },
+  },
   languageSwitcher: {
     switchToFr: "Switch to French",
     switchToEn: "Switch to English",

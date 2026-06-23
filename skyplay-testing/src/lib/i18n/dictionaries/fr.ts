@@ -401,6 +401,28 @@ const fr: Dictionary = {
       },
     ],
   },
+  play: {
+    title: "Jeux Rétro",
+    selectRom: "Choisir une ROM",
+    loadRom: "Lancer le jeu",
+    pause: "Pause",
+    resume: "Reprendre",
+    reset: "Reset",
+    fps: "FPS",
+    volume: "Volume",
+    noRomLoaded: "Aucune ROM chargée",
+    noRomDescription:
+      "Sélectionne un jeu dans la liste ci-dessus et clique sur 'Lancer le jeu' pour commencer à jouer.",
+    nowPlaying: "En cours",
+    controls: {
+      title: "Contrôles",
+      a: "X / Manette A",
+      b: "Z / Manette B",
+      start: "Entrée / Manette Start",
+      select: "Shift Droit / Manette Select",
+      dpad: "Flèches / D-Pad",
+    },
+  },
   languageSwitcher: {
     switchToFr: "Passer en français",
     switchToEn: "Switch to English",

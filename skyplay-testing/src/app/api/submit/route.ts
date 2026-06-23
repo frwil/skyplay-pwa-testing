@@ -66,13 +66,13 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Vérifier que la question existe et récupérer son step_id
+    // Vérifier que la question existe et récupérer son step_id + requires_screenshot
     const qRs = await db.execute({
-      sql: "SELECT id, step_id, reward_amount FROM questions WHERE id = ?",
+      sql: "SELECT id, step_id, reward_amount, requires_screenshot FROM questions WHERE id = ?",
       args: [questionId],
     });
     const question = qRs.rows[0] as unknown as
-      | { id: number; step_id: number; reward_amount: number }
+      | { id: number; step_id: number; reward_amount: number; requires_screenshot: number }
       | undefined;
 
     if (!question) {
@@ -101,11 +101,14 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // Auto-approve si la capture d'écran n'est pas obligatoire, sinon PENDING
+    const status = question.requires_screenshot === 0 ? "APPROVED" : "PENDING";
+
     // Insertion — screenshot is optional (store "" if not provided)
     const result = await db.execute({
       sql: `INSERT INTO submissions (user_id, step_id, question_id, answer_text, screenshot_base64, status)
-            VALUES (?, ?, ?, ?, ?, 'PENDING')`,
-      args: [userId, question.step_id, questionId, answerText.trim(), screenshot || ""],
+            VALUES (?, ?, ?, ?, ?, ?)`,
+      args: [userId, question.step_id, questionId, answerText.trim(), screenshot || "", status],
     });
 
     return NextResponse.json(
@@ -117,7 +120,7 @@ export async function POST(request: NextRequest) {
           questionId,
           stepId: question.step_id,
           reward: question.reward_amount,
-          status: "PENDING",
+          status,
         },
       },
       { status: 201 }

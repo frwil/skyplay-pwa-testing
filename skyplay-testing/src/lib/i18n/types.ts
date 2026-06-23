@@ -317,6 +317,27 @@ export interface Dictionary {
       answer: string;
     }>;
   };
+  play: {
+    title: string;
+    selectRom: string;
+    loadRom: string;
+    pause: string;
+    resume: string;
+    reset: string;
+    fps: string;
+    volume: string;
+    noRomLoaded: string;
+    noRomDescription: string;
+    nowPlaying: string;
+    controls: {
+      title: string;
+      a: string;
+      b: string;
+      start: string;
+      select: string;
+      dpad: string;
+    };
+  };
   languageSwitcher: {
     switchToFr: string;
     switchToEn: string;

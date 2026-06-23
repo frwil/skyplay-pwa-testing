@@ -316,7 +316,7 @@ export default function SubmissionForm({
       if (response.ok) {
         completedMap.set(activeQuestionId, {
           id: data.submission.id,
-          status: "PENDING",
+          status: data.submission.status,
         });
         setResult({
           type: "success",
