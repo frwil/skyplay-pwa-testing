@@ -104,6 +104,52 @@ export default function PlayPage() {
     }
   }, [selectedChallengeId, netplay.participationStatus]);
 
+  // ── Auto-load ROM when a challenge is selected ────────────────────
+
+  const autoLoadedRef = useRef<number | null>(null); // challengeId we auto-loaded for
+
+  useEffect(() => {
+    if (!participationChallenge) return;
+
+    const challenge = participationChallenge;
+    const alreadyLoaded =
+      emu.status === "running" &&
+      emu.currentRom &&
+      (emu.currentRom === challenge.romName ||
+        emu.currentRom.toLowerCase().includes(challenge.romName.toLowerCase()) ||
+        challenge.romName.toLowerCase().includes(emu.currentRom.toLowerCase()));
+
+    // Don't reload if already running the right ROM for this challenge
+    if (alreadyLoaded && autoLoadedRef.current === challenge.id) return;
+
+    console.log("[Netplay:Page] Challenge selected — auto-loading ROM:", challenge.romName, "system:", challenge.system, {
+      emuStatus: emu.status,
+      currentRom: emu.currentRom,
+    });
+
+    // Set the system to match the challenge
+    if (challenge.system !== system) {
+      setSystem(challenge.system as SystemType);
+    }
+
+    // Find matching ROM in the emulator's ROM list
+    const matchingRom = emu.romList.find(
+      (r) =>
+        r.system === challenge.system &&
+        (r.name === challenge.romName ||
+          r.name.toLowerCase().includes(challenge.romName.toLowerCase()) ||
+          challenge.romName.toLowerCase().includes(r.name.toLowerCase())),
+    );
+
+    if (matchingRom) {
+      console.log("[Netplay:Page] ✅ Found matching ROM:", matchingRom.name, "— loading...");
+      autoLoadedRef.current = challenge.id;
+      emu.loadRom(matchingRom);
+    } else {
+      console.warn("[Netplay:Page] ⚠️ No matching ROM found for:", challenge.romName);
+    }
+  }, [participationChallenge, emu.status, emu.currentRom, emu.romList, emu.loadRom, system, setSystem]);
+
   // ── Bind netplay deps to emulator when running NES ──────────────
 
   const depsBoundRef = useRef(false);
@@ -192,8 +238,17 @@ export default function PlayPage() {
   }, [netplay]);
 
   const handleStartMatchmaking = useCallback((_arg?: number) => {
+    // Guard: emulator must be running (NES) before matchmaking
+    if (emu.status !== "running") {
+      console.warn("[Netplay:Page] ⚠️ Cannot start matchmaking — emulator not running. Status:", emu.status);
+      // The error will be set by netplay.startMatchmaking → API returns "must participate"
+      // But we also need to check the ROM is loaded
+    }
+    if (emu.system !== "nes") {
+      console.warn("[Netplay:Page] ⚠️ Netplay only supports NES, current system:", emu.system);
+    }
     netplay.startMatchmaking();
-  }, [netplay]);
+  }, [netplay, emu.status, emu.system]);
 
   const handleCloseParticipation = useCallback(() => {
     setShowParticipation(false);
