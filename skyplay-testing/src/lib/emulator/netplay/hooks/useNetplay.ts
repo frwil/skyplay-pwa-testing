@@ -2,14 +2,20 @@
 
 import { useState, useCallback, useRef } from "react";
 import type { SessionConfig, NetplayStatus } from "../types";
+import type { SystemType } from "../../types";
 import { usePresence } from "./usePresence";
 import { useWebRTC } from "./useWebRTC";
 import type { NetplayEmulatorDeps } from "../NetplayManager";
+import type { InputDelayEmulatorDeps } from "../InputDelayManager";
+import type { NetplayManager } from "../NetplayManager";
+import type { InputDelayManager } from "../InputDelayManager";
 
 export type ParticipationStatus = "none" | "pending" | "participating" | "in_game";
 
 interface UseNetplayOptions {
   challengeId: number | null;
+  /** Target system — determines rollback (NES) vs input delay (non-NES). */
+  system: SystemType;
 }
 
 interface UseNetplayResult {
@@ -42,14 +48,14 @@ interface UseNetplayResult {
   }>;
 
   // Actions
-  /** Wire the netplay manager to emulator deps. */
-  bindEmulator: (deps: NetplayEmulatorDeps) => void;
+  /** Wire the netplay manager to emulator deps (rollback for NES, input delay for others). */
+  bindEmulator: (deps: NetplayEmulatorDeps | InputDelayEmulatorDeps) => void;
   /** Start WebRTC once session is matched. */
   startNetplay: () => Promise<void>;
   /** Full cleanup. */
   cleanup: () => void;
-  /** The NetplayManager instance (for wiring into emulator). */
-  manager: unknown;
+  /** The NetplayManager or InputDelayManager instance (for wiring into emulator). */
+  manager: NetplayManager | InputDelayManager | null;
 
   error: string | null;
 }
@@ -61,16 +67,20 @@ interface UseNetplayResult {
  * 2. Track presence of other participants
  * 3. Matchmaking: find/join a WAITING session
  * 4. WebRTC handshake → countdown → play
+ *
+ * Modes:
+ * - NES → rollback netplay (GGPO-style, requires toJSON/fromJSON)
+ * - SNES/GB/GBA/etc → input delay netplay (33ms delay, universal)
  */
-export function useNetplay({ challengeId }: UseNetplayOptions): UseNetplayResult {
+export function useNetplay({ challengeId, system }: UseNetplayOptions): UseNetplayResult {
   const [participationStatus, setParticipationStatus] = useState<ParticipationStatus>("none");
   const [isSearching, setIsSearching] = useState(false);
   const [session, setSession] = useState<SessionConfig | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   // Emulator deps, set by bindEmulator — state so it triggers re-renders
-  const [deps, setDeps] = useState<NetplayEmulatorDeps | null>(null);
-  const depsRef = useRef<NetplayEmulatorDeps | null>(null);
+  const [deps, setDeps] = useState<NetplayEmulatorDeps | InputDelayEmulatorDeps | null>(null);
+  const depsRef = useRef<NetplayEmulatorDeps | InputDelayEmulatorDeps | null>(null);
   const sessionIdRef = useRef<number | null>(null);
   const matchmakingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const mountedRef = useRef(true);
@@ -82,11 +92,12 @@ export function useNetplay({ challengeId }: UseNetplayOptions): UseNetplayResult
     enabled: participationStatus !== "none",
   });
 
-  // ── WebRTC (only created when session is set AND deps are available) ──
+  // ── WebRTC (only created when session is set) ───────────────────
 
   const webrtc = useWebRTC({
     session,
     deps,
+    system,
   });
 
   // ── Participate ─────────────────────────────────────────────────
@@ -173,6 +184,7 @@ export function useNetplay({ challengeId }: UseNetplayOptions): UseNetplayResult
     console.log("[Netplay:useNetplay] startMatchmaking() called", {
       challengeId,
       participationStatus,
+      system,
     });
     if (!challengeId || participationStatus === "none") {
       console.log("[Netplay:useNetplay] ❌ startMatchmaking: not participating");
@@ -274,17 +286,17 @@ export function useNetplay({ challengeId }: UseNetplayOptions): UseNetplayResult
       setError("Erreur réseau");
       setIsSearching(false);
     }
-  }, [challengeId, participationStatus]);
+  }, [challengeId, participationStatus, system]);
 
   // ── Emulator binding ────────────────────────────────────────────
 
-  const bindEmulator = useCallback((newDeps: NetplayEmulatorDeps) => {
-    console.log("[Netplay:useNetplay] bindEmulator() called — deps provided:", {
-      hasGetNes: typeof newDeps.getNes === "function",
-      hasStateBuffer: !!newDeps.stateBuffer,
-      hasInputBuffer: !!newDeps.inputBuffer,
-      hasMuteAudio: typeof newDeps.muteAudio === "function",
-      hasApplyInputs: typeof newDeps.applyInputs === "function",
+  const bindEmulator = useCallback((newDeps: NetplayEmulatorDeps | InputDelayEmulatorDeps) => {
+    const isRollback = "getNes" in newDeps;
+    console.log("[Netplay:useNetplay] bindEmulator() called", {
+      mode: isRollback ? "rollback (NES)" : "input delay (non-NES)",
+      hasGetNes: "getNes" in newDeps && typeof newDeps.getNes === "function",
+      hasApplyButton: "applyButton" in newDeps && typeof newDeps.applyButton === "function",
+      hasApplyInputs: "applyInputs" in newDeps && typeof (newDeps as NetplayEmulatorDeps).applyInputs === "function",
     });
     depsRef.current = newDeps;
     setDeps(newDeps);

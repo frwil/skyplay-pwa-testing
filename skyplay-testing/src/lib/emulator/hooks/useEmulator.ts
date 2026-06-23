@@ -19,6 +19,7 @@ import { useGamepad } from "./useGamepad";
 import { SnesEmulatorAdapter } from "../adapters/SnesAdapter";
 import { GbEmulatorAdapter } from "../adapters/GbAdapter";
 import { GbaEmulatorAdapter } from "../adapters/GbaAdapter";
+import { InputDelayManager } from "../netplay/InputDelayManager";
 
 // jsnes is a CommonJS module with no types — we declare the interface we need
 interface JsnesNes {
@@ -96,7 +97,13 @@ export function useEmulator(system: SystemType = "nes") {
     afterFrame: (frame: number) => void;
     getState: () => { status: string; latency: number; rollbacks: number };
   } | null>(null);
+  const inputDelayRef = useRef<InputDelayManager | null>(null);
   const isNetplayRef = useRef(false);
+
+  // Raw button apply — bypasses netplay routing, used by InputDelayManager
+  // to apply delayed remote inputs without infinite recursion
+  const rawButtonDownRef = useRef<(player: 1 | 2, button: number) => void>(() => {});
+  const rawButtonUpRef = useRef<(player: 1 | 2, button: number) => void>(() => {});
 
   // ─── Audio (NES only) ──────────────────────────────────────────
   const audio = useNesAudio();
@@ -106,7 +113,35 @@ export function useEmulator(system: SystemType = "nes") {
   const gpBitmaskRef = useRef<() => number>(() => 0);
 
   // ─── Button handlers ───────────────────────────────────────────
+  //
+  // Two layers:
+  // 1. "Raw" — direct emulator calls, used by InputDelayManager to apply
+  //    delayed remote inputs (must NOT go through netplay routing).
+  // 2. "Public" — used by keyboard/gamepad hooks; routes P1 through
+  //    InputDelayManager when netplay is active on non-NES systems.
+  rawButtonDownRef.current = (player: 1 | 2, button: number) => {
+    if (isNes) {
+      nesRef.current?.buttonDown(player, button);
+    } else {
+      adapterRef.current?.buttonDown(player, button);
+    }
+  };
+  rawButtonUpRef.current = (player: 1 | 2, button: number) => {
+    if (isNes) {
+      nesRef.current?.buttonUp(player, button);
+    } else {
+      adapterRef.current?.buttonUp(player, button);
+    }
+  };
   const buttonDown = useCallback((player: 1 | 2, button: number) => {
+    // Non-NES netplay: route P1 local inputs through InputDelayManager
+    // (applies locally immediately + sends to peer via DataChannel)
+    const idm = inputDelayRef.current;
+    if (idm && isNetplayRef.current && player === 1) {
+      idm.onLocalInput(1, button, true);
+      return;
+    }
+    // Normal path (solo, or P2 inputs from InputDelayManager via raw ref)
     if (isNes) {
       nesRef.current?.buttonDown(player, button);
     } else {
@@ -115,6 +150,11 @@ export function useEmulator(system: SystemType = "nes") {
   }, [isNes]);
 
   const buttonUp = useCallback((player: 1 | 2, button: number) => {
+    const idm = inputDelayRef.current;
+    if (idm && isNetplayRef.current && player === 1) {
+      idm.onLocalInput(1, button, false);
+      return;
+    }
     if (isNes) {
       nesRef.current?.buttonUp(player, button);
     } else {
@@ -532,10 +572,20 @@ export function useEmulator(system: SystemType = "nes") {
   const setNetplayManager = useCallback((manager: unknown) => {
     if (manager === null) {
       netplayManagerRef.current = null;
+      inputDelayRef.current = null;
       isNetplayRef.current = false;
-    } else {
-      netplayManagerRef.current = manager as typeof netplayManagerRef.current;
+    } else if (manager instanceof InputDelayManager) {
+      // Non-NES: wire input delay manager
+      inputDelayRef.current = manager;
+      netplayManagerRef.current = null;
       isNetplayRef.current = true;
+      console.log("[useEmulator] InputDelayManager wired — non-NES netplay active");
+    } else {
+      // NES: wire rollback manager
+      netplayManagerRef.current = manager as typeof netplayManagerRef.current;
+      inputDelayRef.current = null;
+      isNetplayRef.current = true;
+      console.log("[useEmulator] NetplayManager wired — NES rollback netplay active");
     }
   }, []);
 
@@ -572,6 +622,14 @@ export function useEmulator(system: SystemType = "nes") {
     muteAudio: isNes ? () => audio.mute() : () => {},
     unmuteAudio: isNes ? () => audio.unmute() : () => {},
     applyInputs,
+    /** Apply a button press/release bypassing netplay routing. Used by InputDelayManager. */
+    applyButton: (player: 1 | 2, button: number, pressed: boolean) => {
+      if (pressed) {
+        rawButtonDownRef.current(player, button);
+      } else {
+        rawButtonUpRef.current(player, button);
+      }
+    },
     readRam: () => {
       if (isNes) {
         try {

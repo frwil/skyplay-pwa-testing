@@ -97,6 +97,8 @@ export interface EmulatorState {
   unmuteAudio: () => void;
   /** Apply bulk button transitions for input correction during rollback. */
   applyInputs: (player: 1 | 2, bitmask: number, prevBitmask: number) => void;
+  /** Apply a single button press/release (bypasses netplay routing). Used by InputDelayManager. */
+  applyButton: (player: 1 | 2, button: number, pressed: boolean) => void;
 }
 
 // ─── Buffer Interfaces ─────────────────────────────────────────────

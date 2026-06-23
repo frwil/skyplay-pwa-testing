@@ -30,12 +30,29 @@ export interface NetplayStartMessage {
   startFrame: number;
 }
 
+/** Per-button input message for Input Delay netplay (non-frame-based). */
+export interface NetplayButtonMessage {
+  type: "button";
+  player: 1 | 2;
+  button: number;
+  pressed: boolean;
+  seq: number;
+}
+
 export type NetplayDataMessage =
   | NetplayInputMessage
   | NetplayPingMessage
   | NetplayPongMessage
   | NetplayReadyMessage
-  | NetplayStartMessage;
+  | NetplayStartMessage
+  | NetplayButtonMessage;
+
+// ─── Input Delay Constants ─────────────────────────────────────────
+
+/** Fixed input delay in ms (~2 frames at 60fps). */
+export const INPUT_DELAY_MS = 33;
+/** How often we flush the delayed input queue. */
+export const INPUT_DELAY_FLUSH_MS = 8; // ~120Hz, low jitter
 
 // ─── Session Configuration ──────────────────────────────────────────
 

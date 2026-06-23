@@ -1,14 +1,28 @@
 "use client";
 
+import { useState, useCallback, useEffect } from "react";
 import type { EmulatorState, SystemType } from "@/lib/emulator/types";
 import { SYSTEM_CONFIGS } from "@/lib/emulator/EmulatorAdapter";
 import { useTranslation } from "@/lib/i18n/TranslationContext";
-import { Gamepad2, Pause, RotateCcw } from "lucide-react";
+import { Gamepad2, Pause, RotateCcw, Maximize2, Minimize2, Info, Activity, Zap, Wifi } from "lucide-react";
 import GameControls from "./GameControls";
 import TouchControls from "./TouchControls";
 import AutoDetectBanner from "./AutoDetectBanner";
 import { useAutoDetect } from "@/lib/emulator/hooks/useAutoDetect";
 import type { DetectedResult } from "@/lib/emulator/memory-watcher";
+
+export interface NetplayInfoOverlay {
+  /** Current netplay status: idle/connecting/connected/countdown/playing/finished/error */
+  status?: string;
+  /** Round-trip latency in ms */
+  latency?: number;
+  /** Total rollback count (NES) or input delay mode indicator */
+  rollbacks?: number;
+  /** Connection type: "rollback" | "input_delay" | null */
+  mode?: "rollback" | "input_delay" | null;
+  /** Opponent name */
+  opponentName?: string | null;
+}
 
 interface EmulatorCoreProps {
   emu: EmulatorState;
@@ -16,16 +30,29 @@ interface EmulatorCoreProps {
   onSystemChange: (s: SystemType) => void;
   /** Called when memory watcher detects a result and user confirms */
   onAutoDetectConfirm?: (result: DetectedResult) => void;
+  /** Real-time netplay info for the overlay */
+  netplayInfo?: NetplayInfoOverlay;
+  /** Whether we're in a popup window (minimal UI). */
+  isPopup?: boolean;
+  /** Called when the user clicks "Open in Popup". */
+  onOpenPopup?: () => void;
 }
 
 /**
  * Main emulator display component.
  *
  * Renders the canvas, toolbar, touch overlay, placeholder states,
- * and landscape hint. Uses the exact same card/glow design patterns
- * as the rest of the app.
+ * landscape hint, fullscreen button, and real-time info overlay.
  */
-export default function EmulatorCore({ emu, system, onSystemChange, onAutoDetectConfirm }: EmulatorCoreProps) {
+export default function EmulatorCore({
+  emu,
+  system,
+  onSystemChange,
+  onAutoDetectConfirm,
+  netplayInfo,
+  isPopup,
+  onOpenPopup,
+}: EmulatorCoreProps) {
   const { t } = useTranslation();
   const cfg = SYSTEM_CONFIGS[system];
 
@@ -37,14 +64,73 @@ export default function EmulatorCore({ emu, system, onSystemChange, onAutoDetect
     emu.status === "running",
   );
 
+  // ─── Fullscreen ─────────────────────────────────────────
+  const [isFullscreen, setIsFullscreen] = useState(false);
+
+  const toggleFullscreen = useCallback(async () => {
+    try {
+      if (!document.fullscreenElement) {
+        // Find the canvas container and go fullscreen
+        const el = document.getElementById("emulator-canvas-container");
+        if (el) {
+          await el.requestFullscreen();
+        }
+      } else {
+        await document.exitFullscreen();
+      }
+    } catch (err) {
+      console.warn("[EmulatorCore] Fullscreen toggle failed:", err);
+    }
+  }, []);
+
+  // Listen for fullscreen changes (including Escape key exit)
+  useEffect(() => {
+    const handler = () => {
+      setIsFullscreen(!!document.fullscreenElement);
+    };
+    document.addEventListener("fullscreenchange", handler);
+    return () => document.removeEventListener("fullscreenchange", handler);
+  }, []);
+
+  // Keyboard shortcut: F = fullscreen, I = toggle info
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+      if (e.key === "f" || e.key === "F") {
+        e.preventDefault();
+        toggleFullscreen();
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [toggleFullscreen]);
+
+  // ─── Info Overlay ───────────────────────────────────────
+  const [showInfo, setShowInfo] = useState(true);
+
+  // Toggle info overlay with I key
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+      if (e.key === "i" || e.key === "I") {
+        e.preventDefault();
+        setShowInfo((prev) => !prev);
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, []);
+
   // Show the idle/loading/error overlay
   const showPlaceholder =
     emu.status === "idle" || emu.status === "loading" || emu.status === "error";
   const showTouchControls = emu.status === "running";
   const gameActive = emu.status === "running" || emu.status === "paused";
+  const isNetplayActive =
+    netplayInfo?.status === "playing" || netplayInfo?.status === "countdown";
 
   return (
-    <div className="w-full max-w-[800px] mx-auto">
+    <div className={isPopup ? "w-full mx-auto" : "w-full max-w-[960px] xl:max-w-[1100px] 2xl:max-w-[1200px] mx-auto"}>
       {/* ─── Toolbar ──────────────────────────────────────────── */}
       <GameControls
         romList={emu.romList}
@@ -60,6 +146,8 @@ export default function EmulatorCore({ emu, system, onSystemChange, onAutoDetect
         onResume={emu.resume}
         onReset={emu.reset}
         onVolumeChange={emu.setVolume}
+        onOpenPopup={onOpenPopup}
+        isPopup={isPopup}
       />
 
       {/* ─── Landscape Hint (mobile portrait) ────────────────── */}
@@ -83,18 +171,19 @@ export default function EmulatorCore({ emu, system, onSystemChange, onAutoDetect
 
       {/* ─── Canvas Container ────────────────────────────────── */}
       <div
-        className="relative rounded-3xl border overflow-hidden mx-auto"
+        id="emulator-canvas-container"
+        className="relative rounded-3xl border overflow-hidden mx-auto group/canvas"
         style={{
           backgroundColor: "rgba(13,27,46,0.85)",
-          borderColor:
-            gameActive
-              ? "rgba(0,200,255,0.25)"
-              : "rgba(255,255,255,0.08)",
-          boxShadow:
-            gameActive
-              ? "0 0 40px rgba(0,200,255,0.15), inset 0 0 40px rgba(0,200,255,0.03)"
-              : "0 0 20px rgba(0,0,0,0.3)",
-          aspectRatio: `${cfg.width} / ${cfg.height}`,
+          borderColor: gameActive
+            ? "rgba(0,200,255,0.25)"
+            : "rgba(255,255,255,0.08)",
+          boxShadow: gameActive
+            ? "0 0 40px rgba(0,200,255,0.15), inset 0 0 40px rgba(0,200,255,0.03)"
+            : "0 0 20px rgba(0,0,0,0.3)",
+          aspectRatio: isFullscreen ? undefined : `${cfg.width} / ${cfg.height}`,
+          width: isFullscreen ? "100vw" : undefined,
+          height: isFullscreen ? "100vh" : undefined,
         }}
       >
         {/* Canvas — hidden only during idle/loading/error */}
@@ -121,6 +210,101 @@ export default function EmulatorCore({ emu, system, onSystemChange, onAutoDetect
             display: gameActive ? "block" : "none",
           }}
         />
+
+        {/* ─── Fullscreen Button ───────────────────────────── */}
+        {gameActive && (
+          <button
+            onClick={toggleFullscreen}
+            className="absolute top-3 right-3 z-30 p-2 rounded-lg opacity-0 group-hover/canvas:opacity-100 transition-opacity hover:bg-white/10"
+            style={{ color: "rgba(255,255,255,0.5)" }}
+            title={isFullscreen ? "Exit fullscreen (F)" : "Fullscreen (F)"}
+          >
+            {isFullscreen ? (
+              <Minimize2 className="w-4 h-4" />
+            ) : (
+              <Maximize2 className="w-4 h-4" />
+            )}
+          </button>
+        )}
+
+        {/* ─── Info Overlay ────────────────────────────────── */}
+        {gameActive && showInfo && (
+          <div
+            className="absolute top-3 left-3 z-30 flex flex-col gap-1 pointer-events-none"
+            style={{ fontFamily: "monospace" }}
+          >
+            {/* FPS */}
+            <div
+              className="flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-[10px] font-bold"
+              style={{
+                backgroundColor: "rgba(0,0,0,0.6)",
+                backdropFilter: "blur(4px)",
+                color: emu.fps >= 55 ? "#4ade80" : emu.fps >= 30 ? "#ffd700" : "#fd2e5f",
+                border: "1px solid rgba(255,255,255,0.08)",
+              }}
+            >
+              <Activity className="w-2.5 h-2.5" />
+              {emu.fps} FPS
+            </div>
+
+            {/* System */}
+            <div
+              className="flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-[10px] font-bold"
+              style={{
+                backgroundColor: "rgba(0,0,0,0.6)",
+                backdropFilter: "blur(4px)",
+                color: "rgba(255,255,255,0.6)",
+                border: "1px solid rgba(255,255,255,0.08)",
+              }}
+            >
+              <Gamepad2 className="w-2.5 h-2.5" />
+              {system.toUpperCase()}
+            </div>
+
+            {/* Netplay status */}
+            {netplayInfo?.status && netplayInfo.status !== "idle" && (
+              <div
+                className="flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-[10px] font-bold"
+                style={{
+                  backgroundColor: "rgba(0,0,0,0.6)",
+                  backdropFilter: "blur(4px)",
+                  border: "1px solid rgba(255,255,255,0.08)",
+                  color:
+                    netplayInfo.status === "playing"
+                      ? "#4ade80"
+                      : netplayInfo.status === "error"
+                        ? "#fd2e5f"
+                        : "#ffd700",
+                }}
+              >
+                <Wifi className="w-2.5 h-2.5" />
+                {netplayInfo.mode === "input_delay" ? "InputDelay" : "Rollback"}
+                {netplayInfo.opponentName && ` vs ${netplayInfo.opponentName}`}
+              </div>
+            )}
+
+            {/* Latency */}
+            {netplayInfo?.latency != null && netplayInfo.latency > 0 && (
+              <div
+                className="flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-[10px] font-bold"
+                style={{
+                  backgroundColor: "rgba(0,0,0,0.6)",
+                  backdropFilter: "blur(4px)",
+                  color:
+                    netplayInfo.latency < 50
+                      ? "#4ade80"
+                      : netplayInfo.latency < 100
+                        ? "#ffd700"
+                        : "#fd2e5f",
+                  border: "1px solid rgba(255,255,255,0.08)",
+                }}
+              >
+                <Zap className="w-2.5 h-2.5" />
+                {netplayInfo.latency}ms
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Paused overlay */}
         {emu.status === "paused" && (
@@ -232,6 +416,16 @@ export default function EmulatorCore({ emu, system, onSystemChange, onAutoDetect
         )}
       </div>
 
+      {/* ─── Shortcut hint ───────────────────────────────── */}
+      {gameActive && !isFullscreen && (
+        <div className="mt-2 flex items-center justify-center">
+          <p className="text-[10px]" style={{ color: "rgba(255,255,255,0.15)" }}>
+            <kbd className="px-1 rounded text-[10px]" style={{ backgroundColor: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.06)" }}>F</kbd> fullscreen ·{" "}
+            <kbd className="px-1 rounded text-[10px]" style={{ backgroundColor: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.06)" }}>I</kbd> info overlay
+          </p>
+        </div>
+      )}
+
       {/* ─── Keyboard Controls Hint (per system) ────────────── */}
       {gameActive && (
         <div
@@ -265,6 +459,8 @@ export default function EmulatorCore({ emu, system, onSystemChange, onAutoDetect
                 <ControlKey label={t.play.controls.r} keys="S" />
               </>
             )}
+            <ControlKey label="Fullscreen" keys="F" />
+            <ControlKey label="Info" keys="I" />
           </div>
         </div>
       )}

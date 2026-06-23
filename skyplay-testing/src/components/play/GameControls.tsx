@@ -11,6 +11,7 @@ import {
   VolumeX,
   ChevronDown,
   Zap,
+  ExternalLink,
 } from "lucide-react";
 
 const SYSTEM_LIST: SystemType[] = ["nes", "snes", "gb", "gbc", "gba", "neogeo", "ps1"];
@@ -29,6 +30,10 @@ interface GameControlsProps {
   onResume: () => void;
   onReset: () => void;
   onVolumeChange: (v: number) => void;
+  /** Called when user clicks the "Open in Popup" button. */
+  onOpenPopup?: () => void;
+  /** Whether we're already in a popup window (hides the button). */
+  isPopup?: boolean;
 }
 
 export default function GameControls({
@@ -45,6 +50,8 @@ export default function GameControls({
   onResume,
   onReset,
   onVolumeChange,
+  onOpenPopup,
+  isPopup,
 }: GameControlsProps) {
   const { t } = useTranslation();
   const [selectedRom, setSelectedRom] = useState<string>("");
@@ -228,6 +235,22 @@ export default function GameControls({
       >
         {fps} {t.play.fps}
       </div>
+
+      {/* Popup Button (desktop only, hidden when already in popup) */}
+      {!isPopup && onOpenPopup && (
+        <button
+          onClick={onOpenPopup}
+          className="rounded-xl px-3 py-2 text-sm font-bold transition hidden md:flex items-center gap-1.5"
+          style={{
+            backgroundColor: "rgba(0,200,255,0.06)",
+            border: "1px solid rgba(0,200,255,0.15)",
+            color: "rgba(0,200,255,0.5)",
+          }}
+          title="Open emulator in a separate popup window"
+        >
+          <ExternalLink className="w-3.5 h-3.5" />
+        </button>
+      )}
     </div>
   );
 }

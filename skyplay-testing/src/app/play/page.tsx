@@ -12,6 +12,7 @@ import type { ChallengeInfo } from "@/components/play/ParticipationDialog";
 import { useEmulator } from "@/lib/emulator/hooks/useEmulator";
 import { useNetplay } from "@/lib/emulator/netplay/hooks/useNetplay";
 import type { NetplayEmulatorDeps } from "@/lib/emulator/netplay/NetplayManager";
+import type { InputDelayEmulatorDeps } from "@/lib/emulator/netplay/InputDelayManager";
 import { useTranslation } from "@/lib/i18n/TranslationContext";
 import { ArrowLeft, Gamepad2, User, LogOut } from "lucide-react";
 import type { SystemType } from "@/lib/emulator/types";
@@ -24,6 +25,33 @@ export default function PlayPage() {
     result: string;
     romName: string;
   } | null>(null);
+
+  // ── Popup mode detection ────────────────────────────────────────
+  const [isPopup, setIsPopup] = useState(false);
+
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const params = new URLSearchParams(window.location.search);
+      setIsPopup(params.get("popup") === "1");
+    }
+  }, []);
+
+  const handleOpenPopup = useCallback(() => {
+    const params = new URLSearchParams();
+    params.set("popup", "1");
+    params.set("system", system);
+    if (emu.currentRom) params.set("rom", emu.currentRom);
+    const url = `/play?${params.toString()}`;
+    const w = 1024;
+    const h = 768;
+    const left = Math.max(0, (screen.width - w) / 2);
+    const top = Math.max(0, (screen.height - h) / 2);
+    window.open(
+      url,
+      "skyplay-popup",
+      `width=${w},height=${h},left=${left},top=${top},menubar=no,toolbar=no,location=no,status=no`,
+    );
+  }, [system, emu.currentRom]);
 
   // ── Auth State ──────────────────────────────────────────────────
   const [currentUserId, setCurrentUserId] = useState<number | null>(null);
@@ -53,7 +81,7 @@ export default function PlayPage() {
   // ── Netplay ─────────────────────────────────────────────────────
   const [selectedChallengeId, setSelectedChallengeId] = useState<number | null>(null);
 
-  const netplay = useNetplay({ challengeId: selectedChallengeId });
+  const netplay = useNetplay({ challengeId: selectedChallengeId, system });
 
   // ── Participation Dialog ─────────────────────────────────────────
   const [participationChallenge, setParticipationChallenge] = useState<ChallengeInfo | null>(null);
@@ -118,9 +146,9 @@ export default function PlayPage() {
 
     const challenge = participationChallenge;
 
-    // Warn if not NES (netplay only works on NES)
+    // Log mode: NES = rollback, non-NES = input delay
     if (challenge.system !== "nes") {
-      console.warn("[Netplay:Page] ⚠️ Challenge system is", challenge.system, "— netplay only supports NES!");
+      console.log("[Netplay:Page] ℹ️ Challenge system is", challenge.system, "— will use Input Delay mode");
     }
 
     // Switch system first (will trigger re-render, then Step 2 loads ROM)
@@ -178,18 +206,21 @@ export default function PlayPage() {
     }
   }, [emu.system, emu.status, emu.currentRom, emu.romList, emu.loadRom, participationChallenge]);
 
-  // ── Bind netplay deps to emulator when running NES ──────────────
+  // ── Bind netplay deps to emulator when running ──────────────────
 
   const depsBoundRef = useRef(false);
 
   useEffect(() => {
-    if (
-      emu.status === "running" &&
-      emu.system === "nes" &&
-      emu.stateBuffer &&
-      emu.inputBuffer &&
-      !depsBoundRef.current
-    ) {
+    // Reset when emulator stops (so we re-bind on next ROM load)
+    if (emu.status !== "running") {
+      depsBoundRef.current = false;
+      return;
+    }
+
+    if (depsBoundRef.current) return;
+
+    if (emu.system === "nes" && emu.stateBuffer && emu.inputBuffer) {
+      // ── NES: Rollback deps ──────────────────────────────────
       const deps: NetplayEmulatorDeps = {
         getNes: emu.getNes,
         stateBuffer: emu.stateBuffer as NetplayEmulatorDeps["stateBuffer"],
@@ -198,7 +229,7 @@ export default function PlayPage() {
         unmuteAudio: emu.unmuteAudio,
         applyInputs: emu.applyInputs,
       };
-      console.log("[Netplay:Page] bindEmulator called — emulator running, NES ready", {
+      console.log("[Netplay:Page] bindEmulator called — NES rollback mode", {
         hasGetNes: typeof deps.getNes === "function",
         hasStateBuffer: !!deps.stateBuffer,
         hasInputBuffer: !!deps.inputBuffer,
@@ -207,11 +238,17 @@ export default function PlayPage() {
       });
       netplay.bindEmulator(deps);
       depsBoundRef.current = true;
-    }
-
-    // Reset when emulator stops (so we re-bind on next ROM load)
-    if (emu.status !== "running") {
-      depsBoundRef.current = false;
+    } else if (emu.system !== "nes") {
+      // ── Non-NES: Input Delay deps ───────────────────────────
+      const deps: InputDelayEmulatorDeps = {
+        applyButton: emu.applyButton,
+      };
+      console.log("[Netplay:Page] bindEmulator called — Input Delay mode", {
+        system: emu.system,
+        hasApplyButton: typeof deps.applyButton === "function",
+      });
+      netplay.bindEmulator(deps);
+      depsBoundRef.current = true;
     }
   }, [
     emu.status,
@@ -222,6 +259,7 @@ export default function PlayPage() {
     emu.muteAudio,
     emu.unmuteAudio,
     emu.applyInputs,
+    emu.applyButton,
     netplay.bindEmulator,
   ]);
 
@@ -266,24 +304,26 @@ export default function PlayPage() {
   }, [netplay]);
 
   const handleStartMatchmaking = useCallback((_arg?: number) => {
-    // Guard: emulator must be running (NES) before matchmaking
+    // Guard: emulator must be running before matchmaking
     if (emu.status !== "running") {
       console.warn("[Netplay:Page] ⚠️ Cannot start matchmaking — emulator not running. Status:", emu.status);
-      // The error will be set by netplay.startMatchmaking → API returns "must participate"
-      // But we also need to check the ROM is loaded
-    }
-    if (emu.system !== "nes") {
-      console.warn("[Netplay:Page] ⚠️ Netplay only supports NES, current system:", emu.system);
     }
     netplay.startMatchmaking();
-  }, [netplay, emu.status, emu.system]);
+  }, [netplay, emu.status]);
 
   const handleCloseParticipation = useCallback(() => {
     setShowParticipation(false);
     setSelectedChallengeId(null);
   }, []);
 
-  // ── Connection status state ──────────────────────────────────────
+  // ── Netplay info overlay data ───────────────────────────────────
+  const netplayInfo = {
+    status: netplay.netplayStatus,
+    latency: netplay.latency,
+    rollbacks: netplay.rollbacks,
+    mode: (emu.system === "nes" ? "rollback" : "input_delay") as "rollback" | "input_delay",
+    opponentName: netplay.session?.opponentName ?? null,
+  };
   const connectionStatus = {
     visible: netplay.netplayStatus === "playing" || netplay.netplayStatus === "connected",
     latency: netplay.latency,
@@ -303,10 +343,11 @@ export default function PlayPage() {
         visible={netplay.netplayStatus === "countdown"}
       />
 
-      {/* Connection Status Bar */}
-      <ConnectionStatus {...connectionStatus} />
+      {/* Connection Status Bar — hidden in popup mode */}
+      {!isPopup && <ConnectionStatus {...connectionStatus} />}
 
-      {/* Header */}
+      {/* Header — hidden in popup mode */}
+      {!isPopup && (
       <header
         className="relative z-10 border-b border-white/5 bg-[#070f1e]/80 backdrop-blur-sm"
       >
@@ -383,10 +424,12 @@ export default function PlayPage() {
           </div>
         </div>
       </header>
+      )}
 
-      {/* Content */}
-      <section className="relative z-10 max-w-4xl mx-auto px-4 py-8 pb-20">
-        {/* Page Title */}
+      {/* Content — full-width in popup mode */}
+      <section className={isPopup ? "relative z-10 w-full px-2 py-4" : "relative z-10 max-w-4xl mx-auto px-4 py-8 pb-20"}>
+        {/* Page Title — hidden in popup mode */}
+        {!isPopup && (
         <div className="text-center mb-8">
           <h1 className="text-3xl sm:text-4xl font-black text-white mb-3">
             {t.play.title}
@@ -397,6 +440,7 @@ export default function PlayPage() {
               : t.play.noRomDescription}
           </p>
         </div>
+        )}
 
         {/* Netplay Error */}
         {netplay.error && (
@@ -432,7 +476,8 @@ export default function PlayPage() {
           />
         )}
 
-        {/* Async Challenges */}
+        {/* Async Challenges — hidden in popup mode */}
+        {!isPopup && (
         <ChallengePanel
           currentSystem={system}
           onPlayChallenge={(s, rom) => {
@@ -450,6 +495,7 @@ export default function PlayPage() {
           onCancelMatchmaking={netplay.cancelMatchmaking}
           onSelectChallenge={handleSelectChallenge}
         />
+        )}
 
         {/* Emulator */}
         <EmulatorCore
@@ -462,15 +508,20 @@ export default function PlayPage() {
               romName: detected.profile.romName,
             });
           }}
+          netplayInfo={netplayInfo}
+          isPopup={isPopup}
+          onOpenPopup={handleOpenPopup}
         />
       </section>
 
-      {/* Footer */}
+      {/* Footer — hidden in popup mode */}
+      {!isPopup && (
       <footer className="relative z-10 border-t border-white/5 py-6 px-4 text-center">
         <p className="text-xs text-white/20">
           {t.common.footer}
         </p>
       </footer>
+      )}
     </main>
   );
 }
