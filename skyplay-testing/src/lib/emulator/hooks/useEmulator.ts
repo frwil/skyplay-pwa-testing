@@ -242,6 +242,16 @@ export function useEmulator() {
     }
   }, []);
 
+  // ─── Stable refs for audio values used in loadRom ──────────────
+  const audioInitRef = useRef(audio.init);
+  audioInitRef.current = audio.init;
+  const audioResumeRef = useRef(audio.resume);
+  audioResumeRef.current = audio.resume;
+  const audioEnqueueRef = useRef(audio.enqueueSample);
+  audioEnqueueRef.current = audio.enqueueSample;
+  const audioCtxRef_ = useRef(audio.audioContext);
+  audioCtxRef_.current = audio.audioContext;
+
   // ─── Load ROM ──────────────────────────────────────────────────
   const loadRom = useCallback(
     async (rom: RomEntry) => {
@@ -254,10 +264,10 @@ export function useEmulator() {
         const JsnesClass = await loadJsnes();
         console.log("[useEmulator] jsnes loaded:", !!JsnesClass);
 
-        // Initialize audio on user gesture
-        audio.init();
-        await audio.resume();
-        console.log("[useEmulator] Audio initialized, ctx state:", audio.audioContext.current?.state);
+        // Initialize audio on user gesture (via stable refs)
+        audioInitRef.current();
+        await audioResumeRef.current();
+        console.log("[useEmulator] Audio initialized, ctx state:", audioCtxRef_.current.current?.state);
 
         // Destroy previous instance
         if (nesRef.current) {
@@ -280,7 +290,7 @@ export function useEmulator() {
         // Create NES instance
         const nes = new JsnesClass({
           onFrame: renderFrame,
-          onAudioSample: audio.enqueueSample,
+          onAudioSample: audioEnqueueRef.current,
           emulateSound: true,
           sampleRate: 48000,
         });
@@ -314,7 +324,7 @@ export function useEmulator() {
         setStatus("error");
       }
     },
-    [audio, gameLoop, initCanvas, renderFrame],
+    [gameLoop, initCanvas, renderFrame], // stable — audio accessed via refs
   );
 
   // ─── Pause / Resume ────────────────────────────────────────────
@@ -354,6 +364,10 @@ export function useEmulator() {
       .catch(() => setRomList([]));
   }, []);
 
+  // ─── Stable refs for values that change identity each render ───
+  const audioDestroyRef = useRef(audio.destroy);
+  audioDestroyRef.current = audio.destroy;
+
   // ─── Cleanup on unmount ────────────────────────────────────────
   useEffect(() => {
     return () => {
@@ -361,10 +375,10 @@ export function useEmulator() {
       if (rafIdRef.current) {
         cancelAnimationFrame(rafIdRef.current);
       }
-      audio.destroy();
+      audioDestroyRef.current();
       nesRef.current = null;
     };
-  }, [audio]);
+  }, []); // Only on unmount — audio destroy is accessed via ref
 
   // ─── Volume wrapper ────────────────────────────────────────────
   const setVolume = useCallback(
