@@ -26,7 +26,7 @@ export default function EmulatorCore({ emu }: EmulatorCoreProps) {
   const showTouchControls = emu.status === "running";
 
   return (
-    <div className="w-full max-w-[640px] mx-auto">
+    <div className="w-full max-w-[800px] mx-auto">
       {/* ─── Toolbar ──────────────────────────────────────────── */}
       <GameControls
         romList={emu.romList}
