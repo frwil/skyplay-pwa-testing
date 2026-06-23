@@ -17,6 +17,9 @@ import type { InputBuffer } from "../buffers/InputBuffer";
  * The NetplayManager needs access to the emulator internals
  * to perform rollbacks and read/write inputs.
  */
+/** Button index for the Start button (same across NES/SNES/GB/GBA: index 3). */
+const START_BUTTON_INDEX = 3;
+
 export interface NetplayEmulatorDeps {
   /** Reference to the jsnes instance. */
   getNes: () => {
@@ -36,6 +39,8 @@ export interface NetplayEmulatorDeps {
    * Uses edge-detection: only calls buttonDown/buttonUp on changes.
    */
   applyInputs: (player: 1 | 2, bitmask: number, prevBitmask: number) => void;
+  /** Apply a single button press/release directly to the emulator (bypasses netplay). */
+  applyButton: (player: 1 | 2, button: number, pressed: boolean) => void;
 }
 
 export type StateCallback = (state: NetplayState) => void;
@@ -259,6 +264,23 @@ export class NetplayManager {
         // Both sides start on the same frame number
         this.rtc.send({ type: "start", startFrame: 0 });
         this.setState("playing");
+
+        // ── Simulate Start button press for both players ──────────
+        // After a short delay, press and release Start so the game
+        // advances past the title screen on both emulators.
+        // We use applyButton (raw ref, bypasses rollback routing) so
+        // both peers press locally in sync with the countdown end.
+        setTimeout(() => {
+          console.log("[Netplay:Manager] 🎮 Simulating Start press for both players");
+          this.deps.applyButton(1, START_BUTTON_INDEX, true);
+          this.deps.applyButton(2, START_BUTTON_INDEX, true);
+
+          setTimeout(() => {
+            this.deps.applyButton(1, START_BUTTON_INDEX, false);
+            this.deps.applyButton(2, START_BUTTON_INDEX, false);
+            console.log("[Netplay:Manager] 🎮 Start button released");
+          }, 200);
+        }, 150);
       }
     }, 1000);
   }

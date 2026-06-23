@@ -95,11 +95,15 @@ export default function PlayPage() {
 
   // When P2 accepts a challenge via notification dialog
   const handleAcceptChallenge = useCallback(async (sessionId: number) => {
-    setSelectedChallengeId(challengeNotifs.pendingChallenge?.challengeId ?? null);
+    const challengeId = challengeNotifs.pendingChallenge?.challengeId;
+    if (!challengeId) return;
+
+    setSelectedChallengeId(challengeId);
     const result = await challengeNotifs.acceptChallenge(sessionId);
     if (result) {
-      // Session is now MATCHED — call startMatchmaking to join it.
-      // The POST handler will find the MATCHED session where we're player2.
+      // Session is now MATCHED — find and join it.
+      // POST /api/netplay/session returns the existing MATCHED session
+      // where we're player2 (with ORDER BY DESC for correctness).
       netplay.startMatchmaking();
     }
   }, [challengeNotifs, netplay]);
@@ -253,6 +257,7 @@ export default function PlayPage() {
         muteAudio: emu.muteAudio,
         unmuteAudio: emu.unmuteAudio,
         applyInputs: emu.applyInputs,
+        applyButton: emu.applyButton,
       };
       console.log("[Netplay:Page] bindEmulator called — NES rollback mode", {
         hasGetNes: typeof deps.getNes === "function",

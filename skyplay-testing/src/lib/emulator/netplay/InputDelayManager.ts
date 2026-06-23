@@ -10,6 +10,9 @@ import {
 } from "./types";
 import { WebRTCConnection } from "./WebRTCConnection";
 
+/** Button index for the Start button (index 3 for NES/SNES/GB/GBC/GBA). */
+const START_BUTTON_INDEX = 3;
+
 export type StateCallback = (state: NetplayState) => void;
 export type CountdownCallback = (remaining: number) => void;
 
@@ -216,6 +219,23 @@ export class InputDelayManager {
 
         // Start processing the delayed input queue
         this.startFlush();
+
+        // ── Simulate Start button press for both players ──────────
+        // After a short delay, press and release Start so the game
+        // advances past the title screen on both emulators.
+        // We use the raw button refs (bypassing netplay routing) so
+        // both peers press locally in sync with the countdown end.
+        setTimeout(() => {
+          console.log("[InputDelay:Manager] 🎮 Simulating Start press for both players");
+          this.applyButton?.(1, START_BUTTON_INDEX, true);
+          this.applyButton?.(2, START_BUTTON_INDEX, true);
+
+          setTimeout(() => {
+            this.applyButton?.(1, START_BUTTON_INDEX, false);
+            this.applyButton?.(2, START_BUTTON_INDEX, false);
+            console.log("[InputDelay:Manager] 🎮 Start button released");
+          }, 200);
+        }, 150);
       }
     }, 1000);
   }

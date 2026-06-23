@@ -113,6 +113,7 @@ export async function POST(request: NextRequest) {
             JOIN users u ON ns.player1_id = u.id
             WHERE ns.challenge_id = ? AND ns.player2_id = ?
               AND ns.status IN ('MATCHED', 'TARGETED')
+            ORDER BY ns.id DESC
             LIMIT 1`,
       args: [challengeId, auth.userId],
     });

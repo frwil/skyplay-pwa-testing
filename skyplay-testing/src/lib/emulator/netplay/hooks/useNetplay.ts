@@ -201,6 +201,12 @@ export function useNetplay({ challengeId, system }: UseNetplayOptions): UseNetpl
       return;
     }
 
+    // Guard: don't start a new matchmaking if already in a game
+    if (participationStatus === "in_game") {
+      console.log("[Netplay:useNetplay] ⚠️ Already in_game — ignoring duplicate startMatchmaking");
+      return;
+    }
+
     setError(null);
     setDisconnectResult(null);
     setIsSearching(true);
