@@ -292,6 +292,8 @@ export default function PlayPage() {
             participants={netplay.participants}
             onStartMatchmaking={handleStartMatchmaking}
             isSearching={netplay.isSearching}
+            error={netplay.error}
+            onClearError={() => {}} // error is cleared by next netplay action
           />
         )}
 

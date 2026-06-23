@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { X, Trophy, Clock, Users, Coins, CheckCircle2, Loader2, Circle } from "lucide-react";
+import { X, Trophy, Clock, Users, Coins, CheckCircle2, Loader2, Circle, AlertTriangle } from "lucide-react";
 import AuthInlineForm from "./AuthInlineForm";
 import type { Participant } from "@/lib/emulator/netplay/hooks/usePresence";
 
@@ -34,6 +34,10 @@ interface ParticipationDialogProps {
   // Matchmaking
   onStartMatchmaking: (opponentId?: number) => void;
   isSearching: boolean;
+  /** Error message to display inside the dialog (e.g., auth/netplay errors) */
+  error?: string | null;
+  /** Called to clear the error */
+  onClearError?: () => void;
 }
 
 /**
@@ -57,6 +61,8 @@ export default function ParticipationDialog({
   participants,
   onStartMatchmaking,
   isSearching,
+  error,
+  onClearError,
 }: ParticipationDialogProps) {
   const [selectedOpponent, setSelectedOpponent] = useState<number | null>(null);
 
@@ -111,6 +117,19 @@ export default function ParticipationDialog({
           <span className="flex items-center gap-1"><Users className="w-3 h-3" />{participants.length}</span>
           <span className="flex items-center gap-1" style={{ color: "#ffd700" }}><Coins className="w-3 h-3" />{challenge.reward} Sky</span>
         </div>
+
+        {/* Error display */}
+        {error && (
+          <div className="flex items-start gap-2 rounded-xl px-3 py-2.5 mb-4" style={{ backgroundColor: "rgba(253,46,95,0.08)", border: "1px solid rgba(253,46,95,0.2)" }}>
+            <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" style={{ color: "#fd2e5f" }} />
+            <p className="text-xs font-medium" style={{ color: "#fd2e5f" }}>{error}</p>
+            {onClearError && (
+              <button onClick={onClearError} className="ml-auto shrink-0 p-0.5 rounded" style={{ color: "rgba(255,255,255,0.3)" }}>
+                <X className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
+        )}
 
         {/* Auth section */}
         {!currentUserId && (

@@ -57,6 +57,7 @@ export class SignalingClient {
           type,
           payload,
         }),
+        credentials: "include",
       });
 
       if (!res.ok) {
@@ -86,6 +87,7 @@ export class SignalingClient {
     try {
       const res = await fetch(
         `/api/netplay/signal?sessionId=${this.sessionId}&since=${this.lastSignalId}`,
+        { credentials: "include" },
       );
 
       if (res.status === 401 || res.status === 403) {

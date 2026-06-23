@@ -97,6 +97,7 @@ export function useNetplay({ challengeId }: UseNetplayOptions): UseNetplayResult
     try {
       const res = await fetch(`/api/challenges/${challengeId}/participate`, {
         method: "POST",
+        credentials: "include",
       });
 
       if (!res.ok) {
@@ -123,6 +124,7 @@ export function useNetplay({ challengeId }: UseNetplayOptions): UseNetplayResult
     try {
       await fetch(`/api/challenges/${challengeId}/participate`, {
         method: "DELETE",
+        credentials: "include",
       });
     } catch {
       // Best effort
@@ -149,6 +151,7 @@ export function useNetplay({ challengeId }: UseNetplayOptions): UseNetplayResult
           method: "DELETE",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ sessionId: sessionIdRef.current }),
+          credentials: "include",
         });
       } catch {
         // Best effort
@@ -174,6 +177,7 @@ export function useNetplay({ challengeId }: UseNetplayOptions): UseNetplayResult
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ challengeId }),
+        credentials: "include",
       });
 
       if (!res.ok) {
@@ -217,6 +221,7 @@ export function useNetplay({ challengeId }: UseNetplayOptions): UseNetplayResult
         try {
           const pollRes = await fetch(
             `/api/netplay/session?id=${sessionIdRef.current}`,
+            { credentials: "include" },
           );
           if (!pollRes.ok) return;
 

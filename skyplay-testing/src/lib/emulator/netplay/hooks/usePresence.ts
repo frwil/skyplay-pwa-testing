@@ -52,7 +52,7 @@ export function usePresence({
     if (!challengeId) return;
 
     try {
-      const res = await fetch(`/api/challenges/${challengeId}/participants`);
+      const res = await fetch(`/api/challenges/${challengeId}/participants`, { credentials: "include" });
       if (!res.ok) return;
       const data = await res.json();
       if (mountedRef.current) {
@@ -73,6 +73,7 @@ export function usePresence({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ challengeId, isOnline: online }),
+        credentials: "include",
       });
     } catch {
       // Retry next interval
