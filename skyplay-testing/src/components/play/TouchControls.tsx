@@ -17,14 +17,12 @@ interface TouchControlsProps {
   visible: boolean;
 }
 
-/** Touch event handlers object returned by makeHandler. */
 interface TouchHandlers {
   onTouchStart: (e: React.TouchEvent) => void;
   onTouchEnd: (e: React.TouchEvent) => void;
   onTouchCancel: (e: React.TouchEvent) => void;
 }
 
-/** Props passed to layout sub-components. */
 interface TouchLayoutProps {
   handlers: (id: string) => TouchHandlers;
   system: SystemType;
@@ -33,9 +31,9 @@ interface TouchLayoutProps {
 /**
  * Touch overlay controls for mobile play.
  *
- * Renders per-system layouts using button indices from
- * SYSTEM_CONFIGS so the correct emulator input is sent.
- * Visible only on touch devices (hidden on desktop via CSS).
+ * Renders per-system layouts. Uses smaller tap targets and
+ * responsive spacing so buttons don't overlap on any screen size.
+ * Hidden on non-touch devices via `md:hidden`.
  */
 export default function TouchControls({
   onButtonDown,
@@ -68,21 +66,31 @@ export default function TouchControls({
     [onButtonDown, onButtonUp],
   );
 
-  // Memoize per-button handlers so sub-components don't re-render
   const handlers = useCallback(
     (id: string): TouchHandlers =>
       makeHandler(getButton(system, id)?.index ?? -1),
     [makeHandler, system],
   );
 
+  const isSnesLike = system === "snes" || system === "gba";
+
   return (
     <div
       className="absolute inset-0 pointer-events-none z-20 md:hidden"
       style={{ touchAction: "none" }}
     >
-      <Dpad handlers={handlers} system={system} />
-      <StartSelect handlers={handlers} system={system} />
-      <FaceButtons handlers={handlers} system={system} />
+      {/* ── D-Pad (bottom-left) ─────────────────────────────── */}
+      <Dpad handlers={handlers} />
+
+      {/* ── Start / Select (bottom-center) ──────────────────── */}
+      <StartSelect handlers={handlers} />
+
+      {/* ── Face Buttons (bottom-right) ─────────────────────── */}
+      {isSnesLike ? (
+        <SnesFaceButtons handlers={handlers} />
+      ) : (
+        <NesFaceButtons handlers={handlers} system={system} />
+      )}
     </div>
   );
 }
@@ -90,54 +98,59 @@ export default function TouchControls({
 /* ─── Shared Styles ─────────────────────────────────────────────── */
 
 const btnBase: React.CSSProperties = {
-  backgroundColor: "rgba(255,255,255,0.06)",
-  border: "1px solid rgba(255,255,255,0.12)",
-  color: "rgba(255,255,255,0.5)",
-  backdropFilter: "blur(8px)",
-  WebkitBackdropFilter: "blur(8px)",
+  backgroundColor: "rgba(255,255,255,0.08)",
+  border: "1px solid rgba(255,255,255,0.15)",
+  color: "rgba(255,255,255,0.6)",
+  backdropFilter: "blur(6px)",
+  WebkitBackdropFilter: "blur(6px)",
   userSelect: "none",
   touchAction: "none",
+  WebkitTapHighlightColor: "transparent",
 };
 
-/* ─── D-Pad ─────────────────────────────────────────────────────── */
+/* ─── D-Pad (3×3 grid, 40px cells) ──────────────────────────────── */
 
-function Dpad({ handlers, system }: TouchLayoutProps) {
+function Dpad({ handlers }: Omit<TouchLayoutProps, "system">) {
   return (
     <div
-      className="absolute bottom-6 left-6 pointer-events-auto grid gap-0.5"
+      className="absolute left-2 bottom-2 pointer-events-auto grid gap-[2px]"
       style={{
-        gridTemplateColumns: "48px 48px 48px",
-        gridTemplateRows: "48px 48px 48px",
+        gridTemplateColumns: "38px 38px 38px",
+        gridTemplateRows: "38px 38px 38px",
       }}
     >
       <button
         {...handlers("UP")}
-        className="rounded-t-xl flex items-center justify-center active:opacity-60"
+        className="rounded-t-lg flex items-center justify-center active:opacity-50"
         style={{ ...btnBase, gridColumn: "2", gridRow: "1" }}
+        aria-label="Up"
       >
-        <ChevronUp className="w-5 h-5" />
+        <ChevronUp className="w-4 h-4" />
       </button>
       <button
         {...handlers("LEFT")}
-        className="rounded-l-xl flex items-center justify-center active:opacity-60"
+        className="rounded-l-lg flex items-center justify-center active:opacity-50"
         style={{ ...btnBase, gridColumn: "1", gridRow: "2" }}
+        aria-label="Left"
       >
-        <ChevronLeft className="w-5 h-5" />
+        <ChevronLeft className="w-4 h-4" />
       </button>
       <div style={{ gridColumn: "2", gridRow: "2" }} />
       <button
         {...handlers("RIGHT")}
-        className="rounded-r-xl flex items-center justify-center active:opacity-60"
+        className="rounded-r-lg flex items-center justify-center active:opacity-50"
         style={{ ...btnBase, gridColumn: "3", gridRow: "2" }}
+        aria-label="Right"
       >
-        <ChevronRight className="w-5 h-5" />
+        <ChevronRight className="w-4 h-4" />
       </button>
       <button
         {...handlers("DOWN")}
-        className="rounded-b-xl flex items-center justify-center active:opacity-60"
+        className="rounded-b-lg flex items-center justify-center active:opacity-50"
         style={{ ...btnBase, gridColumn: "2", gridRow: "3" }}
+        aria-label="Down"
       >
-        <ChevronDown className="w-5 h-5" />
+        <ChevronDown className="w-4 h-4" />
       </button>
     </div>
   );
@@ -145,19 +158,19 @@ function Dpad({ handlers, system }: TouchLayoutProps) {
 
 /* ─── Start / Select ────────────────────────────────────────────── */
 
-function StartSelect({ handlers, system }: TouchLayoutProps) {
+function StartSelect({ handlers }: Omit<TouchLayoutProps, "system">) {
   return (
-    <div className="absolute bottom-8 left-1/2 -translate-x-1/2 pointer-events-auto flex gap-3">
+    <div className="absolute left-1/2 -translate-x-1/2 bottom-2 pointer-events-auto flex gap-2">
       <button
         {...handlers("SELECT")}
-        className="rounded-lg px-3 py-1.5 text-[10px] font-bold tracking-wider uppercase active:opacity-60"
+        className="rounded-md px-2.5 py-1 text-[9px] font-bold tracking-wider uppercase active:opacity-50"
         style={btnBase}
       >
-        Select
+        Sel
       </button>
       <button
         {...handlers("START")}
-        className="rounded-lg px-3 py-1.5 text-[10px] font-bold tracking-wider uppercase active:opacity-60"
+        className="rounded-md px-2.5 py-1 text-[9px] font-bold tracking-wider uppercase active:opacity-50"
         style={btnBase}
       >
         Start
@@ -166,34 +179,28 @@ function StartSelect({ handlers, system }: TouchLayoutProps) {
   );
 }
 
-/* ─── Face Buttons — NES / GB / GBC ─────────────────────────────── */
+/* ─── NES / GB / GBC Face Buttons ────────────────────────────────── */
 
-function FaceButtons({ handlers, system }: TouchLayoutProps) {
-  const isSnesLike = system === "snes" || system === "gba";
-
-  if (isSnesLike) {
-    return <SnesFaceButtons handlers={handlers} system={system} />;
-  }
-
+function NesFaceButtons({ handlers, system }: TouchLayoutProps) {
   const isGb = system === "gb" || system === "gbc";
-  const bColor = isGb ? "rgba(138,43,226,0.4)" : "rgba(253,46,95,0.4)";
-  const bTextColor = isGb ? "rgba(138,43,226,0.7)" : "rgba(253,46,95,0.7)";
-  const aColor = isGb ? "rgba(220,20,60,0.4)" : "rgba(0,200,255,0.4)";
-  const aTextColor = isGb ? "rgba(220,20,60,0.7)" : "rgba(0,200,255,0.7)";
+  const bBorder = isGb ? "rgba(138,43,226,0.5)" : "rgba(253,46,95,0.5)";
+  const bColor = isGb ? "rgba(138,43,226,0.8)" : "rgba(253,46,95,0.8)";
+  const aBorder = isGb ? "rgba(220,20,60,0.5)" : "rgba(0,200,255,0.5)";
+  const aColor = isGb ? "rgba(220,20,60,0.8)" : "rgba(0,200,255,0.8)";
 
   return (
-    <div className="absolute bottom-8 right-6 pointer-events-auto flex items-center gap-2">
+    <div className="absolute right-2 bottom-2 pointer-events-auto flex items-center gap-1.5">
       <button
         {...handlers("B")}
-        className="rounded-full w-14 h-14 flex items-center justify-center text-sm font-black active:opacity-60"
-        style={{ ...btnBase, borderColor: bColor, color: bTextColor }}
+        className="rounded-full w-11 h-11 flex items-center justify-center text-xs font-black active:opacity-50"
+        style={{ ...btnBase, borderColor: bBorder, color: bColor }}
       >
         B
       </button>
       <button
         {...handlers("A")}
-        className="rounded-full w-14 h-14 flex items-center justify-center text-sm font-black active:opacity-60"
-        style={{ ...btnBase, borderColor: aColor, color: aTextColor }}
+        className="rounded-full w-11 h-11 flex items-center justify-center text-xs font-black active:opacity-50"
+        style={{ ...btnBase, borderColor: aBorder, color: aColor }}
       >
         A
       </button>
@@ -201,99 +208,86 @@ function FaceButtons({ handlers, system }: TouchLayoutProps) {
   );
 }
 
-/* ─── Face Buttons — SNES / GBA ─────────────────────────────────── */
+/* ─── SNES / GBA Face Buttons ───────────────────────────────────── */
 
-function SnesFaceButtons({ handlers, system }: TouchLayoutProps) {
+function SnesFaceButtons({ handlers }: Omit<TouchLayoutProps, "system">) {
   return (
-    <div className="absolute right-4 bottom-4 pointer-events-auto flex flex-col items-end gap-2">
+    <div className="absolute right-1 bottom-1 pointer-events-auto flex flex-col items-end gap-1.5">
       {/* L / R shoulder buttons */}
-      <div className="flex gap-2 mb-1">
+      <div className="flex gap-1.5">
         <button
           {...handlers("L")}
-          className="rounded-lg px-4 py-1.5 text-[10px] font-black tracking-wider uppercase active:opacity-60"
+          className="rounded-md px-3 py-1 text-[9px] font-black tracking-wider uppercase active:opacity-50"
           style={{
             ...btnBase,
-            borderColor: "rgba(128,128,128,0.5)",
-            color: "rgba(200,200,200,0.7)",
+            borderColor: "rgba(160,160,160,0.5)",
+            color: "rgba(220,220,220,0.8)",
           }}
         >
           L
         </button>
         <button
           {...handlers("R")}
-          className="rounded-lg px-4 py-1.5 text-[10px] font-black tracking-wider uppercase active:opacity-60"
+          className="rounded-md px-3 py-1 text-[9px] font-black tracking-wider uppercase active:opacity-50"
           style={{
             ...btnBase,
-            borderColor: "rgba(128,128,128,0.5)",
-            color: "rgba(200,200,200,0.7)",
+            borderColor: "rgba(160,160,160,0.5)",
+            color: "rgba(220,220,220,0.8)",
           }}
         >
           R
         </button>
       </div>
 
-      {/* X/Y/A/B diamond (3×3 grid) */}
+      {/* X/Y/A/B diamond */}
       <div
-        className="grid gap-1"
+        className="grid gap-[2px]"
         style={{
-          gridTemplateColumns: "44px 44px 44px",
-          gridTemplateRows: "44px 44px 44px",
+          gridTemplateColumns: "36px 36px 36px",
+          gridTemplateRows: "36px 36px 36px",
         }}
       >
-        {/* X — top center */}
         <button
           {...handlers("X")}
-          className="rounded-full flex items-center justify-center text-xs font-black active:opacity-60"
+          className="rounded-full flex items-center justify-center text-[10px] font-black active:opacity-50"
           style={{
             ...btnBase,
-            gridColumn: "2",
-            gridRow: "1",
-            borderColor: "rgba(0,180,255,0.4)",
-            color: "rgba(0,180,255,0.7)",
+            gridColumn: "2", gridRow: "1",
+            borderColor: "rgba(0,180,255,0.5)", color: "rgba(0,180,255,0.8)",
           }}
         >
           X
         </button>
-        {/* Y — middle left */}
         <button
           {...handlers("Y")}
-          className="rounded-full flex items-center justify-center text-xs font-black active:opacity-60"
+          className="rounded-full flex items-center justify-center text-[10px] font-black active:opacity-50"
           style={{
             ...btnBase,
-            gridColumn: "1",
-            gridRow: "2",
-            borderColor: "rgba(255,200,0,0.4)",
-            color: "rgba(255,200,0,0.7)",
+            gridColumn: "1", gridRow: "2",
+            borderColor: "rgba(255,200,0,0.5)", color: "rgba(255,200,0,0.8)",
           }}
         >
           Y
         </button>
-        {/* center spacer */}
         <div style={{ gridColumn: "2", gridRow: "2" }} />
-        {/* A — middle right */}
         <button
           {...handlers("A")}
-          className="rounded-full flex items-center justify-center text-xs font-black active:opacity-60"
+          className="rounded-full flex items-center justify-center text-[10px] font-black active:opacity-50"
           style={{
             ...btnBase,
-            gridColumn: "3",
-            gridRow: "2",
-            borderColor: "rgba(0,200,255,0.4)",
-            color: "rgba(0,200,255,0.7)",
+            gridColumn: "3", gridRow: "2",
+            borderColor: "rgba(0,200,255,0.5)", color: "rgba(0,200,255,0.8)",
           }}
         >
           A
         </button>
-        {/* B — bottom center */}
         <button
           {...handlers("B")}
-          className="rounded-full flex items-center justify-center text-xs font-black active:opacity-60"
+          className="rounded-full flex items-center justify-center text-[10px] font-black active:opacity-50"
           style={{
             ...btnBase,
-            gridColumn: "2",
-            gridRow: "3",
-            borderColor: "rgba(253,46,95,0.4)",
-            color: "rgba(253,46,95,0.7)",
+            gridColumn: "2", gridRow: "3",
+            borderColor: "rgba(253,46,95,0.5)", color: "rgba(253,46,95,0.8)",
           }}
         >
           B
