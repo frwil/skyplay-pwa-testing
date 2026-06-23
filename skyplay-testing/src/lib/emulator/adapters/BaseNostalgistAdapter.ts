@@ -94,6 +94,38 @@ export abstract class BaseNostalgistAdapter implements EmulatorAdapter {
     }
   }
 
+  /** Load ROM from raw bytes (used by desktop app via Tauri file dialog). */
+  async loadRomFromBytes(romData: Uint8Array, romName: string): Promise<void> {
+    this.exit();
+
+    this._status = "loading";
+    this.callbacks.onStatusChange("loading");
+    this._currentRom = romName;
+
+    try {
+      const { Nostalgist } = await import("nostalgist");
+
+      if (!this.canvasEl) {
+        this.canvasEl = document.createElement("canvas");
+      }
+      this.canvasEl.style.width = "100%";
+      this.canvasEl.style.height = "100%";
+
+      this.nostalgist = await Nostalgist.launch({
+        core: this.coreName,
+        rom: romData,
+        element: this.canvasEl,
+      });
+
+      this._status = "running";
+      this.callbacks.onStatusChange("running");
+    } catch (err) {
+      console.error(`[${this.systemType}] Failed to load ROM from bytes:`, err);
+      this._status = "error";
+      this.callbacks.onStatusChange("error");
+    }
+  }
+
   exit(): void {
     try {
       this.nostalgist?.exit();

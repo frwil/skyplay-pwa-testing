@@ -12,6 +12,8 @@ export interface EmulatorAdapter {
 
   // ── Lifecycle ─────────────────────────────────────────────────
   loadRom(rom: RomEntry): Promise<void>;
+  /** Optional: load ROM from raw bytes (desktop app via Tauri file dialog). */
+  loadRomFromBytes?(romData: Uint8Array, romName: string): Promise<void>;
   exit(): void;
   setCanvas?(canvas: HTMLCanvasElement): void;
 
