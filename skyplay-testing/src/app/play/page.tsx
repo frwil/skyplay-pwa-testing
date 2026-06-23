@@ -107,48 +107,76 @@ export default function PlayPage() {
   // ── Auto-load ROM when a challenge is selected ────────────────────
 
   const autoLoadedRef = useRef<number | null>(null); // challengeId we auto-loaded for
+  const pendingRomRef = useRef<{ name: string; system: string } | null>(null);
 
+  // Step 1: When challenge changes, set the system type
   useEffect(() => {
-    if (!participationChallenge) return;
+    if (!participationChallenge) {
+      pendingRomRef.current = null;
+      return;
+    }
 
     const challenge = participationChallenge;
-    const alreadyLoaded =
-      emu.status === "running" &&
-      emu.currentRom &&
-      (emu.currentRom === challenge.romName ||
-        emu.currentRom.toLowerCase().includes(challenge.romName.toLowerCase()) ||
-        challenge.romName.toLowerCase().includes(emu.currentRom.toLowerCase()));
 
-    // Don't reload if already running the right ROM for this challenge
-    if (alreadyLoaded && autoLoadedRef.current === challenge.id) return;
+    // Warn if not NES (netplay only works on NES)
+    if (challenge.system !== "nes") {
+      console.warn("[Netplay:Page] ⚠️ Challenge system is", challenge.system, "— netplay only supports NES!");
+    }
 
-    console.log("[Netplay:Page] Challenge selected — auto-loading ROM:", challenge.romName, "system:", challenge.system, {
-      emuStatus: emu.status,
-      currentRom: emu.currentRom,
-    });
-
-    // Set the system to match the challenge
+    // Switch system first (will trigger re-render, then Step 2 loads ROM)
     if (challenge.system !== system) {
+      console.log("[Netplay:Page] Switching system:", system, "→", challenge.system);
       setSystem(challenge.system as SystemType);
     }
 
-    // Find matching ROM in the emulator's ROM list
+    // Store pending ROM info for Step 2
+    pendingRomRef.current = { name: challenge.romName, system: challenge.system };
+  }, [participationChallenge]);
+
+  // Step 2: When system matches challenge system, load the ROM
+  useEffect(() => {
+    const pending = pendingRomRef.current;
+    if (!pending) return;
+
+    // Wait until the system has been switched
+    if (emu.system !== pending.system) {
+      console.log("[Netplay:Page] ⏳ Waiting for system switch... current:", emu.system, "target:", pending.system);
+      return;
+    }
+
+    const alreadyLoaded =
+      emu.status === "running" &&
+      emu.currentRom &&
+      (emu.currentRom === pending.name ||
+        emu.currentRom.toLowerCase().includes(pending.name.toLowerCase()) ||
+        pending.name.toLowerCase().includes(emu.currentRom.toLowerCase()));
+
+    if (alreadyLoaded && autoLoadedRef.current === participationChallenge?.id) {
+      console.log("[Netplay:Page] ROM already loaded, skipping");
+      pendingRomRef.current = null;
+      return;
+    }
+
+    console.log("[Netplay:Page] Looking for ROM:", pending.name, "system:", pending.system);
+
     const matchingRom = emu.romList.find(
       (r) =>
-        r.system === challenge.system &&
-        (r.name === challenge.romName ||
-          r.name.toLowerCase().includes(challenge.romName.toLowerCase()) ||
-          challenge.romName.toLowerCase().includes(r.name.toLowerCase())),
+        r.system === pending.system &&
+        (r.name === pending.name ||
+          r.name.toLowerCase().includes(pending.name.toLowerCase()) ||
+          pending.name.toLowerCase().includes(r.name.toLowerCase())),
     );
 
-    if (matchingRom) {
-      console.log("[Netplay:Page] ✅ Found matching ROM:", matchingRom.name, "— loading...");
-      autoLoadedRef.current = challenge.id;
+    if (matchingRom && emu.status !== "loading") {
+      console.log("[Netplay:Page] ✅ Loading ROM:", matchingRom.name);
+      autoLoadedRef.current = participationChallenge?.id ?? null;
+      pendingRomRef.current = null;
       emu.loadRom(matchingRom);
-    } else {
-      console.warn("[Netplay:Page] ⚠️ No matching ROM found for:", challenge.romName);
+    } else if (!matchingRom) {
+      console.warn("[Netplay:Page] ⚠️ No matching ROM found for:", pending.name);
+      pendingRomRef.current = null;
     }
-  }, [participationChallenge, emu.status, emu.currentRom, emu.romList, emu.loadRom, system, setSystem]);
+  }, [emu.system, emu.status, emu.currentRom, emu.romList, emu.loadRom, participationChallenge]);
 
   // ── Bind netplay deps to emulator when running NES ──────────────
 

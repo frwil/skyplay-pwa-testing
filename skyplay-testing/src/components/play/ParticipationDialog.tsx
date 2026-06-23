@@ -196,6 +196,19 @@ export default function ParticipationDialog({
               </div>
             )}
 
+            {/* Non-NES warning — netplay only supports NES */}
+            {challenge.system !== "nes" && (
+              <div className="flex items-start gap-2 rounded-xl px-3 py-2.5 mb-4" style={{ backgroundColor: "rgba(255,165,0,0.08)", border: "1px solid rgba(255,165,0,0.2)" }}>
+                <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" style={{ color: "#ffa500" }} />
+                <div>
+                  <p className="text-xs font-bold" style={{ color: "#ffa500" }}>Netplay non disponible</p>
+                  <p className="text-[10px] mt-0.5" style={{ color: "rgba(255,165,0,0.7)" }}>
+                    Le mode P2P temps réel ne fonctionne qu'avec des jeux NES. Ce challenge est sur {challenge.system.toUpperCase()}.
+                  </p>
+                </div>
+              </div>
+            )}
+
             {/* No other participants */}
             {otherParticipants.length === 0 && (
               <p className="text-xs text-center py-3" style={{ color: "rgba(255,255,255,0.2)" }}>
@@ -235,25 +248,33 @@ export default function ParticipationDialog({
               </div>
             )}
 
-            {/* Start Now button */}
-            <button
-              onClick={() => onStartMatchmaking(selectedOpponent ?? undefined)}
-              disabled={isSearching}
-              className="w-full rounded-xl px-4 py-3 text-sm font-bold flex items-center justify-center gap-2 transition disabled:opacity-50"
-              style={{ backgroundColor: "rgba(0,200,255,0.15)", border: "1px solid rgba(0,200,255,0.3)", color: "#00c8ff" }}
-            >
-              {isSearching ? (
-                <>
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                  Recherche d'un adversaire...
-                </>
-              ) : (
-                <>
-                  <Trophy className="w-4 h-4" />
-                  {selectedOpponent ? "Défier cet adversaire" : "Start Now"}
-                </>
-              )}
-            </button>
+            {/* Start Now button — only for NES */}
+            {challenge.system === "nes" ? (
+              <button
+                onClick={() => onStartMatchmaking(selectedOpponent ?? undefined)}
+                disabled={isSearching}
+                className="w-full rounded-xl px-4 py-3 text-sm font-bold flex items-center justify-center gap-2 transition disabled:opacity-50"
+                style={{ backgroundColor: "rgba(0,200,255,0.15)", border: "1px solid rgba(0,200,255,0.3)", color: "#00c8ff" }}
+              >
+                {isSearching ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Recherche d'un adversaire...
+                  </>
+                ) : (
+                  <>
+                    <Trophy className="w-4 h-4" />
+                    {selectedOpponent ? "Défier cet adversaire" : "Start Now"}
+                  </>
+                )}
+              </button>
+            ) : (
+              <div className="text-center py-2">
+                <p className="text-[11px] font-medium" style={{ color: "rgba(255,165,0,0.6)" }}>
+                  P2P uniquement disponible sur NES
+                </p>
+              </div>
+            )}
           </div>
         )}
       </div>
