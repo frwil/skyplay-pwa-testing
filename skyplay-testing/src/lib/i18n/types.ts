@@ -201,6 +201,7 @@ export interface Dictionary {
         dashboard: string;
         submissions: string;
         campagne: string;
+        challenges: string;
       };
       overview: {
         testers: string;
@@ -356,6 +357,52 @@ export interface Dictionary {
       start: string;
       select: string;
       dpad: string;
+    };
+    challenges: {
+      title: string;
+      active: string;
+      past: string;
+      noActive: string;
+      noActiveDesc: string;
+      join: string;
+      submit: string;
+      submitted: string;
+      endsAt: string;
+      reward: string;
+      participants: string;
+      status: {
+        pending: string;
+        approved: string;
+        rejected: string;
+      };
+      submitModal: {
+        title: string;
+        result: string;
+        resultWin: string;
+        resultLoss: string;
+        resultDraw: string;
+        resultPlaceholder: string;
+        screenshotLabel: string;
+        screenshotHint: string;
+        submit: string;
+        submitting: string;
+        success: string;
+        errorGeneric: string;
+        alreadySubmitted: string;
+        challengeEnded: string;
+        challengeNotStarted: string;
+      };
+      leaderboard: {
+        title: string;
+        rank: string;
+        player: string;
+        result: string;
+        date: string;
+        noSubmissions: string;
+        win: string;
+        loss: string;
+        draw: string;
+      };
     };
   };
   languageSwitcher: {

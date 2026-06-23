@@ -5,6 +5,7 @@ import GlowBackground from "@/components/GlowBackground";
 import LanguageSwitcher from "@/components/LanguageSwitcher";
 import EmulatorCore from "@/components/play/EmulatorCore";
 import DesktopDownloadBanner from "@/components/play/DesktopDownloadBanner";
+import ChallengePanel from "@/components/play/ChallengePanel";
 import { useEmulator } from "@/lib/emulator/hooks/useEmulator";
 import { useTranslation } from "@/lib/i18n/TranslationContext";
 import { ArrowLeft, Gamepad2 } from "lucide-react";
@@ -96,6 +97,15 @@ export default function PlayPage() {
 
         {/* Desktop Download Banner */}
         <DesktopDownloadBanner />
+
+        {/* Async Challenges */}
+        <ChallengePanel
+          currentSystem={system}
+          onPlayChallenge={(s, rom) => {
+            setSystem(s);
+            // The user will select the ROM from the list
+          }}
+        />
 
         {/* Emulator */}
         <EmulatorCore emu={emu} system={system} onSystemChange={setSystem} />

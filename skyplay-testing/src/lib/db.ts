@@ -170,6 +170,41 @@ async function initializeSchema(): Promise<void> {
     );
   `);
 
+  // ——— Challenge System (migration for existing DBs) ———
+  await getClient().execute(`
+    CREATE TABLE IF NOT EXISTS challenges (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      title TEXT NOT NULL,
+      description TEXT DEFAULT '',
+      system TEXT NOT NULL DEFAULT 'snes',
+      rom_name TEXT NOT NULL,
+      criteria TEXT NOT NULL DEFAULT 'winloss',
+      reward INTEGER NOT NULL DEFAULT 500,
+      starts_at TIMESTAMP NOT NULL,
+      ends_at TIMESTAMP NOT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      created_by INTEGER REFERENCES users(id)
+    );
+  `);
+
+  await getClient().execute(`
+    CREATE TABLE IF NOT EXISTS challenge_submissions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      challenge_id INTEGER NOT NULL REFERENCES challenges(id),
+      user_id INTEGER NOT NULL REFERENCES users(id),
+      result TEXT NOT NULL DEFAULT '',
+      screenshot_base64 TEXT,
+      status TEXT NOT NULL DEFAULT 'PENDING',
+      submitted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(challenge_id, user_id)
+    );
+  `);
+
+  // Challenge indexes
+  try { await getClient().execute("CREATE INDEX IF NOT EXISTS idx_challenge_submissions_challenge ON challenge_submissions(challenge_id)"); } catch {}
+  try { await getClient().execute("CREATE INDEX IF NOT EXISTS idx_challenge_submissions_user ON challenge_submissions(user_id)"); } catch {}
+  try { await getClient().execute("CREATE INDEX IF NOT EXISTS idx_challenge_submissions_status ON challenge_submissions(status)"); } catch {}
+
   // Performance indexes — harmless if already exist (IF NOT EXISTS from SQLite 3.25+,
   // but Turso/libsql supports it; wrapped in try/catch for safety)
   const indexes = [

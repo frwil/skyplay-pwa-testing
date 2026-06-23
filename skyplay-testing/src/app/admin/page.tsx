@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import AdminCard from "@/components/AdminCard";
+import AdminChallenges from "@/components/AdminChallenges";
 import GlowBackground from "@/components/GlowBackground";
 import { useTranslation } from "@/lib/i18n/TranslationContext";
 import LanguageSwitcher from "@/components/LanguageSwitcher";
@@ -16,6 +17,7 @@ import {
   Trophy,
   Activity,
   Clock,
+  Swords,
 } from "lucide-react";
 
 interface Submission {
@@ -98,7 +100,7 @@ export default function AdminPage() {
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState<"ALL" | "PENDING" | "APPROVED" | "REJECTED">("ALL");
   const [stepFilter, setStepFilter] = useState<string>("ALL");
-  const [tab, setTab] = useState<"dashboard" | "submissions" | "campagne">("dashboard");
+  const [tab, setTab] = useState<"dashboard" | "submissions" | "campagne" | "challenges">("dashboard");
 
   // Campaign state
   const [activeCampaign, setActiveCampaign] = useState<{
@@ -469,6 +471,7 @@ export default function AdminPage() {
             { key: "dashboard", label: t.admin.dashboard.tabs.dashboard, icon: BarChart3 },
             { key: "submissions", label: t.admin.dashboard.tabs.submissions, icon: Activity },
             { key: "campagne", label: t.admin.dashboard.tabs.campagne, icon: Clock },
+            { key: "challenges", label: t.admin.dashboard.tabs.challenges, icon: Swords },
           ] as const).map((t) => (
             <button
               key={t.key}
@@ -1017,6 +1020,11 @@ export default function AdminPage() {
               </div>
             )}
           </div>
+        )}
+
+        {/* ═══════════ CHALLENGES TAB ═══════════ */}
+        {tab === "challenges" && (
+          <AdminChallenges />
         )}
       </div>
     </main>
