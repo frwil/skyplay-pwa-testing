@@ -47,7 +47,11 @@ export class WebRTCConnection {
 
     this.signaling = new SignalingClient(sessionId, toUserId);
     this.signaling.startPolling(
-      (signal) => this.handleSignal(signal),
+      (signal) => {
+        this.handleSignal(signal).catch((err) =>
+          console.log("[WebRTC:Connection] ⚠️ Signal handling error (non-fatal):", err.message),
+        );
+      },
       (err) => console.error("[WebRTC:Connection] Signaling error:", err),
     );
     console.log("[WebRTC:Connection] Signaling polling started");
@@ -85,7 +89,11 @@ export class WebRTCConnection {
 
     this.signaling = new SignalingClient(sessionId, toUserId);
     this.signaling.startPolling(
-      (signal) => this.handleSignal(signal),
+      (signal) => {
+        this.handleSignal(signal).catch((err) =>
+          console.log("[WebRTC:Connection] ⚠️ Signal handling error (non-fatal):", err.message),
+        );
+      },
       (err) => console.error("[WebRTC:Connection] Signaling error:", err),
     );
     console.log("[WebRTC:Connection] P2 signaling polling started, waiting for offer...");
@@ -211,6 +219,11 @@ export class WebRTCConnection {
       }
 
       case "answer": {
+        // Guard: ignore duplicate answers (polling may return the same signal twice)
+        if (this.pc!.signalingState !== "have-local-offer") {
+          console.log("[WebRTC:Connection] ⚠️ Ignoring answer — signaling state is:", this.pc!.signalingState);
+          break;
+        }
         console.log("[WebRTC:Connection] Received ANSWER, setting remote description");
         await this.pc!.setRemoteDescription(
           new RTCSessionDescription(data),

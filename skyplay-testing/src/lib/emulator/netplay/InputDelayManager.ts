@@ -147,6 +147,11 @@ export class InputDelayManager {
    * @param pressed - true for press, false for release.
    */
   onLocalInput(player: 1 | 2, button: number, pressed: boolean): void {
+    // Log every 30th input to avoid spam
+    if (this.seq % 30 === 0) {
+      console.log("[InputDelay:Manager] ⌨️ onLocalInput #", this.seq, "player:", player, "btn:", button, pressed ? "DOWN" : "UP", "status:", this.state.status);
+    }
+
     // Apply locally immediately
     this.applyButton?.(player, button, pressed);
 
@@ -226,6 +231,11 @@ export class InputDelayManager {
         const remotePlayer: 1 | 2 =
           this.session.playerNumber === 1 ? 2 : 1;
 
+        // Log first few and every 30th
+        if (btnMsg.seq < 3 || btnMsg.seq % 30 === 0) {
+          console.log("[InputDelay:Manager] 📥 Remote button #", btnMsg.seq, "player:", remotePlayer, "btn:", btnMsg.button, btnMsg.pressed ? "DOWN" : "UP");
+        }
+
         // Queue with delay
         this.inputQueue.push({
           player: remotePlayer,
@@ -278,13 +288,19 @@ export class InputDelayManager {
   private processQueue(): void {
     const now = performance.now();
     const remaining: DelayedInput[] = [];
+    let applied = 0;
 
     for (const input of this.inputQueue) {
       if (now >= input.applyAt) {
         this.applyButton?.(input.player, input.button, input.pressed);
+        applied++;
       } else {
         remaining.push(input);
       }
+    }
+
+    if (applied > 0) {
+      console.log("[InputDelay:Manager] ⏱ Applied", applied, "delayed remote inputs,", remaining.length, "remaining in queue");
     }
 
     this.inputQueue = remaining;
