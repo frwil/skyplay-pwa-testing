@@ -1,5 +1,5 @@
 // ─── System Type ───────────────────────────────────────────────────
-export type SystemType = "nes" | "snes" | "gb" | "gbc" | "gba";
+export type SystemType = "nes" | "snes" | "gb" | "gbc" | "gba" | "neogeo" | "ps1";
 
 // ─── Emulator Status ───────────────────────────────────────────────
 export type EmulatorStatus =
@@ -42,6 +42,7 @@ export interface SystemConfig {
   coreName: string;           // Nostalgist core name (or "jsnes" for NES)
   romExtensions: string[];    // e.g. [".nes"] or [".sfc", ".smc"]
   touchLayout: "nes" | "snes" | "gb";  // which touch control layout
+  desktopOnly?: boolean;      // true for systems only available on desktop app
 }
 
 // ─── NES Button Constants (bit positions) ──────────────────────────

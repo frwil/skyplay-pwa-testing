@@ -336,6 +336,14 @@ export interface Dictionary {
       gb: string;
       gbc: string;
       gba: string;
+      neogeo: string;
+      ps1: string;
+    };
+    desktopBanner: {
+      title: string;
+      description: string;
+      download: string;
+      dismiss: string;
     };
     controls: {
       title: string;

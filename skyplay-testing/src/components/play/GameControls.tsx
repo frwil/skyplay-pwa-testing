@@ -13,7 +13,7 @@ import {
   Zap,
 } from "lucide-react";
 
-const SYSTEM_LIST: SystemType[] = ["nes", "snes", "gb", "gbc", "gba"];
+const SYSTEM_LIST: SystemType[] = ["nes", "snes", "gb", "gbc", "gba", "neogeo", "ps1"];
 
 interface GameControlsProps {
   romList: RomEntry[];

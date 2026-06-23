@@ -419,6 +419,14 @@ const en: Dictionary = {
       gb: "Game Boy",
       gbc: "Game Boy Color",
       gba: "Game Boy Advance",
+      neogeo: "Neo Geo (Desktop)",
+      ps1: "PlayStation (Desktop)",
+    },
+    desktopBanner: {
+      title: "Neo Geo & PlayStation available on desktop",
+      description: "Download the SkyPlay desktop app to play Neo Geo and PS1 games from your local filesystem.",
+      download: "Download Desktop App",
+      dismiss: "Dismiss",
     },
     controls: {
       title: "Controls",

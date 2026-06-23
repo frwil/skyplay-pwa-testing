@@ -154,6 +154,58 @@ export const SYSTEM_CONFIGS: Record<SystemType, SystemConfig> = {
     romExtensions: [".gba"],
     touchLayout: "snes",
   },
+  neogeo: {
+    type: "neogeo",
+    labelKey: "play.systems.neogeo",
+    width: 320,
+    height: 224,
+    buttonCount: 10,
+    buttons: [
+      // Neo Geo AES: A / B / C / D / SELECT / START + DPAD
+      { id: "A", index: 0, bit: 0x001 },
+      { id: "B", index: 1, bit: 0x002 },
+      { id: "C", index: 2, bit: 0x004 },
+      { id: "D", index: 3, bit: 0x008 },
+      { id: "SELECT", index: 4, bit: 0x010 },
+      { id: "START", index: 5, bit: 0x020 },
+      { id: "UP", index: 6, bit: 0x040 },
+      { id: "DOWN", index: 7, bit: 0x080 },
+      { id: "LEFT", index: 8, bit: 0x100 },
+      { id: "RIGHT", index: 9, bit: 0x200 },
+    ],
+    coreName: "fbneo",
+    romExtensions: [".zip", ".neo"],
+    touchLayout: "snes",
+    desktopOnly: true,
+  },
+  ps1: {
+    type: "ps1",
+    labelKey: "play.systems.ps1",
+    width: 640,
+    height: 480,
+    buttonCount: 14,
+    buttons: [
+      // PlayStation: Cross / Circle / Square / Triangle / L1 / R1 / L2 / R2 / SELECT / START + DPAD
+      { id: "CROSS", index: 0, bit: 0x0001 },
+      { id: "CIRCLE", index: 1, bit: 0x0002 },
+      { id: "SQUARE", index: 2, bit: 0x0004 },
+      { id: "TRIANGLE", index: 3, bit: 0x0008 },
+      { id: "L1", index: 4, bit: 0x0010 },
+      { id: "R1", index: 5, bit: 0x0020 },
+      { id: "L2", index: 6, bit: 0x0040 },
+      { id: "R2", index: 7, bit: 0x0080 },
+      { id: "SELECT", index: 8, bit: 0x0100 },
+      { id: "START", index: 9, bit: 0x0200 },
+      { id: "UP", index: 10, bit: 0x0400 },
+      { id: "DOWN", index: 11, bit: 0x0800 },
+      { id: "LEFT", index: 12, bit: 0x1000 },
+      { id: "RIGHT", index: 13, bit: 0x2000 },
+    ],
+    coreName: "pcsx_rearmed",
+    romExtensions: [".bin", ".cue", ".iso", ".pbp", ".img", ".m3u"],
+    touchLayout: "snes",
+    desktopOnly: true,
+  },
 };
 
 /** Look up a button definition by system and button ID. */
@@ -262,6 +314,28 @@ export const SYSTEM_KEY_MAPS: Record<SystemType, KeyMapping> = {
     KeyE:  { player: 1, button: 0 },  // E key → B (alternate)
     ...BASE_MENU_BUTTONS,
   },
+  neogeo: {
+    ...BASE_D_PAD,
+    // Neo Geo: A=0, B=1, C=2, D=3, SELECT=4, START=5
+    KeyX:  { player: 1, button: 0 },  // X key → A
+    KeyZ:  { player: 1, button: 1 },  // Z key → B
+    KeyC:  { player: 1, button: 2 },  // C key → C
+    KeyV:  { player: 1, button: 3 },  // V key → D
+    ...BASE_MENU_BUTTONS,
+  },
+  ps1: {
+    ...BASE_D_PAD,
+    // PS1: CROSS=0, CIRCLE=1, SQUARE=2, TRIANGLE=3, L1=4, R1=5, L2=6, R2=7
+    KeyX:  { player: 1, button: 0 },  // X key → Cross
+    KeyZ:  { player: 1, button: 1 },  // Z key → Circle
+    KeyC:  { player: 1, button: 2 },  // C key → Square
+    KeyV:  { player: 1, button: 3 },  // V key → Triangle
+    KeyA:  { player: 1, button: 4 },  // A key → L1
+    KeyS:  { player: 1, button: 5 },  // S key → R1
+    KeyQ:  { player: 1, button: 6 },  // Q key → L2
+    KeyW:  { player: 1, button: 7 },  // W key → R2
+    ...BASE_MENU_BUTTONS,
+  },
 };
 
 // ─── Per-system Gamepad Mappings ───────────────────────────────────────
@@ -338,5 +412,31 @@ export const SYSTEM_GAMEPAD_MAPS: Record<SystemType, GamepadMapping> = {
       9: 3, // Options → START
     },
     dPadIndices: [4, 5, 6, 7],
+  },
+  neogeo: {
+    faceButtons: {
+      0: 0, // Cross → A
+      1: 1, // Circle → B
+      2: 2, // Square → C
+      3: 3, // Triangle → D
+      8: 4, // Share → SELECT
+      9: 5, // Options → START
+    },
+    dPadIndices: [6, 7, 8, 9],
+  },
+  ps1: {
+    faceButtons: {
+      0: 0,  // Cross → Cross
+      1: 1,  // Circle → Circle
+      2: 2,  // Square → Square
+      3: 3,  // Triangle → Triangle
+      4: 4,  // L1 → L1
+      5: 5,  // R1 → R1
+      6: 6,  // L2 → L2
+      7: 7,  // R2 → R2
+      8: 8,  // Share → SELECT
+      9: 9,  // Options → START
+    },
+    dPadIndices: [10, 11, 12, 13],
   },
 };
