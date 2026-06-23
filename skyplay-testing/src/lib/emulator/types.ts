@@ -88,6 +88,15 @@ export interface EmulatorState {
   setNetplayManager?: (manager: unknown) => void;
   /** Whether netplay is currently active. */
   isNetplay?: boolean;
+  // Netplay dependencies (exposed for NetplayManager wiring)
+  /** Get the raw jsnes instance for state save/restore during rollback. */
+  getNes: () => { fromJSON(state: object): void; frame(): void } | null;
+  /** Mute audio during rollback fast-forward. */
+  muteAudio: () => void;
+  /** Unmute audio after rollback fast-forward. */
+  unmuteAudio: () => void;
+  /** Apply bulk button transitions for input correction during rollback. */
+  applyInputs: (player: 1 | 2, bitmask: number, prevBitmask: number) => void;
 }
 
 // ─── Buffer Interfaces ─────────────────────────────────────────────

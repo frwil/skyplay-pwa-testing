@@ -11,6 +11,7 @@ import ParticipationDialog from "@/components/play/ParticipationDialog";
 import type { ChallengeInfo } from "@/components/play/ParticipationDialog";
 import { useEmulator } from "@/lib/emulator/hooks/useEmulator";
 import { useNetplay } from "@/lib/emulator/netplay/hooks/useNetplay";
+import type { NetplayEmulatorDeps } from "@/lib/emulator/netplay/NetplayManager";
 import { useTranslation } from "@/lib/i18n/TranslationContext";
 import { ArrowLeft, Gamepad2, User, LogOut } from "lucide-react";
 import type { SystemType } from "@/lib/emulator/types";
@@ -103,26 +104,63 @@ export default function PlayPage() {
     }
   }, [selectedChallengeId, netplay.participationStatus]);
 
-  // Wire netplay manager into the emulator when session is ready
+  // ── Bind netplay deps to emulator when running NES ──────────────
+
+  const depsBoundRef = useRef(false);
+
+  useEffect(() => {
+    if (
+      emu.status === "running" &&
+      emu.system === "nes" &&
+      emu.stateBuffer &&
+      emu.inputBuffer &&
+      !depsBoundRef.current
+    ) {
+      const deps: NetplayEmulatorDeps = {
+        getNes: emu.getNes,
+        stateBuffer: emu.stateBuffer as NetplayEmulatorDeps["stateBuffer"],
+        inputBuffer: emu.inputBuffer as NetplayEmulatorDeps["inputBuffer"],
+        muteAudio: emu.muteAudio,
+        unmuteAudio: emu.unmuteAudio,
+        applyInputs: emu.applyInputs,
+      };
+      netplay.bindEmulator(deps);
+      depsBoundRef.current = true;
+    }
+
+    // Reset when emulator stops (so we re-bind on next ROM load)
+    if (emu.status !== "running") {
+      depsBoundRef.current = false;
+    }
+  }, [
+    emu.status,
+    emu.system,
+    emu.stateBuffer,
+    emu.inputBuffer,
+    emu.getNes,
+    emu.muteAudio,
+    emu.unmuteAudio,
+    emu.applyInputs,
+    netplay.bindEmulator,
+  ]);
+
+  // ── Wire netplay manager into the emulator when ready ────────────
+
   const wiredRef = useRef(false);
   useEffect(() => {
-    if (netplay.session && emu.setNetplayManager && !wiredRef.current) {
-      const manager = netplay.manager;
-      if (!manager) return;
-
+    const manager = netplay.manager;
+    if (manager && emu.setNetplayManager && !wiredRef.current) {
       emu.setNetplayManager(manager);
       wiredRef.current = true;
-
-      // Start the netplay connection (WebRTC handshake + countdown)
       netplay.startNetplay();
     }
 
-    // Unwire when session ends
-    if (!netplay.session && wiredRef.current) {
+    // Unwire when manager is cleared
+    if (!manager && wiredRef.current) {
       emu.setNetplayManager?.(null);
       wiredRef.current = false;
     }
-  }, [netplay.session, netplay.manager, emu.setNetplayManager, netplay.startNetplay]);
+  }, [netplay.manager, emu.setNetplayManager]);
 
   // ── Handlers ────────────────────────────────────────────────────
 

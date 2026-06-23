@@ -560,6 +560,18 @@ export function useEmulator(system: SystemType = "nes") {
     inputBuffer: isNes ? inputBufferRef.current : null,
     setNetplayManager,
     isNetplay: isNetplayRef.current,
+    // Netplay deps — stable functions (all use refs internally)
+    getNes: () => {
+      const nes = nesRef.current;
+      if (!nes) return null;
+      return {
+        fromJSON: (state: object) => nes.fromJSON(state as Parameters<JsnesNes["fromJSON"]>[0]),
+        frame: () => nes.frame(),
+      };
+    },
+    muteAudio: isNes ? () => audio.mute() : () => {},
+    unmuteAudio: isNes ? () => audio.unmute() : () => {},
+    applyInputs,
     readRam: () => {
       if (isNes) {
         try {

@@ -34,32 +34,35 @@ export function useWebRTC({ session, deps }: UseWebRTCOptions): UseWebRTCResult 
   const [rollbacks, setRollbacks] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [countdown, setCountdown] = useState(COUNTDOWN_SECONDS);
+  const [manager, setManager] = useState<NetplayManager | null>(null);
 
   const managerRef = useRef<NetplayManager | null>(null);
   const mountedRef = useRef(true);
 
-  // ── Create / destroy manager when session changes ───────────────
+  // ── Create / destroy manager when session or deps change ───────
 
   useEffect(() => {
     mountedRef.current = true;
 
     if (session && deps) {
-      const manager = new NetplayManager(session, deps, (state: NetplayState) => {
+      const mgr = new NetplayManager(session, deps, (state: NetplayState) => {
         if (!mountedRef.current) return;
         setStatus(state.status);
         setLatency(state.latency);
         setRollbacks(state.rollbacks);
         setError(state.error);
       });
-      managerRef.current = manager;
+      managerRef.current = mgr;
+      setManager(mgr);
     }
 
     return () => {
       mountedRef.current = false;
       managerRef.current?.stop();
       managerRef.current = null;
+      setManager(null);
     };
-  }, [session?.sessionId]); // Re-create only when session ID changes
+  }, [session?.sessionId, deps]); // Re-create when session ID or deps change
 
   // ── Start / Stop ────────────────────────────────────────────────
 
@@ -84,7 +87,7 @@ export function useWebRTC({ session, deps }: UseWebRTCOptions): UseWebRTCResult 
     rollbacks,
     error,
     countdown,
-    manager: managerRef.current,
+    manager,
     start,
     stop,
   };

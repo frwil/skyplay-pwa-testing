@@ -68,7 +68,8 @@ export function useNetplay({ challengeId }: UseNetplayOptions): UseNetplayResult
   const [session, setSession] = useState<SessionConfig | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  // Ref to emulator deps, set by bindEmulator
+  // Emulator deps, set by bindEmulator — state so it triggers re-renders
+  const [deps, setDeps] = useState<NetplayEmulatorDeps | null>(null);
   const depsRef = useRef<NetplayEmulatorDeps | null>(null);
   const sessionIdRef = useRef<number | null>(null);
   const matchmakingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -81,11 +82,11 @@ export function useNetplay({ challengeId }: UseNetplayOptions): UseNetplayResult
     enabled: participationStatus !== "none",
   });
 
-  // ── WebRTC (only created when session is set) ────────────────────
+  // ── WebRTC (only created when session is set AND deps are available) ──
 
   const webrtc = useWebRTC({
     session,
-    deps: depsRef.current,
+    deps,
   });
 
   // ── Participate ─────────────────────────────────────────────────
@@ -256,8 +257,9 @@ export function useNetplay({ challengeId }: UseNetplayOptions): UseNetplayResult
 
   // ── Emulator binding ────────────────────────────────────────────
 
-  const bindEmulator = useCallback((deps: NetplayEmulatorDeps) => {
-    depsRef.current = deps;
+  const bindEmulator = useCallback((newDeps: NetplayEmulatorDeps) => {
+    depsRef.current = newDeps;
+    setDeps(newDeps);
   }, []);
 
   // ── Start netplay (WebRTC) ──────────────────────────────────────
