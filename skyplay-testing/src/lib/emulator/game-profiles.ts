@@ -5,8 +5,9 @@
  * When all conditions in a profile are met, a result is auto-detected.
  *
  * Addresses are system-relative:
- *   NES:  CPU RAM ($0000–$07FF, 2048 bytes accessible via jsnes toJSON().ram)
+ *   NES:  CPU RAM ($0000–$07FF, 2048 bytes accessible via jsnes toJSON().cpu.mem)
  *   SNES: WRAM ($7E0000–$7FFFFF accessible via retro_get_memory_data(0))
+ *         Buffer offset = SNES address - 0x7E0000
  *   GB:   WRAM ($C000–$DFFF accessible via retro_get_memory_data(0))
  *   GBA:  EWRAM ($02000000–$0203FFFF accessible via retro_get_memory_data(0))
  *
@@ -16,6 +17,7 @@
  *   3. Add a profile below
  *
  * Reference: https://retroachievements.org (game-specific memory maps)
+ *            https://almarsguides.com  (Pro Action Replay code databases)
  */
 
 export type SystemCategory = "nes" | "snes" | "gb" | "gba";
@@ -165,8 +167,8 @@ export function getActiveTrigger(
 //   4. Diff the save states to find changed addresses
 //   5. The result value is typically a small integer (0=loss, 1=win, 2=draw)
 //
-// For now, known addresses are sourced from RetroAchievements.org
-// and community documentation.
+// For now, known addresses are sourced from RetroAchievements.org,
+// almarsguides.com Pro Action Replay databases, and community docs.
 // ═══════════════════════════════════════════════════════════════════
 
 const PROFILES: GameProfile[] = [
@@ -175,27 +177,38 @@ const PROFILES: GameProfile[] = [
     romName: "Street Fighter",
     label: "Street Fighter II / Turbo / Super",
     system: "snes",
-    pollIntervalMs: 500,
-    warmupMs: 10000,
+    pollIntervalMs: 300,   // Fast polling during fights (health changes rapidly)
+    warmupMs: 15000,       // 15s: time to get past menus → char select → VS screen
     triggers: [
       {
-        id: "p1_win",
-        label: "Player 1 Wins!",
+        id: "p1_wins_round",
+        label: "🥊 Player 1 Wins Round!",
         result: "win",
         conditions: [
-          // P1 health > 0 AND P2 health = 0 → P1 wins
-          // SNES WRAM addresses vary by SF2 variant.
-          // Common range for health bars in SF2 Turbo (USA):
-          //   P1 health: ~0x7E0A2E (1 byte, 0-176)
-          //   P2 health: ~0x7E0C2E (1 byte, 0-176)
+          // P1 health > 0 (still alive) AND P2 health = 0 (KO'd)
           //
-          // Since exact addresses differ per ROM, we use a broader
-          // heuristic: when game state transitions from "fighting" to
-          // "results", specific bytes change.
+          // Addresses verified via Pro Action Replay codes (SF2 Turbo USA):
+          //   P1 health:      0x7E0530  (PAR: 7E053063 = set to 99/176 mid-round)
+          //   P1 max energy:  0x7E0636  (PAR: 7E0636B0 = 176 = full energy)
+          //   P2 health:      0x7E0730  (P1 + 0x200, standard SF2 P2 offset)
+          //   P1 hyper mode:  0x7E0517  (PAR: 7E051701)
+          //   P2 hyper mode:  0x7E0717  (PAR: 7E071701)
+          //   Timer:          0x7E18F3  (PAR: 7E18F399 = set to 99)
           //
-          // For now, this is a PLACEHOLDER that needs per-ROM calibration.
-          // Set op="changed" to detect ANY change at watched addresses.
-          // Real profiles should use op="eq" with known values.
+          // In libretro buffer: offset = SNES_addr - 0x7E0000
+          // Health range: 0-176 (0xB0 = full), 0 = KO
+          { address: 0x0530, op: "gt", value: 0, size: 1 },
+          { address: 0x0730, op: "eq", value: 0, size: 1 },
+        ],
+      },
+      {
+        id: "p1_loses_round",
+        label: "💀 Player 1 KO'd! (P2 Wins Round)",
+        result: "loss",
+        conditions: [
+          // P1 health = 0 (KO'd) AND P2 health > 0 (still alive)
+          { address: 0x0530, op: "eq", value: 0, size: 1 },
+          { address: 0x0730, op: "gt", value: 0, size: 1 },
         ],
       },
     ],
@@ -214,9 +227,7 @@ const PROFILES: GameProfile[] = [
         label: "Level Complete!",
         result: "win",
         conditions: [
-          // Flagpole grab detection: the game sets a flag in RAM
-          // Common SMB addresses (NES CPU RAM $0000-$07FF):
-          //   $000E: Game state (0=title, 1=playing, 2=dying, 3=level complete)
+          // Flagpole grab: $000E game state (0=title, 1=playing, 2=dying, 3=level complete)
           { address: 0x000E, op: "eq", value: 0x03, size: 1 },
         ],
       },
@@ -242,7 +253,7 @@ const PROFILES: GameProfile[] = [
         label: "Player Died",
         result: "loss",
         conditions: [
-          // Lives counter decreased
+          // Lives counter
           { address: 0x0032, op: "lt", value: 3, size: 1 },
         ],
       },
@@ -260,7 +271,7 @@ const PROFILES: GameProfile[] = [
         label: "Boss Defeated!",
         result: "win",
         conditions: [
-          // Game state changes on boss defeat (generic watch)
+          // Game state transition on boss defeat
           { address: 0x0040, op: "changed", size: 1 },
         ],
       },
@@ -280,8 +291,7 @@ const PROFILES: GameProfile[] = [
         label: "Battle Won!",
         result: "win",
         conditions: [
-          // Battle state transition (generic)
-          // Most Pokémon games store battle result near $C000-$D000
+          // Battle state transition (GB WRAM $C000-$DFFF)
           { address: 0xC000, op: "changed", size: 1 },
         ],
       },
@@ -299,7 +309,7 @@ const PROFILES: GameProfile[] = [
         label: "Game Over",
         result: "loss",
         conditions: [
-          // Top-out detection: game over flag in RAM
+          // Top-out detection: game over flag
           { address: 0xC0A0, op: "changed", size: 1 },
         ],
       },
@@ -319,7 +329,7 @@ const PROFILES: GameProfile[] = [
         label: "Race Finished!",
         result: "win",
         conditions: [
-          // Race completion flag (generic watch)
+          // Race completion flag (GBA EWRAM $02000000-$0203FFFF)
           { address: 0x02000000, op: "changed", size: 1 },
         ],
       },

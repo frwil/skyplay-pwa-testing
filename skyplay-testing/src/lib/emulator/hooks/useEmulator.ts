@@ -90,6 +90,14 @@ export function useEmulator(system: SystemType = "nes") {
   const stateBufferRef = useRef<StateBuffer>(new StateBuffer());
   const inputBufferRef = useRef<InputBuffer>(new InputBuffer());
 
+  // ─── Netplay (P2P) ────────────────────────────────────────────
+  const netplayManagerRef = useRef<{
+    onFrame: (frame: number, localInput: number) => number;
+    afterFrame: (frame: number) => void;
+    getState: () => { status: string; latency: number; rollbacks: number };
+  } | null>(null);
+  const isNetplayRef = useRef(false);
+
   // ─── Audio (NES only) ──────────────────────────────────────────
   const audio = useNesAudio();
 
@@ -193,20 +201,31 @@ export function useEmulator(system: SystemType = "nes") {
         if (!nes) return;
 
         // 1. Capture local input (keyboard + gamepad → combined bitmask)
-        const localInput =
+        const myInput =
           kbBitmaskRef.current() | gpBitmaskRef.current();
 
-        // 2. TODO P2P: Send localInput to peer via WebRTC DataChannel
+        // 2. Netplay: send my input, get opponent's predicted input
+        let opponentInput = 0;
+        const netplay = netplayManagerRef.current;
+        const isNetplayActive = isNetplayRef.current && netplay !== null;
 
-        // 3. Read predicted P2 input (copy last known, or 0 if none)
-        const predictedP2 =
-          inputBufferRef.current.get(0)?.p2 ?? 0;
+        if (isNetplayActive) {
+          opponentInput = netplay.onFrame(frameCountRef.current, myInput);
+        }
+
+        // 3. Determine P1/P2 inputs based on role
+        // In solo mode: I am P1, opponent (local P2) is from buffer
+        // In netplay mode: opponent input comes from peer, roles may swap
+        const p1Input = myInput;       // I always control P1 locally
+        const p2Input = isNetplayActive
+          ? opponentInput              // Netplay: P2 = remote peer input
+          : inputBufferRef.current.get(0)?.p2 ?? 0; // Solo: P2 from buffer
 
         // 4. Push input record
         inputBufferRef.current.push(
           frameCountRef.current,
-          localInput,
-          predictedP2,
+          p1Input,
+          p2Input,
         );
 
         // 5. Save state BEFORE advancing (for rollback)
@@ -214,17 +233,22 @@ export function useEmulator(system: SystemType = "nes") {
         stateBufferRef.current.push(state);
 
         // 6. Inject inputs into jsnes (edge-detection to avoid redundant calls)
-        applyInputsRef.current(1, localInput, prevP1BitmaskRef.current);
-        applyInputsRef.current(2, predictedP2, prevP2BitmaskRef.current);
-        prevP1BitmaskRef.current = localInput;
-        prevP2BitmaskRef.current = predictedP2;
+        applyInputsRef.current(1, p1Input, prevP1BitmaskRef.current);
+        applyInputsRef.current(2, p2Input, prevP2BitmaskRef.current);
+        prevP1BitmaskRef.current = p1Input;
+        prevP2BitmaskRef.current = p2Input;
 
         // 7. Advance one frame
         nes.frame();
         frameCountRef.current++;
         lastFrameTimeRef.current = timestamp;
 
-        // 8. Poll gamepad synchronously
+        // 8. Netplay: process late remote inputs (rollback)
+        if (isNetplayActive) {
+          netplay.afterFrame(frameCountRef.current);
+        }
+
+        // 9. Poll gamepad synchronously
         gamepadPollRef.current();
 
         // 9. FPS tracking
@@ -504,6 +528,17 @@ export function useEmulator(system: SystemType = "nes") {
   }, [isNes]);
 
   // ─── Exposed State ─────────────────────────────────────────────
+
+  const setNetplayManager = useCallback((manager: unknown) => {
+    if (manager === null) {
+      netplayManagerRef.current = null;
+      isNetplayRef.current = false;
+    } else {
+      netplayManagerRef.current = manager as typeof netplayManagerRef.current;
+      isNetplayRef.current = true;
+    }
+  }, []);
+
   const emulatorState: EmulatorState = {
     status,
     fps,
@@ -523,6 +558,8 @@ export function useEmulator(system: SystemType = "nes") {
     buttonUp,
     stateBuffer: isNes ? stateBufferRef.current : null,
     inputBuffer: isNes ? inputBufferRef.current : null,
+    setNetplayManager,
+    isNetplay: isNetplayRef.current,
     readRam: () => {
       if (isNes) {
         try {

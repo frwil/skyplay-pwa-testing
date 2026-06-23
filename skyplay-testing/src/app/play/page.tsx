@@ -1,14 +1,16 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import GlowBackground from "@/components/GlowBackground";
 import LanguageSwitcher from "@/components/LanguageSwitcher";
 import EmulatorCore from "@/components/play/EmulatorCore";
-import DesktopDownloadBanner from "@/components/play/DesktopDownloadBanner";
 import ChallengePanel from "@/components/play/ChallengePanel";
+import CountdownOverlay from "@/components/play/CountdownOverlay";
+import ConnectionStatus from "@/components/play/ConnectionStatus";
 import { useEmulator } from "@/lib/emulator/hooks/useEmulator";
+import { useNetplay } from "@/lib/emulator/netplay/hooks/useNetplay";
 import { useTranslation } from "@/lib/i18n/TranslationContext";
-import { ArrowLeft, Gamepad2 } from "lucide-react";
+import { ArrowLeft, Gamepad2, User, LogOut } from "lucide-react";
 import type { SystemType } from "@/lib/emulator/types";
 
 export default function PlayPage() {
@@ -20,9 +22,95 @@ export default function PlayPage() {
     romName: string;
   } | null>(null);
 
+  // ── Auth State ──────────────────────────────────────────────────
+  const [currentUserId, setCurrentUserId] = useState<number | null>(null);
+  const [currentUsername, setCurrentUsername] = useState<string | null>(null);
+  const [authChecked, setAuthChecked] = useState(false);
+
+  useEffect(() => {
+    const checkAuth = async () => {
+      try {
+        const res = await fetch("/api/auth/me", { credentials: "include" });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.user) {
+            setCurrentUserId(data.user.id);
+            setCurrentUsername(data.user.username || null);
+          }
+        }
+      } catch {
+        // Not authenticated
+      } finally {
+        setAuthChecked(true);
+      }
+    };
+    checkAuth();
+  }, []);
+
+  // ── Netplay ─────────────────────────────────────────────────────
+  const [selectedChallengeId, setSelectedChallengeId] = useState<number | null>(null);
+
+  const netplay = useNetplay({ challengeId: selectedChallengeId });
+
+  // Wire netplay manager into the emulator when session is ready
+  const wiredRef = useRef(false);
+  useEffect(() => {
+    if (netplay.session && emu.setNetplayManager && !wiredRef.current) {
+      const manager = netplay.manager;
+      if (!manager) return;
+
+      emu.setNetplayManager(manager);
+      wiredRef.current = true;
+
+      // Start the netplay connection (WebRTC handshake + countdown)
+      netplay.startNetplay();
+    }
+
+    // Unwire when session ends
+    if (!netplay.session && wiredRef.current) {
+      emu.setNetplayManager?.(null);
+      wiredRef.current = false;
+    }
+  }, [netplay.session, netplay.manager, emu.setNetplayManager, netplay.startNetplay]);
+
+  // ── Handlers ────────────────────────────────────────────────────
+
+  const handleSelectChallenge = useCallback((challengeId: number) => {
+    setSelectedChallengeId(challengeId);
+  }, []);
+
+  const handleParticipate = useCallback((challengeId: number) => {
+    setSelectedChallengeId(challengeId);
+    netplay.participate();
+  }, [netplay]);
+
+  const handleStartMatchmaking = useCallback((challengeId: number) => {
+    setSelectedChallengeId(challengeId);
+    netplay.startMatchmaking();
+  }, [netplay]);
+
+  // ── Connection status state ──────────────────────────────────────
+  const connectionStatus = {
+    visible: netplay.netplayStatus === "playing" || netplay.netplayStatus === "connected",
+    latency: netplay.latency,
+    rollbacks: netplay.rollbacks,
+    opponentName: netplay.session?.opponentName ?? null,
+    connectionState: netplay.netplayStatus === "playing" ? "connected" : "connecting",
+    status: netplay.netplayStatus,
+  };
+
   return (
     <main className="relative min-h-screen">
       <GlowBackground />
+
+      {/* Countdown Overlay */}
+      <CountdownOverlay
+        countdown={netplay.countdown}
+        visible={netplay.netplayStatus === "countdown"}
+      />
+
+      {/* Connection Status Bar */}
+      <ConnectionStatus {...connectionStatus} />
 
       {/* Header */}
       <header
@@ -50,6 +138,23 @@ export default function PlayPage() {
           </a>
 
           <div className="flex items-center gap-4">
+            {/* Auth status */}
+            {authChecked && currentUserId && (
+              <div className="flex items-center gap-2">
+                <span
+                  className="px-3 py-1 rounded-full text-xs font-bold flex items-center gap-1.5"
+                  style={{
+                    backgroundColor: "rgba(74,222,128,0.1)",
+                    border: "1px solid rgba(74,222,128,0.2)",
+                    color: "#4ade80",
+                  }}
+                >
+                  <User className="w-3 h-3" />
+                  {currentUsername}
+                </span>
+              </div>
+            )}
+
             <LanguageSwitcher />
             <a
               href="/"
@@ -99,18 +204,37 @@ export default function PlayPage() {
           </p>
         </div>
 
-        {/* Desktop Download Banner */}
-        <DesktopDownloadBanner />
+        {/* Netplay Error */}
+        {netplay.error && (
+          <div
+            className="rounded-xl px-4 py-3 text-sm font-bold text-center mb-4"
+            style={{
+              backgroundColor: "rgba(253,46,95,0.08)",
+              border: "1px solid rgba(253,46,95,0.2)",
+              color: "#fd2e5f",
+            }}
+          >
+            {netplay.error}
+          </div>
+        )}
 
         {/* Async Challenges */}
         <ChallengePanel
           currentSystem={system}
           onPlayChallenge={(s, rom) => {
             setSystem(s);
-            // The user will select the ROM from the list
           }}
           autoDetectResult={autoDetectResult}
           onAutoDetectConsumed={() => setAutoDetectResult(null)}
+          currentUserId={currentUserId}
+          currentUsername={currentUsername}
+          netplayParticipants={netplay.participants}
+          netplayStatus={netplay.netplayStatus}
+          isNetplaySearching={netplay.isSearching}
+          onParticipate={handleParticipate}
+          onStartMatchmaking={handleStartMatchmaking}
+          onCancelMatchmaking={netplay.cancelMatchmaking}
+          onSelectChallenge={handleSelectChallenge}
         />
 
         {/* Emulator */}

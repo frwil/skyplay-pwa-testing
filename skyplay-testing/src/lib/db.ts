@@ -129,6 +129,13 @@ async function initializeSchema(): Promise<void> {
     );
   } catch { /* column already exists */ }
 
+  // users.last_seen column (migration for presence tracking)
+  try {
+    await getClient().execute(
+      "ALTER TABLE users ADD COLUMN last_seen TIMESTAMP DEFAULT NULL"
+    );
+  } catch { /* column already exists */ }
+
   // Data migration: update existing questions with correct answer types / parts
   // Idempotent — only touches rows that still have the default 'text' type or NULL parts
   try {
@@ -170,7 +177,7 @@ async function initializeSchema(): Promise<void> {
     );
   `);
 
-  // ——— Challenge System (migration for existing DBs) ———
+  // ——— Challenge System ———
   await getClient().execute(`
     CREATE TABLE IF NOT EXISTS challenges (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -204,6 +211,64 @@ async function initializeSchema(): Promise<void> {
   try { await getClient().execute("CREATE INDEX IF NOT EXISTS idx_challenge_submissions_challenge ON challenge_submissions(challenge_id)"); } catch {}
   try { await getClient().execute("CREATE INDEX IF NOT EXISTS idx_challenge_submissions_user ON challenge_submissions(user_id)"); } catch {}
   try { await getClient().execute("CREATE INDEX IF NOT EXISTS idx_challenge_submissions_status ON challenge_submissions(status)"); } catch {}
+
+  // ——— Netplay / P2P System ———
+  await getClient().execute(`
+    CREATE TABLE IF NOT EXISTS challenge_participants (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      challenge_id INTEGER NOT NULL REFERENCES challenges(id),
+      user_id INTEGER NOT NULL REFERENCES users(id),
+      status TEXT NOT NULL DEFAULT 'PENDING',
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(challenge_id, user_id)
+    );
+  `);
+
+  await getClient().execute(`
+    CREATE TABLE IF NOT EXISTS netplay_sessions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      challenge_id INTEGER NOT NULL REFERENCES challenges(id),
+      player1_id INTEGER NOT NULL REFERENCES users(id),
+      player2_id INTEGER REFERENCES users(id),
+      status TEXT NOT NULL DEFAULT 'WAITING',
+      winner_id INTEGER REFERENCES users(id),
+      result TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      started_at TIMESTAMP,
+      finished_at TIMESTAMP
+    );
+  `);
+
+  await getClient().execute(`
+    CREATE TABLE IF NOT EXISTS netplay_signals (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id INTEGER NOT NULL REFERENCES netplay_sessions(id),
+      from_user_id INTEGER NOT NULL REFERENCES users(id),
+      to_user_id INTEGER NOT NULL REFERENCES users(id),
+      type TEXT NOT NULL,
+      payload TEXT NOT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      consumed INTEGER DEFAULT 0
+    );
+  `);
+
+  await getClient().execute(`
+    CREATE TABLE IF NOT EXISTS presence (
+      user_id INTEGER PRIMARY KEY REFERENCES users(id),
+      is_online INTEGER NOT NULL DEFAULT 0,
+      last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      current_challenge_id INTEGER REFERENCES challenges(id),
+      current_session_id INTEGER REFERENCES netplay_sessions(id)
+    );
+  `);
+
+  // Netplay indexes
+  try { await getClient().execute("CREATE INDEX IF NOT EXISTS idx_challenge_participants_challenge ON challenge_participants(challenge_id)"); } catch {}
+  try { await getClient().execute("CREATE INDEX IF NOT EXISTS idx_challenge_participants_user ON challenge_participants(user_id)"); } catch {}
+  try { await getClient().execute("CREATE INDEX IF NOT EXISTS idx_netplay_sessions_status ON netplay_sessions(status)"); } catch {}
+  try { await getClient().execute("CREATE INDEX IF NOT EXISTS idx_netplay_sessions_challenge ON netplay_sessions(challenge_id)"); } catch {}
+  try { await getClient().execute("CREATE INDEX IF NOT EXISTS idx_netplay_signals_session ON netplay_signals(session_id, consumed)"); } catch {}
+  try { await getClient().execute("CREATE INDEX IF NOT EXISTS idx_netplay_signals_to ON netplay_signals(to_user_id, consumed)"); } catch {}
 
   // Performance indexes — harmless if already exist (IF NOT EXISTS from SQLite 3.25+,
   // but Turso/libsql supports it; wrapped in try/catch for safety)

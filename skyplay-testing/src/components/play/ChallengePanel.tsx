@@ -12,7 +12,11 @@ import {
   Send,
   CheckCircle2,
   X,
+  Circle,
+  Play,
 } from "lucide-react";
+import NetplayLobby from "./NetplayLobby";
+import type { Participant } from "@/lib/emulator/netplay/hooks/usePresence";
 
 // ─── Types ──────────────────────────────────────────────────────
 
@@ -51,13 +55,38 @@ interface ChallengePanelProps {
   autoDetectResult?: { result: string; romName: string } | null;
   /** Called after auto-detect result is consumed */
   onAutoDetectConsumed?: () => void;
+  // Netplay
+  currentUserId: number | null;
+  currentUsername: string | null;
+  netplayParticipants: Participant[];
+  netplayStatus: string;
+  isNetplaySearching: boolean;
+  onParticipate: (challengeId: number) => void;
+  onStartMatchmaking: (challengeId: number) => void;
+  onCancelMatchmaking: () => void;
+  /** Called when user clicks a challenge card to view details */
+  onSelectChallenge?: (challengeId: number) => void;
 }
 
 /**
  * Displays active challenges on the /play page.
  * Users can view leaderboards and submit results with a screenshot.
  */
-export default function ChallengePanel({ currentSystem, onPlayChallenge, autoDetectResult, onAutoDetectConsumed }: ChallengePanelProps) {
+export default function ChallengePanel({
+  currentSystem,
+  onPlayChallenge,
+  autoDetectResult,
+  onAutoDetectConsumed,
+  currentUserId,
+  currentUsername,
+  netplayParticipants,
+  netplayStatus,
+  isNetplaySearching,
+  onParticipate,
+  onStartMatchmaking,
+  onCancelMatchmaking,
+  onSelectChallenge,
+}: ChallengePanelProps) {
   const { t } = useTranslation();
   const [challenges, setChallenges] = useState<Challenge[]>([]);
   const [loading, setLoading] = useState(true);
@@ -114,6 +143,7 @@ export default function ChallengePanel({ currentSystem, onPlayChallenge, autoDet
   // ── Fetch challenge detail + leaderboard ──────────────────
 
   const openDetail = async (challengeId: number) => {
+    onSelectChallenge?.(challengeId);
     try {
       const res = await fetch(`/api/challenges/${challengeId}`);
       if (res.ok) {
@@ -307,6 +337,22 @@ export default function ChallengePanel({ currentSystem, onPlayChallenge, autoDet
               >
                 <CheckCircle2 className="w-4 h-4" />
                 {t.play.challenges.submitted} — {t.play.challenges.status[selected.userSubmission.status.toLowerCase() as keyof typeof t.play.challenges.status] || selected.userSubmission.status}
+              </div>
+            )}
+
+            {/* Netplay Lobby */}
+            {currentUserId && selected && (
+              <div className="mb-5">
+                <NetplayLobby
+                  participants={netplayParticipants}
+                  currentUserId={currentUserId}
+                  isParticipating={netplayParticipants.some((p) => p.userId === currentUserId)}
+                  isSearching={isNetplaySearching}
+                  netplayStatus={netplayStatus}
+                  onParticipate={() => onParticipate(selected.challenge.id)}
+                  onStartMatchmaking={() => onStartMatchmaking(selected.challenge.id)}
+                  onCancelMatchmaking={onCancelMatchmaking}
+                />
               </div>
             )}
 

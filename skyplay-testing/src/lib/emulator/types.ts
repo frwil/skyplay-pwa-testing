@@ -83,6 +83,11 @@ export interface EmulatorState {
   // Rollback-ready buffers (NES only — null for other systems)
   stateBuffer: StateBufferInterface | null;
   inputBuffer: InputBufferInterface | null;
+  // Netplay hooks
+  /** Inject a NetplayManager into the emulator game loop. */
+  setNetplayManager?: (manager: unknown) => void;
+  /** Whether netplay is currently active. */
+  isNetplay?: boolean;
 }
 
 // ─── Buffer Interfaces ─────────────────────────────────────────────
