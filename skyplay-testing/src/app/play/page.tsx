@@ -7,6 +7,8 @@ import EmulatorCore from "@/components/play/EmulatorCore";
 import ChallengePanel from "@/components/play/ChallengePanel";
 import CountdownOverlay from "@/components/play/CountdownOverlay";
 import ConnectionStatus from "@/components/play/ConnectionStatus";
+import ParticipationDialog from "@/components/play/ParticipationDialog";
+import type { ChallengeInfo } from "@/components/play/ParticipationDialog";
 import { useEmulator } from "@/lib/emulator/hooks/useEmulator";
 import { useNetplay } from "@/lib/emulator/netplay/hooks/useNetplay";
 import { useTranslation } from "@/lib/i18n/TranslationContext";
@@ -52,6 +54,55 @@ export default function PlayPage() {
 
   const netplay = useNetplay({ challengeId: selectedChallengeId });
 
+  // ── Participation Dialog ─────────────────────────────────────────
+  const [participationChallenge, setParticipationChallenge] = useState<ChallengeInfo | null>(null);
+  const [showParticipation, setShowParticipation] = useState(false);
+
+  // Fetch challenge info when a challenge is selected (for the participation dialog)
+  useEffect(() => {
+    if (selectedChallengeId) {
+      const fetchChallenge = async () => {
+        try {
+          const res = await fetch(`/api/challenges/${selectedChallengeId}`);
+          if (res.ok) {
+            const data = await res.json();
+            if (data.challenge) {
+              setParticipationChallenge(data.challenge);
+              setShowParticipation(true);
+            }
+          }
+        } catch {
+          // ignore
+        }
+      };
+      fetchChallenge();
+    } else {
+      setShowParticipation(false);
+      setParticipationChallenge(null);
+    }
+  }, [selectedChallengeId]);
+
+  // Refresh challenge info when participation status changes
+  useEffect(() => {
+    if (selectedChallengeId && netplay.participationStatus === "participating") {
+      // Re-fetch to get updated participant count
+      const refresh = async () => {
+        try {
+          const res = await fetch(`/api/challenges/${selectedChallengeId}`);
+          if (res.ok) {
+            const data = await res.json();
+            if (data.challenge) {
+              setParticipationChallenge(data.challenge);
+            }
+          }
+        } catch {
+          // ignore
+        }
+      };
+      refresh();
+    }
+  }, [selectedChallengeId, netplay.participationStatus]);
+
   // Wire netplay manager into the emulator when session is ready
   const wiredRef = useRef(false);
   useEffect(() => {
@@ -79,15 +130,23 @@ export default function PlayPage() {
     setSelectedChallengeId(challengeId);
   }, []);
 
-  const handleParticipate = useCallback((challengeId: number) => {
-    setSelectedChallengeId(challengeId);
+  const handleAuthenticated = useCallback((userId: number, username: string) => {
+    setCurrentUserId(userId);
+    setCurrentUsername(username);
+  }, []);
+
+  const handleParticipate = useCallback((_arg?: number) => {
     netplay.participate();
   }, [netplay]);
 
-  const handleStartMatchmaking = useCallback((challengeId: number) => {
-    setSelectedChallengeId(challengeId);
+  const handleStartMatchmaking = useCallback((_arg?: number) => {
     netplay.startMatchmaking();
   }, [netplay]);
+
+  const handleCloseParticipation = useCallback(() => {
+    setShowParticipation(false);
+    setSelectedChallengeId(null);
+  }, []);
 
   // ── Connection status state ──────────────────────────────────────
   const connectionStatus = {
@@ -216,6 +275,24 @@ export default function PlayPage() {
           >
             {netplay.error}
           </div>
+        )}
+
+        {/* Participation Dialog */}
+        {authChecked && participationChallenge && (
+          <ParticipationDialog
+            challenge={participationChallenge}
+            isOpen={showParticipation}
+            onClose={handleCloseParticipation}
+            currentUserId={currentUserId}
+            currentUsername={currentUsername}
+            onAuthenticated={handleAuthenticated}
+            isParticipating={netplay.participationStatus !== "none"}
+            onParticipate={handleParticipate}
+            onLeave={netplay.leave}
+            participants={netplay.participants}
+            onStartMatchmaking={handleStartMatchmaking}
+            isSearching={netplay.isSearching}
+          />
         )}
 
         {/* Async Challenges */}

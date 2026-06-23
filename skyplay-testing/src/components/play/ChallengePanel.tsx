@@ -232,9 +232,8 @@ export default function ChallengePanel({
             const endsIn = getTimeRemaining(new Date(ch.endsAt), now);
 
             return (
-              <button
+              <div
                 key={ch.id}
-                onClick={() => openDetail(ch.id)}
                 className={`text-left rounded-2xl border p-4 transition hover:scale-[1.02] ${
                   isCurrentSystem ? "border-cyan-500/30" : "border-white/10"
                 }`}
@@ -247,40 +246,62 @@ export default function ChallengePanel({
                     : "rgba(255,255,255,0.08)",
                 }}
               >
-                <div className="flex items-start justify-between mb-2">
-                  <h4 className="text-sm font-bold text-white leading-tight">
-                    {ch.title}
-                  </h4>
-                  <span
-                    className="px-2 py-0.5 rounded-full text-[10px] font-bold shrink-0 ml-2"
+                {/* Clickable area: opens participation dialog */}
+                <button
+                  onClick={() => onSelectChallenge?.(ch.id)}
+                  className="w-full text-left"
+                >
+                  <div className="flex items-start justify-between mb-2">
+                    <h4 className="text-sm font-bold text-white leading-tight">
+                      {ch.title}
+                    </h4>
+                    <span
+                      className="px-2 py-0.5 rounded-full text-[10px] font-bold shrink-0 ml-2"
+                      style={{
+                        backgroundColor: "rgba(0,200,255,0.1)",
+                        color: "#00c8ff",
+                      }}
+                    >
+                      {ch.system.toUpperCase()}
+                    </span>
+                  </div>
+
+                  <p className="text-[11px] mb-3 line-clamp-2" style={{ color: "rgba(255,255,255,0.4)" }}>
+                    {ch.description || ch.romName}
+                  </p>
+                </button>
+
+                <div className="flex items-center justify-between text-[10px]" style={{ color: "rgba(255,255,255,0.35)" }}>
+                  <div className="flex items-center gap-3">
+                    <span className="flex items-center gap-1">
+                      <Clock className="w-3 h-3" />
+                      {endsIn}
+                    </span>
+                    <span className="flex items-center gap-1">
+                      <Users className="w-3 h-3" />
+                      {ch.submissionCount}
+                    </span>
+                    <span className="flex items-center gap-1" style={{ color: "#ffd700" }}>
+                      <Coins className="w-3 h-3" />
+                      {ch.reward}
+                    </span>
+                  </div>
+                  {/* Leaderboard button */}
+                  <button
+                    onClick={(e) => { e.stopPropagation(); openDetail(ch.id); }}
+                    className="px-2.5 py-1 rounded-lg text-[10px] font-bold transition hover:scale-105 flex items-center gap-1"
                     style={{
-                      backgroundColor: "rgba(0,200,255,0.1)",
-                      color: "#00c8ff",
+                      backgroundColor: "rgba(255,255,255,0.06)",
+                      border: "1px solid rgba(255,255,255,0.1)",
+                      color: "rgba(255,255,255,0.5)",
                     }}
+                    title="Voir le classement"
                   >
-                    {ch.system.toUpperCase()}
-                  </span>
+                    <Trophy className="w-3 h-3" />
+                    Classement
+                  </button>
                 </div>
-
-                <p className="text-[11px] mb-3 line-clamp-2" style={{ color: "rgba(255,255,255,0.4)" }}>
-                  {ch.description || ch.romName}
-                </p>
-
-                <div className="flex items-center gap-3 text-[10px]" style={{ color: "rgba(255,255,255,0.35)" }}>
-                  <span className="flex items-center gap-1">
-                    <Clock className="w-3 h-3" />
-                    {endsIn}
-                  </span>
-                  <span className="flex items-center gap-1">
-                    <Users className="w-3 h-3" />
-                    {ch.submissionCount}
-                  </span>
-                  <span className="flex items-center gap-1" style={{ color: "#ffd700" }}>
-                    <Coins className="w-3 h-3" />
-                    {ch.reward}
-                  </span>
-                </div>
-              </button>
+              </div>
             );
           })}
         </div>
