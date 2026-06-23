@@ -4,7 +4,7 @@
   "description": "Outil compagnon pour la phase de test utilisateur de skyplay.cloud",
   "start_url": "/",
   "display": "standalone",
-  "orientation": "portrait",
+  "orientation": "any",
   "background_color": "#070f1e",
   "theme_color": "#0097FC",
   "icons": [
