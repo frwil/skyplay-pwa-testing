@@ -43,8 +43,16 @@ export function useWebRTC({ session, deps }: UseWebRTCOptions): UseWebRTCResult 
 
   useEffect(() => {
     mountedRef.current = true;
+    console.log("[Netplay:useWebRTC] useEffect trigger", {
+      hasSession: !!session,
+      sessionId: session?.sessionId,
+      hasDeps: !!deps,
+      playerNumber: session?.playerNumber,
+      opponentName: session?.opponentName,
+    });
 
     if (session && deps) {
+      console.log("[Netplay:useWebRTC] ✅ Creating NetplayManager...");
       const mgr = new NetplayManager(session, deps, (state: NetplayState) => {
         if (!mountedRef.current) return;
         setStatus(state.status);
@@ -54,9 +62,16 @@ export function useWebRTC({ session, deps }: UseWebRTCOptions): UseWebRTCResult 
       });
       managerRef.current = mgr;
       setManager(mgr);
+      console.log("[Netplay:useWebRTC] ✅ NetplayManager created and stored in state");
+    } else {
+      console.log("[Netplay:useWebRTC] ⏳ Skipping manager creation — need both session AND deps", {
+        hasSession: !!session,
+        hasDeps: !!deps,
+      });
     }
 
     return () => {
+      console.log("[Netplay:useWebRTC] useEffect cleanup — destroying manager");
       mountedRef.current = false;
       managerRef.current?.stop();
       managerRef.current = null;
@@ -68,12 +83,18 @@ export function useWebRTC({ session, deps }: UseWebRTCOptions): UseWebRTCResult 
 
   const start = useCallback(async () => {
     const manager = managerRef.current;
-    if (!manager) return;
+    console.log("[Netplay:useWebRTC] start() called", { hasManager: !!manager });
+    if (!manager) {
+      console.log("[Netplay:useWebRTC] ❌ start: no manager, returning");
+      return;
+    }
 
     setCountdown(COUNTDOWN_SECONDS);
+    console.log("[Netplay:useWebRTC] Calling manager.start()...");
     await manager.start((remaining) => {
       if (mountedRef.current) setCountdown(remaining);
     });
+    console.log("[Netplay:useWebRTC] manager.start() completed");
   }, []);
 
   const stop = useCallback(() => {

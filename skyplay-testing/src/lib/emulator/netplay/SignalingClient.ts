@@ -47,6 +47,7 @@ export class SignalingClient {
 
   /** Send a signaling message to the peer. */
   async send(type: SignalType, payload: string): Promise<void> {
+    console.log("[Signaling] ✉️ SEND", type, "to:", this.toUserId, "sessionId:", this.sessionId);
     try {
       const res = await fetch("/api/netplay/signal", {
         method: "POST",
@@ -62,9 +63,12 @@ export class SignalingClient {
 
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
+        console.error("[Signaling] ❌ SEND failed:", res.status, data.error || "");
         throw new Error(data.error || `Signal send failed: ${res.status}`);
       }
+      console.log("[Signaling] ✅ SEND", type, "OK");
     } catch (err) {
+      console.error("[Signaling] ❌ SEND error:", err);
       this.onError?.(err instanceof Error ? err : new Error(String(err)));
     }
   }
@@ -81,8 +85,10 @@ export class SignalingClient {
 
   // ── Private ─────────────────────────────────────────────────────
 
+  private pollCount = 0;
   private async poll(): Promise<void> {
     if (this.aborted) return;
+    this.pollCount++;
 
     try {
       const res = await fetch(
@@ -90,7 +96,13 @@ export class SignalingClient {
         { credentials: "include" },
       );
 
+      // Log first poll and every 50th poll
+      if (this.pollCount === 1) {
+        console.log("[Signaling] 🔄 First poll — sessionId:", this.sessionId);
+      }
+
       if (res.status === 401 || res.status === 403) {
+        console.error("[Signaling] ❌ Poll auth error:", res.status);
         this.onError?.(new Error("Signal polling auth error"));
         return;
       }
@@ -99,6 +111,10 @@ export class SignalingClient {
 
       const data = await res.json();
       const signals: Signal[] = data.signals ?? [];
+
+      if (signals.length > 0) {
+        console.log("[Signaling] 📨 Poll received", signals.length, "signal(s):", signals.map(s => s.type + "(id:" + s.id + ")").join(", "));
+      }
 
       for (const signal of signals) {
         this.lastSignalId = Math.max(this.lastSignalId, signal.id);

@@ -94,27 +94,33 @@ export function useNetplay({ challengeId }: UseNetplayOptions): UseNetplayResult
   const participate = useCallback(async () => {
     if (!challengeId) return;
     setError(null);
+    console.log("[Netplay:useNetplay] participate() — challengeId:", challengeId);
 
     try {
       const res = await fetch(`/api/challenges/${challengeId}/participate`, {
         method: "POST",
         credentials: "include",
       });
+      console.log("[Netplay:useNetplay] participate response:", res.status);
 
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
         if (res.status === 401) {
+          console.log("[Netplay:useNetplay] ❌ participate: not authenticated (401)");
           setError("Vous devez être connecté pour participer");
           return;
         }
+        console.log("[Netplay:useNetplay] ❌ participate error:", data.error || res.status);
         setError(data.error || "Erreur lors de la participation");
         return;
       }
 
       if (mountedRef.current) {
+        console.log("[Netplay:useNetplay] ✅ participate success → 'participating'");
         setParticipationStatus("participating");
       }
-    } catch {
+    } catch (err) {
+      console.error("[Netplay:useNetplay] ❌ participate network error:", err);
       setError("Erreur réseau");
     }
   }, [challengeId]);
@@ -164,7 +170,12 @@ export function useNetplay({ challengeId }: UseNetplayOptions): UseNetplayResult
   }, []);
 
   const startMatchmaking = useCallback(async () => {
+    console.log("[Netplay:useNetplay] startMatchmaking() called", {
+      challengeId,
+      participationStatus,
+    });
     if (!challengeId || participationStatus === "none") {
+      console.log("[Netplay:useNetplay] ❌ startMatchmaking: not participating");
       setError("Vous devez d'abord participer au challenge");
       return;
     }
@@ -180,9 +191,11 @@ export function useNetplay({ challengeId }: UseNetplayOptions): UseNetplayResult
         body: JSON.stringify({ challengeId }),
         credentials: "include",
       });
+      console.log("[Netplay:useNetplay] POST /api/netplay/session response:", res.status);
 
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
+        console.log("[Netplay:useNetplay] ❌ matchmaking POST failed:", data.error || res.status);
         setError(data.error || "Erreur de matchmaking");
         setIsSearching(false);
         return;
@@ -190,9 +203,11 @@ export function useNetplay({ challengeId }: UseNetplayOptions): UseNetplayResult
 
       const data = await res.json();
       const sess = data.session;
+      console.log("[Netplay:useNetplay] session status:", sess.status, "sessionId:", sess.id);
 
       if (sess.status === "MATCHED") {
         // We joined an existing session — ready to connect
+        console.log("[Netplay:useNetplay] ✅ MATCHED! Joined as P2 vs", sess.opponent?.username);
         setIsSearching(false);
 
         const sessionConfig: SessionConfig = {
@@ -204,6 +219,7 @@ export function useNetplay({ challengeId }: UseNetplayOptions): UseNetplayResult
         };
 
         if (mountedRef.current) {
+          console.log("[Netplay:useNetplay] Setting session → 'in_game'");
           setSession(sessionConfig);
           setParticipationStatus("in_game");
         }
@@ -211,6 +227,7 @@ export function useNetplay({ challengeId }: UseNetplayOptions): UseNetplayResult
       }
 
       // WAITING — poll for a match
+      console.log("[Netplay:useNetplay] ⏳ WAITING — polling every 2s for match...");
       sessionIdRef.current = sess.id;
 
       matchmakingTimerRef.current = setInterval(async () => {
@@ -230,11 +247,13 @@ export function useNetplay({ challengeId }: UseNetplayOptions): UseNetplayResult
           const pollSess = pollData.session;
 
           if (pollSess.status === "MATCHED") {
+            console.log("[Netplay:useNetplay] ✅ Poll MATCHED! As P1 vs", pollSess.opponent?.username);
             clearInterval(matchmakingTimerRef.current!);
             matchmakingTimerRef.current = null;
             setIsSearching(false);
 
             if (mountedRef.current) {
+              console.log("[Netplay:useNetplay] Setting session → 'in_game'");
               setSession({
                 sessionId: pollSess.id,
                 challengeId,
@@ -245,11 +264,13 @@ export function useNetplay({ challengeId }: UseNetplayOptions): UseNetplayResult
               setParticipationStatus("in_game");
             }
           }
-        } catch {
+        } catch (err) {
+          console.error("[Netplay:useNetplay] Poll error:", err);
           // Retry next poll
         }
       }, 2000);
-    } catch {
+    } catch (err) {
+      console.error("[Netplay:useNetplay] ❌ startMatchmaking error:", err);
       setError("Erreur réseau");
       setIsSearching(false);
     }
@@ -258,6 +279,13 @@ export function useNetplay({ challengeId }: UseNetplayOptions): UseNetplayResult
   // ── Emulator binding ────────────────────────────────────────────
 
   const bindEmulator = useCallback((newDeps: NetplayEmulatorDeps) => {
+    console.log("[Netplay:useNetplay] bindEmulator() called — deps provided:", {
+      hasGetNes: typeof newDeps.getNes === "function",
+      hasStateBuffer: !!newDeps.stateBuffer,
+      hasInputBuffer: !!newDeps.inputBuffer,
+      hasMuteAudio: typeof newDeps.muteAudio === "function",
+      hasApplyInputs: typeof newDeps.applyInputs === "function",
+    });
     depsRef.current = newDeps;
     setDeps(newDeps);
   }, []);
@@ -265,6 +293,7 @@ export function useNetplay({ challengeId }: UseNetplayOptions): UseNetplayResult
   // ── Start netplay (WebRTC) ──────────────────────────────────────
 
   const startNetplay = useCallback(async () => {
+    console.log("[Netplay:useNetplay] startNetplay() called — delegating to webrtc.start()");
     await webrtc.start();
   }, [webrtc]);
 

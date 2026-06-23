@@ -100,6 +100,12 @@ export class NetplayManager {
 
   /** Start the connection and begin the countdown. */
   async start(onCountdown?: CountdownCallback): Promise<void> {
+    console.log("[Netplay:Manager] start() called", {
+      playerNumber: this.session.playerNumber,
+      sessionId: this.session.sessionId,
+      opponentId: this.session.opponentId,
+      opponentName: this.session.opponentName,
+    });
     this.onCountdown = onCountdown ?? null;
     this.setState("connecting");
 
@@ -109,12 +115,14 @@ export class NetplayManager {
       this.state.latency = Math.round(latency);
     });
     this.rtc.setOnStateChange((connectionState) => {
+      console.log("[Netplay:Manager] RTC connection state:", connectionState);
       if (
         connectionState === "disconnected" ||
         connectionState === "failed" ||
         connectionState === "closed"
       ) {
         if (this.state.status === "playing") {
+          console.log("[Netplay:Manager] ❌ Connection lost during play!");
           this.setState("error");
           this.state.error = "Connection lost";
         }
@@ -123,13 +131,16 @@ export class NetplayManager {
 
     try {
       if (this.session.playerNumber === 1) {
-        // P1 initiates the WebRTC handshake
+        console.log("[Netplay:Manager] P1: initiating WebRTC handshake...");
         await this.rtc.initiate(this.session.sessionId, this.session.opponentId);
+        console.log("[Netplay:Manager] P1: initiate() completed");
       } else {
-        // P2 waits for the offer
+        console.log("[Netplay:Manager] P2: waiting for offer...");
         await this.rtc.accept(this.session.sessionId, this.session.opponentId);
+        console.log("[Netplay:Manager] P2: accept() completed");
       }
     } catch (err) {
+      console.error("[Netplay:Manager] ❌ WebRTC start error:", err);
       this.setState("error");
       this.state.error = err instanceof Error ? err.message : "Connection failed";
       this.onStateChange({ ...this.state });
@@ -222,6 +233,7 @@ export class NetplayManager {
   }
 
   private onDataChannelReady(): void {
+    console.log("[Netplay:Manager] 🔗 DataChannel OPEN — sending 'ready' + starting countdown");
     this.setState("connected");
 
     // Send ready signal, then start countdown
@@ -230,6 +242,7 @@ export class NetplayManager {
   }
 
   private startCountdown(): void {
+    console.log("[Netplay:Manager] ⏱ Starting countdown:", COUNTDOWN_SECONDS);
     this.setState("countdown");
 
     let remaining = COUNTDOWN_SECONDS;
@@ -240,6 +253,7 @@ export class NetplayManager {
       this.onCountdown?.(remaining);
 
       if (remaining <= 0) {
+        console.log("[Netplay:Manager] 🚀 Countdown complete — sending 'start' → 'playing'");
         clearInterval(timer);
 
         // Both sides start on the same frame number
@@ -250,6 +264,7 @@ export class NetplayManager {
   }
 
   private handleMessage(msg: NetplayDataMessage): void {
+    console.log("[Netplay:Manager] 📩 handleMessage type:", msg.type, "status:", this.state.status);
     switch (msg.type) {
       case "input": {
         const inputMsg = msg as unknown as NetplayInputMessage;
@@ -270,14 +285,17 @@ export class NetplayManager {
       }
 
       case "ready": {
+        console.log("[Netplay:Manager] 📩 Received 'ready' from peer");
         // Peer's DataChannel is open — if we haven't started countdown yet
         if (this.state.status === "connected") {
+          console.log("[Netplay:Manager] Starting countdown (triggered by peer ready)");
           this.startCountdown();
         }
         break;
       }
 
       case "start": {
+        console.log("[Netplay:Manager] 📩 Received 'start' from peer → 'playing'");
         const startMsg = msg as unknown as NetplayStartMessage;
         // Synchronize start: both sides begin at the same frame
         // startMsg.startFrame is the agreed-upon starting frame

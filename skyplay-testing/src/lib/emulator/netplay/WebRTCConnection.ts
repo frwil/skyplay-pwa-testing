@@ -41,16 +41,19 @@ export class WebRTCConnection {
     sessionId: number,
     toUserId: number,
   ): Promise<void> {
+    console.log("[WebRTC:Connection] P1 initiate() — sessionId:", sessionId, "toUserId:", toUserId);
     this.isInitiator = true;
     this.destroyed = false;
 
     this.signaling = new SignalingClient(sessionId, toUserId);
     this.signaling.startPolling(
       (signal) => this.handleSignal(signal),
-      (err) => console.error("[WebRTC] Signaling error:", err),
+      (err) => console.error("[WebRTC:Connection] Signaling error:", err),
     );
+    console.log("[WebRTC:Connection] Signaling polling started");
 
     this.createPeerConnection();
+    console.log("[WebRTC:Connection] PeerConnection created, creating DataChannel...");
 
     // Create DataChannel (initiator side)
     this.dc = this.pc!.createDataChannel(DATA_CHANNEL_LABEL, {
@@ -58,14 +61,17 @@ export class WebRTCConnection {
       maxRetransmits: 0,    // Don't retransmit stale inputs
     });
     this.setupDataChannel(this.dc);
+    console.log("[WebRTC:Connection] DataChannel created, label:", DATA_CHANNEL_LABEL);
 
     // Create and send SDP offer
     const offer = await this.pc!.createOffer();
     await this.pc!.setLocalDescription(offer);
+    console.log("[WebRTC:Connection] SDP offer created, sending via signaling...");
 
     // Wait for ICE gathering to complete, then send
     // (We send immediately and also trickle ICE candidates)
     await this.signaling.send("offer", JSON.stringify(this.pc!.localDescription));
+    console.log("[WebRTC:Connection] Offer sent via signaling");
   }
 
   /** P2 calls this to accept an incoming connection. */
@@ -73,14 +79,16 @@ export class WebRTCConnection {
     sessionId: number,
     toUserId: number,
   ): Promise<void> {
+    console.log("[WebRTC:Connection] P2 accept() — sessionId:", sessionId, "toUserId:", toUserId);
     this.isInitiator = false;
     this.destroyed = false;
 
     this.signaling = new SignalingClient(sessionId, toUserId);
     this.signaling.startPolling(
       (signal) => this.handleSignal(signal),
-      (err) => console.error("[WebRTC] Signaling error:", err),
+      (err) => console.error("[WebRTC:Connection] Signaling error:", err),
     );
+    console.log("[WebRTC:Connection] P2 signaling polling started, waiting for offer...");
 
     // PeerConnection will be created when we receive the offer
     // The DataChannel will arrive via ondatachannel event
@@ -92,8 +100,10 @@ export class WebRTCConnection {
       try {
         this.dc.send(JSON.stringify(message));
       } catch {
-        // Channel might have closed between check and send
+        console.log("[WebRTC:Connection] ⚠️ DataChannel send failed (closed between check and send)");
       }
+    } else {
+      console.log("[WebRTC:Connection] ⚠️ Cannot send — DataChannel not open. readyState:", this.dc?.readyState ?? "no dc");
     }
   }
 
@@ -152,21 +162,25 @@ export class WebRTCConnection {
   // ── Private: DataChannel ─────────────────────────────────────────
 
   private setupDataChannel(channel: RTCDataChannel): void {
+    console.log("[WebRTC:Connection] setupDataChannel — readyState:", channel.readyState);
     channel.onopen = () => {
+      console.log("[WebRTC:Connection] 🔗 DataChannel OPEN! Firing onReady callback");
       this.startPing();
       this.onReady?.();
     };
 
     channel.onclose = () => {
+      console.log("[WebRTC:Connection] DataChannel closed");
       this.stopPing();
     };
 
     channel.onmessage = (event) => {
       try {
         const message = JSON.parse(event.data) as NetplayDataMessage;
+        console.log("[WebRTC:Connection] DataChannel message received:", message.type);
         this.handleMessage(message);
       } catch {
-        // Ignore malformed messages
+        console.log("[WebRTC:Connection] DataChannel: malformed message ignored");
       }
     };
   }
@@ -176,10 +190,12 @@ export class WebRTCConnection {
   private async handleSignal(signal: Signal): Promise<void> {
     if (this.destroyed) return;
 
+    console.log("[WebRTC:Connection] 📡 handleSignal:", signal.type, "from:", signal.fromUserId, "id:", signal.id);
     const data = JSON.parse(signal.payload);
 
     switch (signal.type) {
       case "offer": {
+        console.log("[WebRTC:Connection] Received OFFER, creating PeerConnection + sending ANSWER");
         this.createPeerConnection();
         await this.pc!.setRemoteDescription(
           new RTCSessionDescription(data),
@@ -190,10 +206,12 @@ export class WebRTCConnection {
           "answer",
           JSON.stringify(this.pc!.localDescription),
         );
+        console.log("[WebRTC:Connection] ANSWER sent");
         break;
       }
 
       case "answer": {
+        console.log("[WebRTC:Connection] Received ANSWER, setting remote description");
         await this.pc!.setRemoteDescription(
           new RTCSessionDescription(data),
         );
@@ -203,14 +221,16 @@ export class WebRTCConnection {
       case "ice_candidate": {
         try {
           await this.pc?.addIceCandidate(new RTCIceCandidate(data));
-        } catch {
-          // Ignore invalid candidates
+          console.log("[WebRTC:Connection] ICE candidate added");
+        } catch (err) {
+          console.log("[WebRTC:Connection] ICE candidate ignored:", err);
         }
         break;
       }
 
       case "ready":
       case "start":
+        console.log("[WebRTC:Connection] Received", signal.type, "(via signaling — before DataChannel open)");
         // Forwarded to message handler — these are DataChannel messages
         // relayed via signaling before DataChannel is open
         break;

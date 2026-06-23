@@ -124,6 +124,13 @@ export default function PlayPage() {
         unmuteAudio: emu.unmuteAudio,
         applyInputs: emu.applyInputs,
       };
+      console.log("[Netplay:Page] bindEmulator called — emulator running, NES ready", {
+        hasGetNes: typeof deps.getNes === "function",
+        hasStateBuffer: !!deps.stateBuffer,
+        hasInputBuffer: !!deps.inputBuffer,
+        hasMuteAudio: typeof deps.muteAudio === "function",
+        hasApplyInputs: typeof deps.applyInputs === "function",
+      });
       netplay.bindEmulator(deps);
       depsBoundRef.current = true;
     }
@@ -149,7 +156,13 @@ export default function PlayPage() {
   const wiredRef = useRef(false);
   useEffect(() => {
     const manager = netplay.manager;
+    console.log("[Netplay:Page] manager wiring check", {
+      hasManager: !!manager,
+      hasSetNetplayManager: typeof emu.setNetplayManager === "function",
+      alreadyWired: wiredRef.current,
+    });
     if (manager && emu.setNetplayManager && !wiredRef.current) {
+      console.log("[Netplay:Page] ✅ Wiring manager into emulator + calling startNetplay()");
       emu.setNetplayManager(manager);
       wiredRef.current = true;
       netplay.startNetplay();
@@ -157,6 +170,7 @@ export default function PlayPage() {
 
     // Unwire when manager is cleared
     if (!manager && wiredRef.current) {
+      console.log("[Netplay:Page] ❌ Manager cleared, unwiring");
       emu.setNetplayManager?.(null);
       wiredRef.current = false;
     }
