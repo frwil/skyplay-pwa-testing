@@ -20,6 +20,7 @@ import { SnesEmulatorAdapter } from "../adapters/SnesAdapter";
 import { GbEmulatorAdapter } from "../adapters/GbAdapter";
 import { GbaEmulatorAdapter } from "../adapters/GbaAdapter";
 import { InputDelayManager } from "../netplay/InputDelayManager";
+import { SYSTEM_KEY_MAPS } from "../EmulatorAdapter";
 
 // jsnes is a CommonJS module with no types — we declare the interface we need
 interface JsnesNes {
@@ -644,6 +645,51 @@ export function useEmulator(system: SystemType = "nes") {
         rawButtonDownRef.current(player, button);
       } else {
         rawButtonUpRef.current(player, button);
+      }
+    },
+    /**
+     * Inject a key event directly on the canvas as a real KeyboardEvent.
+     * This bypasses Nostalgist's broken pressDown() (which relies on
+     * RetroArch config key mappings that don't exist by default).
+     *
+     * Used by the netplay managers for:
+     *  - Start button simulation after countdown
+     *  - Applying delayed remote inputs on the local emulator
+     */
+    injectKeyEvent: (player: 1 | 2, button: number, pressed: boolean) => {
+      if (isNes) {
+        // NES: jsnes handles buttonDown/buttonUp directly, no need for key events
+        if (pressed) {
+          nesRef.current?.buttonDown(player, button);
+        } else {
+          nesRef.current?.buttonUp(player, button);
+        }
+        return;
+      }
+      // Non-NES: dispatch real KeyboardEvent on the canvas so Emscripten
+      // captures it (same path as a physical keypress).
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      const keyMap = SYSTEM_KEY_MAPS[system];
+      let code: string | null = null;
+      for (const [eventCode, mapping] of Object.entries(keyMap)) {
+        if (mapping.player === player && mapping.button === button) {
+          code = eventCode;
+          break;
+        }
+      }
+      if (!code) return; // No keyboard mapping for this button
+      const eventType = pressed ? "keydown" : "keyup";
+      canvas.dispatchEvent(
+        new KeyboardEvent(eventType, {
+          code,
+          key: code.startsWith("Key") ? code.slice(3).toLowerCase() : code,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+      if (button === 3) {
+        console.log("[useEmulator] ⌨️ injectKeyEvent:", eventType, code, "player:", player);
       }
     },
     readRam: () => {

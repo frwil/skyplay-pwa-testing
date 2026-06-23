@@ -41,6 +41,15 @@ export interface NetplayEmulatorDeps {
   applyInputs: (player: 1 | 2, bitmask: number, prevBitmask: number) => void;
   /** Apply a single button press/release directly to the emulator (bypasses netplay). */
   applyButton: (player: 1 | 2, button: number, pressed: boolean) => void;
+  /**
+   * Inject a key event directly on the canvas as a real KeyboardEvent, or
+   * call jsnes.buttonDown/buttonUp directly for NES.
+   *
+   * Used for Start button simulation after countdown. This is the correct
+   * path because Nostalgist's pressDown() relies on RetroArch config key
+   * mappings that don't exist by default.
+   */
+  injectKeyEvent: (player: 1 | 2, button: number, pressed: boolean) => void;
 }
 
 export type StateCallback = (state: NetplayState) => void;
@@ -268,16 +277,16 @@ export class NetplayManager {
         // ── Simulate Start button press for both players ──────────
         // After a short delay, press and release Start so the game
         // advances past the title screen on both emulators.
-        // We use applyButton (raw ref, bypasses rollback routing) so
-        // both peers press locally in sync with the countdown end.
+        // Uses injectKeyEvent which handles both NES (direct jsnes calls)
+        // and non-NES (real KeyboardEvents on canvas for Emscripten).
         setTimeout(() => {
-          console.log("[Netplay:Manager] 🎮 Simulating Start press for both players");
-          this.deps.applyButton(1, START_BUTTON_INDEX, true);
-          this.deps.applyButton(2, START_BUTTON_INDEX, true);
+          console.log("[Netplay:Manager] 🎮 Simulating Start press for both players (via injectKeyEvent)");
+          this.deps.injectKeyEvent(1, START_BUTTON_INDEX, true);
+          this.deps.injectKeyEvent(2, START_BUTTON_INDEX, true);
 
           setTimeout(() => {
-            this.deps.applyButton(1, START_BUTTON_INDEX, false);
-            this.deps.applyButton(2, START_BUTTON_INDEX, false);
+            this.deps.injectKeyEvent(1, START_BUTTON_INDEX, false);
+            this.deps.injectKeyEvent(2, START_BUTTON_INDEX, false);
             console.log("[Netplay:Manager] 🎮 Start button released");
           }, 200);
         }, 150);

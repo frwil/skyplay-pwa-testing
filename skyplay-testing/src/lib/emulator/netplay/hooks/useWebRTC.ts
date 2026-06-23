@@ -89,10 +89,11 @@ export function useWebRTC({ session, deps, system }: UseWebRTCOptions): UseWebRT
             setError(state.error);
           },
         );
-        // Wire applyButton if deps are already available
+        // Wire applyButton and injectKeyEvent if deps are already available
         if (deps) {
           mgr.setApplyButton((deps as InputDelayEmulatorDeps).applyButton);
-          console.log("[Netplay:useWebRTC] ✅ applyButton wired to InputDelayManager");
+          mgr.setInjectKeyEvent((deps as InputDelayEmulatorDeps).injectKeyEvent);
+          console.log("[Netplay:useWebRTC] ✅ applyButton + injectKeyEvent wired to InputDelayManager");
         }
         managerRef.current = mgr;
         setManager(mgr);
@@ -118,13 +119,14 @@ export function useWebRTC({ session, deps, system }: UseWebRTCOptions): UseWebRT
     };
   }, [session?.sessionId, deps, system]); // Re-create when session ID, deps, or system change
 
-  // ── Wire applyButton for InputDelayManager when deps arrive after creation ──
+  // ── Wire applyButton + injectKeyEvent for InputDelayManager when deps arrive after creation ──
 
   useEffect(() => {
     const mgr = managerRef.current;
     if (mgr instanceof InputDelayManager && deps) {
-      console.log("[Netplay:useWebRTC] Wiring applyButton (deps arrived after manager creation)");
+      console.log("[Netplay:useWebRTC] Wiring applyButton + injectKeyEvent (deps arrived after manager creation)");
       mgr.setApplyButton((deps as InputDelayEmulatorDeps).applyButton);
+      mgr.setInjectKeyEvent((deps as InputDelayEmulatorDeps).injectKeyEvent);
     }
   }, [deps]);
 

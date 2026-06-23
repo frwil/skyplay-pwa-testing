@@ -124,7 +124,10 @@ export default function PlayPage() {
           const res = await fetch(`/api/challenges/${selectedChallengeId}`);
           if (res.ok) {
             const data = await res.json();
-            if (data.challenge) {
+            // Don't open the dialog if the game has already started
+            // (P2 accepting a challenge sets selectedChallengeId, but the
+            // ParticipationDialog shouldn't flash open during countdown)
+            if (data.challenge && netplay.participationStatus !== "in_game") {
               setParticipationChallenge(data.challenge);
               setShowParticipation(true);
             }
@@ -138,7 +141,15 @@ export default function PlayPage() {
       setShowParticipation(false);
       setParticipationChallenge(null);
     }
-  }, [selectedChallengeId]);
+  }, [selectedChallengeId, netplay.participationStatus]);
+
+  // Auto-close participation dialog when the game starts
+  // (so the modal overlay doesn't block the game view)
+  useEffect(() => {
+    if (netplay.participationStatus === "in_game" && showParticipation) {
+      setShowParticipation(false);
+    }
+  }, [netplay.participationStatus, showParticipation]);
 
   // Refresh challenge info when participation status changes
   useEffect(() => {
@@ -258,6 +269,7 @@ export default function PlayPage() {
         unmuteAudio: emu.unmuteAudio,
         applyInputs: emu.applyInputs,
         applyButton: emu.applyButton,
+        injectKeyEvent: emu.injectKeyEvent,
       };
       console.log("[Netplay:Page] bindEmulator called — NES rollback mode", {
         hasGetNes: typeof deps.getNes === "function",
@@ -272,6 +284,7 @@ export default function PlayPage() {
       // ── Non-NES: Input Delay deps ───────────────────────────
       const deps: InputDelayEmulatorDeps = {
         applyButton: emu.applyButton,
+        injectKeyEvent: emu.injectKeyEvent,
       };
       console.log("[Netplay:Page] bindEmulator called — Input Delay mode", {
         system: emu.system,

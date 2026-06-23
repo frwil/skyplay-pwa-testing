@@ -99,6 +99,16 @@ export interface EmulatorState {
   applyInputs: (player: 1 | 2, bitmask: number, prevBitmask: number) => void;
   /** Apply a single button press/release (bypasses netplay routing). Used by InputDelayManager. */
   applyButton: (player: 1 | 2, button: number, pressed: boolean) => void;
+  /**
+   * Inject a key event directly on the canvas as a real KeyboardEvent.
+   * Bypasses Nostalgist's broken pressDown() (which relies on RetroArch
+   * config key mappings that don't exist by default).
+   *
+   * Used by netplay managers for:
+   *  - Start button simulation after countdown
+   *  - Applying delayed remote inputs on the local emulator
+   */
+  injectKeyEvent: (player: 1 | 2, button: number, pressed: boolean) => void;
 }
 
 // ─── Buffer Interfaces ─────────────────────────────────────────────

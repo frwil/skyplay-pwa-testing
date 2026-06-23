@@ -18,8 +18,15 @@ export type CountdownCallback = (remaining: number) => void;
 
 /** Minimal deps needed for Input Delay netplay (non-NES systems). */
 export interface InputDelayEmulatorDeps {
-  /** Apply a single button press/release to the emulator. */
+  /** Apply a single button press/release to the emulator (legacy, broken for non-NES Nostalgist). */
   applyButton: (player: 1 | 2, button: number, pressed: boolean) => void;
+  /**
+   * Inject a key event directly on the canvas as a real KeyboardEvent.
+   * This is the CORRECT way to apply inputs for non-NES — it dispatches
+   * KeyboardEvents that Emscripten captures, bypassing Nostalgist's
+   * broken RetroArch config-based pressDown().
+   */
+  injectKeyEvent: (player: 1 | 2, button: number, pressed: boolean) => void;
 }
 
 interface DelayedInput {
@@ -54,8 +61,16 @@ export class InputDelayManager {
   private flushTimer: ReturnType<typeof setInterval> | null = null;
   private seq = 0;
 
-  /** Callback to apply a button press on the actual emulator. */
+  /** Callback to apply a button press on the actual emulator (legacy, broken for non-NES). */
   private applyButton: ((player: 1 | 2, button: number, pressed: boolean) => void) | null =
+    null;
+
+  /**
+   * Callback to inject a real KeyboardEvent on the canvas.
+   * This is the CORRECT way to apply inputs for non-NES — Emscripten
+   * captures KeyboardEvents dispatched on the canvas directly.
+   */
+  private injectKeyEvent: ((player: 1 | 2, button: number, pressed: boolean) => void) | null =
     null;
 
   // Stable wrapper callbacks
@@ -86,6 +101,13 @@ export class InputDelayManager {
     fn: (player: 1 | 2, button: number, pressed: boolean) => void,
   ): void {
     this.applyButton = fn;
+  }
+
+  /** Set the function that injects real KeyboardEvents on the canvas. */
+  setInjectKeyEvent(
+    fn: (player: 1 | 2, button: number, pressed: boolean) => void,
+  ): void {
+    this.injectKeyEvent = fn;
   }
 
   /** Start the WebRTC handshake and countdown. */
@@ -223,16 +245,17 @@ export class InputDelayManager {
         // ── Simulate Start button press for both players ──────────
         // After a short delay, press and release Start so the game
         // advances past the title screen on both emulators.
-        // We use the raw button refs (bypassing netplay routing) so
-        // both peers press locally in sync with the countdown end.
+        // Uses injectKeyEvent to dispatch real KeyboardEvents on the
+        // canvas, which Emscripten captures (bypasses Nostalgist's
+        // broken RetroArch config-based pressDown).
         setTimeout(() => {
-          console.log("[InputDelay:Manager] 🎮 Simulating Start press for both players");
-          this.applyButton?.(1, START_BUTTON_INDEX, true);
-          this.applyButton?.(2, START_BUTTON_INDEX, true);
+          console.log("[InputDelay:Manager] 🎮 Simulating Start press for both players (via injectKeyEvent)");
+          this.injectKeyEvent?.(1, START_BUTTON_INDEX, true);
+          this.injectKeyEvent?.(2, START_BUTTON_INDEX, true);
 
           setTimeout(() => {
-            this.applyButton?.(1, START_BUTTON_INDEX, false);
-            this.applyButton?.(2, START_BUTTON_INDEX, false);
+            this.injectKeyEvent?.(1, START_BUTTON_INDEX, false);
+            this.injectKeyEvent?.(2, START_BUTTON_INDEX, false);
             console.log("[InputDelay:Manager] 🎮 Start button released");
           }, 200);
         }, 150);
@@ -312,7 +335,7 @@ export class InputDelayManager {
 
     for (const input of this.inputQueue) {
       if (now >= input.applyAt) {
-        this.applyButton?.(input.player, input.button, input.pressed);
+        this.injectKeyEvent?.(input.player, input.button, input.pressed);
         applied++;
       } else {
         remaining.push(input);
