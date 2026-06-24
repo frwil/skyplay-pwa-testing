@@ -130,10 +130,8 @@ export abstract class BaseNostalgistAdapter implements EmulatorAdapter {
         core: this.coreName,
         rom: rom.path,
         element: this.canvasEl,
+        retroarchConfig: this.buildRetroarchConfig(),
       });
-
-      // Write keyboard→gamepad mappings so pressDown/pressUp work
-      this.writeRetroArchInputConfig();
 
       this._status = "running";
       this.callbacks.onStatusChange("running");
@@ -165,10 +163,8 @@ export abstract class BaseNostalgistAdapter implements EmulatorAdapter {
         core: this.coreName,
         rom: romData,
         element: this.canvasEl,
+        retroarchConfig: this.buildRetroarchConfig(),
       });
-
-      // Write keyboard→gamepad mappings so pressDown/pressUp work
-      this.writeRetroArchInputConfig();
 
       this._status = "running";
       this.callbacks.onStatusChange("running");
@@ -301,39 +297,133 @@ export abstract class BaseNostalgistAdapter implements EmulatorAdapter {
   }
 
   /**
-   * Inject a real DOM KeyboardEvent dispatched on the canvas element.
+   * Build RetroArch keyboard→gamepad config from SYSTEM_KEY_MAPS.
+   *
+   * This is passed as the `retroarchConfig` option to Nostalgist.launch().
+   * Nostalgist writes it to retroarch.cfg BEFORE RetroArch starts (in
+   * setupRaConfigFiles → line 2719), so RetroArch's internal keyboard
+   * mapping is correct from initialization.
+   *
+   * Our earlier approach (writeRetroArchInputConfig AFTER launch) ran
+   * too late — RetroArch had already read the config and set up its
+   * internal mapping with defaults (all "nul" for P2). By passing the
+   * config here, Nostalgist writes it before Module.callMain() runs.
+   */
+  private buildRetroarchConfig(): Record<string, string> {
+    const config: Record<string, string> = {};
+    const keyMap = SYSTEM_KEY_MAPS[this.systemType];
+    if (!keyMap) return config;
+
+    const seen = new Set<string>();
+    for (const [jsCode, mapping] of Object.entries(keyMap)) {
+      const retroarchKey = this.jsCodeToRetroarchKey(jsCode);
+      if (!retroarchKey) continue;
+
+      const buttonName = INDEX_TO_RETROARCH[mapping.button];
+      if (!buttonName) continue;
+
+      const configKey = `input_player${mapping.player}_${buttonName}`;
+      if (seen.has(configKey)) continue; // First mapping wins
+      seen.add(configKey);
+
+      config[configKey] = retroarchKey;
+    }
+
+    console.log(
+      `[${this.systemType}] 🎮 Built retroarchConfig: ${Object.keys(config).length} mappings`,
+    );
+    return config;
+  }
+
+  /**
+   * Inject a keyboard event directly into the Emscripten JSEvents system.
    *
    * Nostalgist's pressDown/pressUp → fireKeyboardEvent creates a plain
-   * object { code, target } and passes it directly to Emscripten's
-   * JSEvents eventListenerFunc. That function expects a full DOM
-   * KeyboardEvent with keyCode, which, key, etc. — when those are
-   * missing (undefined), the WASM handler sees keyCode=0 → no key.
+   * object { code, target } and passes it to JSEvents.eventListenerFunc.
+   * The Emscripten keyboard handler expects a full event object with
+   * keyCode, which, key, etc. — when those are missing (undefined),
+   * the WASM handler sees keyCode=0 → no key recognized.
    *
-   * This method constructs a proper KeyboardEvent (with keyCode and
-   * all modifiers) and dispatches it through the normal browser event
-   * pipeline. After updateKeyboardEventHandlers(), Nostalgist registers
-   * the keyboard handlers on the canvas element, so dispatching on
-   * canvas guarantees event.target === element and the handlers fire.
+   * After updateKeyboardEventHandlers(), Nostalgist wraps each keyboard
+   * handler with a check: respondToGlobalEvents (default true) checks
+   * !isInteractable(event.target); otherwise checks target === element.
+   * The wrapped handler then calls the original handler with the event.
+   *
+   * This method constructs a COMPLETE event-like object with all
+   * properties Emscripten needs and passes it directly to each
+   * matching JSEvents handler. This bypasses the DOM dispatch system
+   * entirely and is the same approach Nostalgist's fireKeyboardEvent
+   * uses — but with a properly populated event object instead of just
+   * { code, target }.
    */
   injectRawKey(code: string, pressed: boolean): void {
-    if (!this.canvasEl) return;
+    if (!this.nostalgist) return;
     try {
+      const module = this.nostalgist.getEmscripten?.() as any;
+      if (!module?.JSEvents?.eventHandlers) return;
+
       const keyCode = CODE_TO_KEYCODE[code] ?? 0;
-      const event = new KeyboardEvent(pressed ? "keydown" : "keyup", {
+      const eventType = pressed ? "keydown" : "keyup";
+
+      // Full event-like object with every property the Emscripten
+      // keyboard handler might read. Methods are stubbed so the
+      // handler doesn't throw when calling preventDefault() etc.
+      const event: Record<string, unknown> = {
         code,
         key: codeToKey(code),
         keyCode,
         which: keyCode,
+        charCode: pressed ? keyCode : 0,
+        target: this.canvasEl,
+        currentTarget: this.canvasEl,
+        srcElement: this.canvasEl,
+        type: eventType,
         bubbles: true,
         cancelable: true,
-        view: window,
         ctrlKey: false,
         altKey: false,
         shiftKey: false,
         metaKey: false,
         repeat: false,
-      });
-      this.canvasEl.dispatchEvent(event);
+        location: 0,
+        isComposing: false,
+        isTrusted: false,
+        defaultPrevented: false,
+        returnValue: true,
+        timeStamp: Date.now(),
+        view: typeof window !== "undefined" ? window : null,
+        detail: 0,
+        layerX: 0,
+        layerY: 0,
+        pageX: 0,
+        pageY: 0,
+        preventDefault: () => {},
+        stopPropagation: () => {},
+        stopImmediatePropagation: () => {},
+        getModifierState: () => false,
+        composed: () => false,
+        initKeyboardEvent: () => {},
+      };
+
+      let called = 0;
+      for (const handler of module.JSEvents.eventHandlers) {
+        if (handler.eventTypeString === eventType) {
+          try {
+            handler.eventListenerFunc(event);
+            called++;
+          } catch {
+            // Silently ignore errors from handlers that don't
+            // recognize this key (e.g., keypress handlers for
+            // non-character keys).
+          }
+        }
+      }
+
+      if (called === 0) {
+        console.warn(
+          `[${this.systemType}] injectRawKey: no "${eventType}" handlers found in JSEvents`,
+        );
+      }
     } catch (err) {
       console.warn(`[${this.systemType}] injectRawKey failed:`, err);
     }
