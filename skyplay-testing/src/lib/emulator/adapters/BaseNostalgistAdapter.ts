@@ -131,6 +131,7 @@ export abstract class BaseNostalgistAdapter implements EmulatorAdapter {
         rom: rom.path,
         element: this.canvasEl,
         retroarchConfig: this.buildRetroarchConfig(),
+        size: this.buildCanvasSize(),
       });
 
       this._status = "running";
@@ -164,6 +165,7 @@ export abstract class BaseNostalgistAdapter implements EmulatorAdapter {
         rom: romData,
         element: this.canvasEl,
         retroarchConfig: this.buildRetroarchConfig(),
+        size: this.buildCanvasSize(),
       });
 
       this._status = "running";
@@ -333,6 +335,28 @@ export abstract class BaseNostalgistAdapter implements EmulatorAdapter {
       `[${this.systemType}] 🎮 Built retroarchConfig: ${Object.keys(config).length} mappings`,
     );
     return config;
+  }
+
+  /**
+   * Compute an explicit canvas size for Nostalgist's initial viewport.
+   *
+   * Nostalgist auto-detects size via element.offsetWidth/offsetHeight.
+   * When the canvas uses CSS aspect-ratio + absolute positioning inside
+   * a flex/grid layout, those values can be 0 or wrong. Passing an
+   * explicit `size` bypasses auto-detection and ensures the WebGL
+   * viewport is correctly sized from the start.
+   *
+   * Uses a 3x scale of the native resolution for most systems (2x for
+   * higher-res like PS1), matching the game's aspect ratio exactly.
+   */
+  private buildCanvasSize(): { width: number; height: number } {
+    const cfg = SYSTEM_CONFIGS[this.systemType];
+    const scale = this.systemType === "ps1" ? 2 : 3;
+    const size = { width: cfg.width * scale, height: cfg.height * scale };
+    console.log(
+      `[${this.systemType}] 📐 Canvas size: ${size.width}x${size.height} (${scale}x native)`,
+    );
+    return size;
   }
 
   /**
