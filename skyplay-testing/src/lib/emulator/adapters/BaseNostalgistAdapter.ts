@@ -1,7 +1,7 @@
 import type { Nostalgist } from "nostalgist";
 import type { EmulatorAdapter } from "../EmulatorAdapter";
 import type { EmulatorStatus, RomEntry, SystemType } from "../types";
-import { SYSTEM_CONFIGS } from "../EmulatorAdapter";
+import { SYSTEM_CONFIGS, SYSTEM_KEY_MAPS } from "../EmulatorAdapter";
 
 /** RetroArch button name for each generic button index. */
 const INDEX_TO_RETROARCH: Record<number, string> = {
@@ -85,6 +85,9 @@ export abstract class BaseNostalgistAdapter implements EmulatorAdapter {
         element: this.canvasEl,
       });
 
+      // Write keyboard→gamepad mappings so pressDown/pressUp work
+      this.writeRetroArchInputConfig();
+
       this._status = "running";
       this.callbacks.onStatusChange("running");
     } catch (err) {
@@ -116,6 +119,9 @@ export abstract class BaseNostalgistAdapter implements EmulatorAdapter {
         rom: romData,
         element: this.canvasEl,
       });
+
+      // Write keyboard→gamepad mappings so pressDown/pressUp work
+      this.writeRetroArchInputConfig();
 
       this._status = "running";
       this.callbacks.onStatusChange("running");
@@ -277,6 +283,151 @@ export abstract class BaseNostalgistAdapter implements EmulatorAdapter {
       }
     } catch (err) {
       console.warn(`[${this.systemType}] injectRawKey failed:`, err);
+    }
+  }
+
+  /**
+   * Convert a JS KeyboardEvent.code value to a RetroArch config key name.
+   * This is the reverse of Nostalgist's getKeyboardCode logic.
+   *
+   * Examples: "Enter" → "enter", "ArrowUp" → "up", "KeyX" → "x",
+   *           "NumpadEnter" → "kp_enter", "ShiftRight" → "rshift"
+   */
+  private jsCodeToRetroarchKey(code: string): string | null {
+    // Single letter keys: KeyX → x, KeyA → a
+    if (/^Key[A-Z]$/.test(code)) return code[3].toLowerCase();
+    // Digit keys: Digit0 → keypad0
+    if (/^Digit\d$/.test(code)) return "keypad" + code[5];
+    // Numpad digits: Numpad0 → num0
+    if (/^Numpad\d$/.test(code)) return "num" + code[6];
+    // F-keys: F1 → f1
+    if (/^F\d+$/.test(code)) return code.toLowerCase();
+
+    // Reverse of Nostalgist's keyboardCodeMap
+    const reverseMap: Record<string, string> = {
+      NumpadAdd: "add",
+      AltLeft: "alt",
+      Backquote: "backquote",
+      Backspace: "backspace",
+      CapsLock: "capslock",
+      Comma: "comma",
+      ControlLeft: "ctrl",
+      Delete: "del",
+      NumpadDivide: "divide",
+      ArrowDown: "down",
+      End: "end",
+      Enter: "enter",
+      Equal: "equals",
+      Escape: "escape",
+      Home: "home",
+      Insert: "insert",
+      NumpadEnter: "kp_enter",
+      NumpadEquals: "kp_equals",
+      NumpadSubtract: "subtract",
+      NumpadDecimal: "kp_period",
+      ArrowLeft: "left",
+      BracketLeft: "leftbracket",
+      Minus: "minus",
+      NumpadMultiply: "multiply",
+      NumLock: "numlock",
+      PageDown: "pagedown",
+      PageUp: "pageup",
+      Pause: "pause",
+      Period: "period",
+      PrintScreen: "print_screen",
+      Quote: "quote",
+      AltRight: "ralt",
+      ControlRight: "rctrl",
+      ArrowRight: "right",
+      BracketRight: "rightbracket",
+      ShiftRight: "rshift",
+      ScrollLock: "scroll_lock",
+      Semicolon: "semicolon",
+      ShiftLeft: "shift",
+      Slash: "slash",
+      Space: "space",
+      Tab: "tab",
+      ArrowUp: "up",
+    };
+    return reverseMap[code] ?? null;
+  }
+
+  /**
+   * Write keyboard-to-gamepad mappings to the RetroArch config file
+   * on the Emscripten virtual filesystem.
+   *
+   * Nostalgist's pressDown/pressUp (and therefore buttonDown/buttonUp)
+   * rely on RetroArch config mappings to translate button names to
+   * keyboard keys. The default config maps EVERYTHING to "nul", so
+   * all programmatic input silently fails.
+   *
+   * This method reads SYSTEM_KEY_MAPS for the current system and
+   * writes the corresponding RetroArch config entries so that
+   * pressDown("start", 1) → find "enter" in config → inject Enter key
+   * → RetroArch maps Enter to P1 Start.
+   */
+  writeRetroArchInputConfig(): void {
+    try {
+      const module = this.nostalgist?.getEmscriptenModule?.();
+      if (!module?.FS) {
+        console.warn(
+          `[${this.systemType}] Cannot write RetroArch config — no FS access`,
+        );
+        return;
+      }
+
+      const configPath = "/home/web_user/retroarch/userdata/retroarch.cfg";
+      const keyMap = SYSTEM_KEY_MAPS[this.systemType];
+      if (!keyMap) return;
+
+      // Read existing config (may not exist on first launch)
+      let configContent = "";
+      try {
+        configContent = module.FS.readFile(configPath, { encoding: "utf8" });
+      } catch {
+        // Config doesn't exist yet — start fresh
+      }
+
+      // Build RetroArch keyboard mappings from SYSTEM_KEY_MAPS
+      const newMappings: string[] = [];
+      const seen = new Set<string>();
+
+      for (const [jsCode, mapping] of Object.entries(keyMap)) {
+        const retroarchKey = this.jsCodeToRetroarchKey(jsCode);
+        if (!retroarchKey) continue;
+
+        const buttonName = INDEX_TO_RETROARCH[mapping.button];
+        if (!buttonName) continue;
+
+        const configKey = `input_player${mapping.player}_${buttonName}`;
+        if (seen.has(configKey)) continue; // First mapping wins
+        seen.add(configKey);
+
+        newMappings.push(`${configKey} = ${retroarchKey}`);
+      }
+
+      // Remove any previous Skyplay section and all input_player lines
+      const marker = "# Skyplay keyboard mappings (auto-generated)";
+      const lines = configContent.split("\n").filter(
+        (line) =>
+          !line.startsWith("# Skyplay keyboard mappings") &&
+          !line.startsWith("input_player"),
+      );
+
+      const finalConfig =
+        [...lines.filter((l) => l.trim()), "", marker, ...newMappings, ""].join(
+          "\n",
+        );
+
+      module.FS.writeFile(configPath, finalConfig);
+      console.log(
+        `[${this.systemType}] ✅ RetroArch config written — ${newMappings.length} key mappings`,
+      );
+    } catch (err) {
+      console.warn(
+        `[${this.systemType}] Failed to write RetroArch config:`,
+        err,
+      );
     }
   }
 

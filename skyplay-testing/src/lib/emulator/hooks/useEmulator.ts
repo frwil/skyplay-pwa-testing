@@ -20,7 +20,6 @@ import { SnesEmulatorAdapter } from "../adapters/SnesAdapter";
 import { GbEmulatorAdapter } from "../adapters/GbAdapter";
 import { GbaEmulatorAdapter } from "../adapters/GbaAdapter";
 import { InputDelayManager } from "../netplay/InputDelayManager";
-import { SYSTEM_KEY_MAPS } from "../EmulatorAdapter";
 
 // jsnes is a CommonJS module with no types — we declare the interface we need
 interface JsnesNes {
@@ -670,30 +669,26 @@ export function useEmulator(system: SystemType = "nes") {
         }
         return;
       }
-      // Non-NES: find the keyboard code for this player/button combo
-      const keyMap = SYSTEM_KEY_MAPS[system];
-      let code: string | null = null;
-      for (const [eventCode, mapping] of Object.entries(keyMap)) {
-        if (mapping.player === player && mapping.button === button) {
-          code = eventCode;
-          break;
-        }
+      // Non-NES: use adapter's buttonDown/buttonUp which call
+      // Nostalgist's pressDown/pressUp. These read keyboard→gamepad
+      // mappings from the RetroArch config file we write at launch
+      // (via writeRetroArchInputConfig). Without that config write,
+      // all mappings are "nul" and pressDown/pressUp silently fail.
+      if (pressed) {
+        adapterRef.current?.buttonDown(player, button);
+      } else {
+        adapterRef.current?.buttonUp(player, button);
       }
-      if (!code) {
-        // No keyboard mapping for this player/button — skip silently
-        // (P2 mappings are minimal: only Start/Select via Numpad keys)
-        return;
-      }
-
-      // Inject directly into Emscripten's JSEvents handlers via the
-      // adapter's injectRawKey. This dispatches { code, target }
-      // objects — the same pipeline Nostalgist's internal
-      // fireKeyboardEvent uses. DOM KeyboardEvents don't work
-      // because Emscripten ignores synthetic events (isTrusted=false).
-      adapterRef.current?.injectRawKey?.(code, pressed);
 
       if (button === 3) {
-        console.log("[useEmulator] ⌨️ injectKeyEvent:", pressed ? "keydown" : "keyup", code, "player:", player);
+        console.log(
+          "[useEmulator] ⌨️ injectKeyEvent:",
+          pressed ? "pressDown" : "pressUp",
+          "player:",
+          player,
+          "button:",
+          button,
+        );
       }
     },
     readRam: () => {
