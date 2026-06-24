@@ -186,13 +186,12 @@ export default function EmulatorCore({
           height: isFullscreen ? "100vh" : undefined,
         }}
       >
-        {/* Canvas — hidden only during idle/loading/error */}
+        {/* Canvas always visible so Nostalgist measures correct dimensions. The placeholder overlay (absolute inset-0) covers it during loading. */}
         <canvas
           ref={emu.canvasRef}
           className="absolute inset-0 w-full h-full block"
           style={{
             imageRendering: "pixelated",
-            display: showPlaceholder ? "none" : "block",
           }}
         />
 
