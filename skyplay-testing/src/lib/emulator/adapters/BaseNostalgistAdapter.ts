@@ -109,8 +109,13 @@ export abstract class BaseNostalgistAdapter implements EmulatorAdapter {
   // ── Lifecycle ─────────────────────────────────────────────────
 
   async loadRom(rom: RomEntry): Promise<void> {
-    // Exit previous instance
-    this.exit();
+    // Clean up previous Nostalgist instance WITHOUT destroying the canvas.
+    // The canvas is managed by React via canvasRef — we must not remove
+    // it from the DOM or set canvasEl to null, otherwise Nostalgist will
+    // append a new canvas to document.body, bypassing the aspect-ratio
+    // container and breaking the layout ("hors du cadre").
+    try { this.nostalgist?.exit(); } catch {}
+    this.nostalgist = null;
 
     this._status = "loading";
     this.callbacks.onStatusChange("loading");
@@ -119,35 +124,46 @@ export abstract class BaseNostalgistAdapter implements EmulatorAdapter {
     try {
       const { Nostalgist } = await import("nostalgist");
 
-      // Create canvas if none was set externally
+      // Use the canvas set via setCanvas() (React canvasRef), or create
+      // one if running standalone (e.g. tests / Tauri).
       if (!this.canvasEl) {
         this.canvasEl = document.createElement("canvas");
       }
 
-      // Set canvas attributes to scaled size BEFORE launch so RetroArch
-      // initializes its WebGL viewport at the correct resolution.
-      // Nostalgist's postRun resize happens AFTER callMain, which can
-      // leave the viewport misaligned if it was initialized at a
-      // different resolution (e.g. 256×224 native set by useEmulator).
-      const size = this.buildCanvasSize();
-      this.canvasEl.width = size.width;
-      this.canvasEl.height = size.height;
+      // Only set CSS sizing — RetroArch prefers CSS-based sizing
+      // and will warn/override canvas width/height attributes.
+      // The aspect-ratio container handles correct dimensions.
       this.canvasEl.style.width = "100%";
       this.canvasEl.style.height = "100%";
       this.canvasEl.style.display = "block";
+
+      // If the React canvas was previously removed from its parent
+      // (by a prior exit()), re-attach it. The container ref is
+      // resolved via the canvas element's id or data attribute.
+      // We rely on React's re-render to re-attach — just ensure
+      // Nostalgist doesn't move it to document.body.
+      const wasConnected = this.canvasEl.isConnected;
 
       this.nostalgist = await Nostalgist.launch({
         core: this.coreName,
         rom: rom.path,
         element: this.canvasEl,
         retroarchConfig: this.buildRetroarchConfig(),
-        size,
       });
 
-      // Emscripten's Module.setCanvasSize() (called by Nostalgist.postRun)
-      // sets CSS width/height to pixel values (e.g. "768px"/"672px"),
-      // overwriting our "100%" settings. Reset to percentage so the
-      // canvas fills the aspect-ratio container correctly.
+      // If Nostalgist moved the canvas to document.body (because
+      // it wasn't connected), move it back to the container.
+      if (!wasConnected && this.canvasEl.parentElement === document.body) {
+        const container = document.getElementById("emulator-canvas-container");
+        if (container && this.canvasEl) {
+          container.insertBefore(this.canvasEl, container.firstChild);
+          console.log(`[${this.systemType}] 🔧 Re-attached canvas to container`);
+        }
+      }
+
+      // Nostalgist's postRun() calls Module.setCanvasSize() which may
+      // set CSS pixel dimensions. Reset to 100% so the canvas fills
+      // the aspect-ratio container.
       if (this.canvasEl) {
         this.canvasEl.style.width = "100%";
         this.canvasEl.style.height = "100%";
@@ -165,7 +181,9 @@ export abstract class BaseNostalgistAdapter implements EmulatorAdapter {
 
   /** Load ROM from raw bytes (used by desktop app via Tauri file dialog). */
   async loadRomFromBytes(romData: Uint8Array, romName: string): Promise<void> {
-    this.exit();
+    // Clean up previous Nostalgist WITHOUT destroying the canvas (same as loadRom)
+    try { this.nostalgist?.exit(); } catch {}
+    this.nostalgist = null;
 
     this._status = "loading";
     this.callbacks.onStatusChange("loading");
@@ -178,20 +196,27 @@ export abstract class BaseNostalgistAdapter implements EmulatorAdapter {
         this.canvasEl = document.createElement("canvas");
       }
 
-      const size = this.buildCanvasSize();
-      this.canvasEl.width = size.width;
-      this.canvasEl.height = size.height;
       this.canvasEl.style.width = "100%";
       this.canvasEl.style.height = "100%";
       this.canvasEl.style.display = "block";
+
+      const wasConnected = this.canvasEl.isConnected;
 
       this.nostalgist = await Nostalgist.launch({
         core: this.coreName,
         rom: romData,
         element: this.canvasEl,
         retroarchConfig: this.buildRetroarchConfig(),
-        size,
       });
+
+      // Re-attach if Nostalgist moved canvas to document.body
+      if (!wasConnected && this.canvasEl.parentElement === document.body) {
+        const container = document.getElementById("emulator-canvas-container");
+        if (container && this.canvasEl) {
+          container.insertBefore(this.canvasEl, container.firstChild);
+          console.log(`[${this.systemType}] 🔧 Re-attached canvas to container`);
+        }
+      }
 
       // Reset CSS after launch — Emscripten may have set pixel values
       if (this.canvasEl) {
@@ -216,10 +241,11 @@ export abstract class BaseNostalgistAdapter implements EmulatorAdapter {
       // Nostalgist may throw if already exited
     }
     this.nostalgist = null;
-    if (this.canvasEl?.parentNode) {
-      this.canvasEl.parentNode.removeChild(this.canvasEl);
-    }
-    this.canvasEl = null;
+    // Do NOT remove canvas from DOM or set canvasEl to null.
+    // The canvas element is owned by React (canvasRef) and must
+    // stay in the aspect-ratio container. Removing it causes
+    // the next Nostalgist.launch() to append a new canvas to
+    // document.body, bypassing the layout entirely.
     this._status = "idle";
     this.callbacks.onStatusChange("idle");
   }
