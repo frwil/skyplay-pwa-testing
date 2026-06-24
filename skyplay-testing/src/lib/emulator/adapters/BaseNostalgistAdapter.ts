@@ -336,38 +336,86 @@ export abstract class BaseNostalgistAdapter implements EmulatorAdapter {
   }
 
   /**
-   * Inject a keyboard event directly into the Emscripten JSEvents system.
+   * Inject a keyboard event into the emulator.
    *
-   * Nostalgist's pressDown/pressUp → fireKeyboardEvent creates a plain
-   * object { code, target } and passes it to JSEvents.eventListenerFunc.
-   * The Emscripten keyboard handler expects a full event object with
-   * keyCode, which, key, etc. — when those are missing (undefined),
-   * the WASM handler sees keyCode=0 → no key recognized.
+   * Uses TWO approaches:
    *
-   * After updateKeyboardEventHandlers(), Nostalgist wraps each keyboard
-   * handler with a check: respondToGlobalEvents (default true) checks
-   * !isInteractable(event.target); otherwise checks target === element.
-   * The wrapped handler then calls the original handler with the event.
+   * 1. **DOM dispatchEvent** (primary) — Creates a real KeyboardEvent and
+   *    dispatches it on the canvas. Nostalgist's updateKeyboardEventHandlers()
+   *    rewired keyboard handlers to `document` with a wrapper that checks
+   *    `!isInteractable(event.target)`. Since canvas is not interactable,
+   *    the check passes and the event reaches the Emscripten handler.
+   *    Using a native KeyboardEvent ensures ALL properties/methods that
+   *    Emscripten's C-compiled handler expects are present.
    *
-   * This method constructs a COMPLETE event-like object with all
-   * properties Emscripten needs and passes it directly to each
-   * matching JSEvents handler. This bypasses the DOM dispatch system
-   * entirely and is the same approach Nostalgist's fireKeyboardEvent
-   * uses — but with a properly populated event object instead of just
-   * { code, target }.
+   * 2. **Direct JSEvents call** (fallback) — Calls Emscripten's
+   *    JSEvents.eventListenerFunc directly with a complete event-like
+   *    object (keyCode, which, code, key, target, etc.). This is a
+   *    safety net for environments where KeyboardEvent constructor
+   *    is unavailable (e.g., JSDOM in tests).
+   *
+   * Previous attempts:
+   * - Commit 221a236: dispatchEvent on canvas — didn't work because
+   *   retroarchConfig was written AFTER RetroArch started (timing bug).
+   * - Commit 20fff86: Direct JSEvents call only — may have been calling
+   *   the handler but with a plain object that the C handler couldn't
+   *   fully process (isTrusted checks? missing native methods?).
+   *
+   * By combining BOTH approaches (DOM dispatch + direct JSEvents fallback)
+   * with the retroarchConfig timing fix already in place, we maximize
+   * the chance of the event reaching RetroArch.
    */
   injectRawKey(code: string, pressed: boolean): void {
     if (!this.nostalgist) return;
+    const eventType = pressed ? "keydown" : "keyup";
+    const keyCode = CODE_TO_KEYCODE[code] ?? 0;
+
+    // ── Approach 1: Real KeyboardEvent dispatched on canvas ──
+    try {
+      if (this.canvasEl && typeof KeyboardEvent !== "undefined") {
+        const domEvent = new KeyboardEvent(eventType, {
+          code,
+          key: codeToKey(code),
+          keyCode,
+          which: keyCode,
+          charCode: pressed ? keyCode : 0,
+          bubbles: true,
+          cancelable: true,
+          shiftKey: false,
+          ctrlKey: false,
+          altKey: false,
+          metaKey: false,
+          repeat: false,
+        });
+        // Some browsers ignore deprecated props (keyCode/which/charCode)
+        // in the KeyboardEvent constructor. Force them via defineProperty
+        // so Emscripten's C handler can read them.
+        if (keyCode !== 0) {
+          try {
+            Object.defineProperty(domEvent, "keyCode", { value: keyCode });
+            Object.defineProperty(domEvent, "which", { value: keyCode });
+            Object.defineProperty(domEvent, "charCode", { value: pressed ? keyCode : 0 });
+          } catch {
+            // defineProperty may fail if the browser freezes the property
+          }
+        }
+        this.canvasEl.dispatchEvent(domEvent);
+        console.log(
+          `[${this.systemType}] injectRawKey: dispatched ${eventType} code=${code} keyCode=${keyCode} on canvas`,
+        );
+      }
+    } catch (err) {
+      console.warn(
+        `[${this.systemType}] injectRawKey DOM dispatch failed:`,
+        err,
+      );
+    }
+
+    // ── Approach 2: Direct JSEvents call (fallback) ──
     try {
       const module = this.nostalgist.getEmscripten?.() as any;
       if (!module?.JSEvents?.eventHandlers) return;
 
-      const keyCode = CODE_TO_KEYCODE[code] ?? 0;
-      const eventType = pressed ? "keydown" : "keyup";
-
-      // Full event-like object with every property the Emscripten
-      // keyboard handler might read. Methods are stubbed so the
-      // handler doesn't throw when calling preventDefault() etc.
       const event: Record<string, unknown> = {
         code,
         key: codeToKey(code),
@@ -412,20 +460,22 @@ export abstract class BaseNostalgistAdapter implements EmulatorAdapter {
             handler.eventListenerFunc(event);
             called++;
           } catch {
-            // Silently ignore errors from handlers that don't
-            // recognize this key (e.g., keypress handlers for
-            // non-character keys).
+            // Silently ignore errors
           }
         }
       }
 
       if (called === 0) {
         console.warn(
-          `[${this.systemType}] injectRawKey: no "${eventType}" handlers found in JSEvents`,
+          `[${this.systemType}] injectRawKey: no "${eventType}" JSEvents handlers found`,
+        );
+      } else {
+        console.log(
+          `[${this.systemType}] injectRawKey: called ${called} JSEvents "${eventType}" handlers for code=${code}`,
         );
       }
     } catch (err) {
-      console.warn(`[${this.systemType}] injectRawKey failed:`, err);
+      console.warn(`[${this.systemType}] injectRawKey JSEvents failed:`, err);
     }
   }
 
