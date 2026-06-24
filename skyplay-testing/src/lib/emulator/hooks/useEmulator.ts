@@ -666,8 +666,10 @@ export function useEmulator(system: SystemType = "nes") {
         }
         return;
       }
-      // Non-NES: dispatch real KeyboardEvent on the canvas so Emscripten
-      // captures it (same path as a physical keypress).
+      // Non-NES: dispatch real KeyboardEvent on the canvas AND window
+      // so Emscripten captures it (same path as a physical keypress).
+      // Emscripten may register handlers on window/document, and may
+      // rely on keyCode/which in addition to code/key.
       const canvas = canvasRef.current;
       if (!canvas) return;
       const keyMap = SYSTEM_KEY_MAPS[system];
@@ -680,16 +682,32 @@ export function useEmulator(system: SystemType = "nes") {
       }
       if (!code) return; // No keyboard mapping for this button
       const eventType = pressed ? "keydown" : "keyup";
-      canvas.dispatchEvent(
-        new KeyboardEvent(eventType, {
-          code,
-          key: code.startsWith("Key") ? code.slice(3).toLowerCase() : code,
-          bubbles: true,
-          cancelable: true,
-        }),
-      );
+      const eventInit: KeyboardEventInit = {
+        code,
+        key: code.startsWith("Key") ? code.slice(3).toLowerCase() : code,
+        bubbles: true,
+        cancelable: true,
+        // Emscripten often reads keyCode/which for input routing
+        keyCode: 0,
+        which: 0,
+      };
+      // Fill keyCode for common keys Emscripten needs
+      if (code === "Enter") { eventInit.keyCode = 13; eventInit.which = 13; }
+      else if (code === "ShiftRight") { eventInit.keyCode = 16; eventInit.which = 16; }
+      else if (code === "Space") { eventInit.keyCode = 32; eventInit.which = 32; }
+      else if (code === "Tab") { eventInit.keyCode = 9; eventInit.which = 9; }
+      else if (code === "ArrowUp") { eventInit.keyCode = 38; eventInit.which = 38; }
+      else if (code === "ArrowDown") { eventInit.keyCode = 40; eventInit.which = 40; }
+      else if (code === "ArrowLeft") { eventInit.keyCode = 37; eventInit.which = 37; }
+      else if (code === "ArrowRight") { eventInit.keyCode = 39; eventInit.which = 39; }
+      const event = new KeyboardEvent(eventType, eventInit);
+      // Dispatch on canvas (direct target for Emscripten JSEvents)
+      canvas.dispatchEvent(event);
+      // Also dispatch on window — some Emscripten builds register handlers
+      // on window or document (capturing phase).
+      window.dispatchEvent(new KeyboardEvent(eventType, eventInit));
       if (button === 3) {
-        console.log("[useEmulator] ⌨️ injectKeyEvent:", eventType, code, "player:", player);
+        console.log("[useEmulator] ⌨️ injectKeyEvent:", eventType, code, "player:", player, "keyCode:", eventInit.keyCode);
       }
     },
     readRam: () => {
