@@ -248,6 +248,39 @@ export abstract class BaseNostalgistAdapter implements EmulatorAdapter {
   }
 
   /**
+   * Inject a raw keyboard event directly into Emscripten's JSEvents
+   * handlers, bypassing RetroArch config lookups entirely.
+   *
+   * Nostalgist's pressDown/pressUp read the RetroArch config file
+   * to find keyboard mappings, but the default config has NO gamepad
+   * key mappings (all "nul"). So pressDown("start") silently fails.
+   *
+   * This method mimics Nostalgist's internal fireKeyboardEvent:
+   * it iterates JSEvents.eventHandlers and calls each matching
+   * handler with { code, target }, exactly like a real keypress.
+   */
+  injectRawKey(code: string, pressed: boolean): void {
+    if (!this.nostalgist || !this.canvasEl) return;
+    try {
+      // getEmscripten() returns the raw Emscripten module with JSEvents
+      const module = this.nostalgist.getEmscripten?.() as any;
+      if (!module?.JSEvents?.eventHandlers) return;
+      const type = pressed ? "keydown" : "keyup";
+      for (const handler of module.JSEvents.eventHandlers) {
+        if (handler.eventTypeString === type) {
+          try {
+            handler.eventListenerFunc({ code, target: this.canvasEl });
+          } catch {
+            // Individual handler failure shouldn't block others
+          }
+        }
+      }
+    } catch (err) {
+      console.warn(`[${this.systemType}] injectRawKey failed:`, err);
+    }
+  }
+
+  /**
    * Read the emulated system's RAM via RetroArch's libretro API.
    *
    * Uses retro_get_memory_data(RETRO_MEMORY_SYSTEM_RAM = 0)

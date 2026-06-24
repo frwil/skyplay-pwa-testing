@@ -648,9 +648,13 @@ export function useEmulator(system: SystemType = "nes") {
       }
     },
     /**
-     * Inject a key event directly on the canvas as a real KeyboardEvent.
-     * This bypasses Nostalgist's broken pressDown() (which relies on
-     * RetroArch config key mappings that don't exist by default).
+     * Inject a key event directly into the emulator.
+     *
+     * For NES: calls jsnes.buttonDown/buttonUp directly.
+     * For non-NES: calls the adapter's injectRawKey which
+     *   dispatches { code, target } objects directly to
+     *   Emscripten's JSEvents handlers — the same pipeline
+     *   Nostalgist's internal fireKeyboardEvent uses.
      *
      * Used by the netplay managers for:
      *  - Start button simulation after countdown
@@ -666,12 +670,7 @@ export function useEmulator(system: SystemType = "nes") {
         }
         return;
       }
-      // Non-NES: dispatch real KeyboardEvent on the canvas AND window
-      // so Emscripten captures it (same path as a physical keypress).
-      // Emscripten may register handlers on window/document, and may
-      // rely on keyCode/which in addition to code/key.
-      const canvas = canvasRef.current;
-      if (!canvas) return;
+      // Non-NES: find the keyboard code for this player/button combo
       const keyMap = SYSTEM_KEY_MAPS[system];
       let code: string | null = null;
       for (const [eventCode, mapping] of Object.entries(keyMap)) {
@@ -680,34 +679,21 @@ export function useEmulator(system: SystemType = "nes") {
           break;
         }
       }
-      if (!code) return; // No keyboard mapping for this button
-      const eventType = pressed ? "keydown" : "keyup";
-      const eventInit: KeyboardEventInit = {
-        code,
-        key: code.startsWith("Key") ? code.slice(3).toLowerCase() : code,
-        bubbles: true,
-        cancelable: true,
-        // Emscripten often reads keyCode/which for input routing
-        keyCode: 0,
-        which: 0,
-      };
-      // Fill keyCode for common keys Emscripten needs
-      if (code === "Enter") { eventInit.keyCode = 13; eventInit.which = 13; }
-      else if (code === "ShiftRight") { eventInit.keyCode = 16; eventInit.which = 16; }
-      else if (code === "Space") { eventInit.keyCode = 32; eventInit.which = 32; }
-      else if (code === "Tab") { eventInit.keyCode = 9; eventInit.which = 9; }
-      else if (code === "ArrowUp") { eventInit.keyCode = 38; eventInit.which = 38; }
-      else if (code === "ArrowDown") { eventInit.keyCode = 40; eventInit.which = 40; }
-      else if (code === "ArrowLeft") { eventInit.keyCode = 37; eventInit.which = 37; }
-      else if (code === "ArrowRight") { eventInit.keyCode = 39; eventInit.which = 39; }
-      const event = new KeyboardEvent(eventType, eventInit);
-      // Dispatch on canvas (direct target for Emscripten JSEvents)
-      canvas.dispatchEvent(event);
-      // Also dispatch on window — some Emscripten builds register handlers
-      // on window or document (capturing phase).
-      window.dispatchEvent(new KeyboardEvent(eventType, eventInit));
+      if (!code) {
+        // No keyboard mapping for this player/button — skip silently
+        // (P2 mappings are minimal: only Start/Select via Numpad keys)
+        return;
+      }
+
+      // Inject directly into Emscripten's JSEvents handlers via the
+      // adapter's injectRawKey. This dispatches { code, target }
+      // objects — the same pipeline Nostalgist's internal
+      // fireKeyboardEvent uses. DOM KeyboardEvents don't work
+      // because Emscripten ignores synthetic events (isTrusted=false).
+      adapterRef.current?.injectRawKey?.(code, pressed);
+
       if (button === 3) {
-        console.log("[useEmulator] ⌨️ injectKeyEvent:", eventType, code, "player:", player, "keyCode:", eventInit.keyCode);
+        console.log("[useEmulator] ⌨️ injectKeyEvent:", pressed ? "keydown" : "keyup", code, "player:", player);
       }
     },
     readRam: () => {

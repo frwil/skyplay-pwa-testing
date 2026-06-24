@@ -39,6 +39,17 @@ export interface EmulatorAdapter {
 
   /** Read the emulated system's RAM. Returns null if not available. */
   readRam?(): Uint8Array | null;
+
+  /**
+   * Inject a raw keyboard event directly into Emscripten's JSEvents
+   * handlers, bypassing RetroArch config lookups entirely.
+   *
+   * Used by injectKeyEvent for non-NES netplay Start simulation and
+   * delayed remote input injection. This is the CORRECT way to inject
+   * inputs — Nostalgist's pressDown/pressUp rely on RetroArch config
+   * key mappings that don't exist by default (all "nul").
+   */
+  injectRawKey?(code: string, pressed: boolean): void;
 }
 
 // ─── System Configurations ─────────────────────────────────────────
@@ -268,6 +279,12 @@ const BASE_MENU_BUTTONS: KeyMapping = {
   Tab:        { player: 1, button: 2 }, // SELECT (alternate)
 };
 
+/** P2 keyboard mappings used by netplay Start simulation after countdown. */
+const BASE_MENU_BUTTONS_P2: KeyMapping = {
+  NumpadEnter: { player: 2, button: 3 }, // P2 START
+  NumpadAdd:   { player: 2, button: 2 }, // P2 SELECT
+};
+
 /**
  * Per-system keyboard mappings.
  *
@@ -284,6 +301,7 @@ export const SYSTEM_KEY_MAPS: Record<SystemType, KeyMapping> = {
     ...BASE_D_PAD,
     ...BASE_FACE_BUTTONS_NES_LIKE,
     ...BASE_MENU_BUTTONS,
+    ...BASE_MENU_BUTTONS_P2,
   },
   snes: {
     ...BASE_D_PAD,
@@ -297,16 +315,19 @@ export const SYSTEM_KEY_MAPS: Record<SystemType, KeyMapping> = {
     KeyQ:  { player: 1, button: 8 },  // Q key → A (alternate)
     KeyE:  { player: 1, button: 1 },  // E key → Y (alternate)
     ...BASE_MENU_BUTTONS,
+    ...BASE_MENU_BUTTONS_P2,
   },
   gb: {
     ...BASE_D_PAD,
     ...BASE_FACE_BUTTONS_NES_LIKE,
     ...BASE_MENU_BUTTONS,
+    ...BASE_MENU_BUTTONS_P2,
   },
   gbc: {
     ...BASE_D_PAD,
     ...BASE_FACE_BUTTONS_NES_LIKE,
     ...BASE_MENU_BUTTONS,
+    ...BASE_MENU_BUTTONS_P2,
   },
   gba: {
     ...BASE_D_PAD,
@@ -318,6 +339,7 @@ export const SYSTEM_KEY_MAPS: Record<SystemType, KeyMapping> = {
     KeyQ:  { player: 1, button: 1 },  // Q key → A (alternate)
     KeyE:  { player: 1, button: 0 },  // E key → B (alternate)
     ...BASE_MENU_BUTTONS,
+    ...BASE_MENU_BUTTONS_P2,
   },
   neogeo: {
     ...BASE_D_PAD,
@@ -327,6 +349,7 @@ export const SYSTEM_KEY_MAPS: Record<SystemType, KeyMapping> = {
     KeyC:  { player: 1, button: 2 },  // C key → C
     KeyV:  { player: 1, button: 3 },  // V key → D
     ...BASE_MENU_BUTTONS,
+    ...BASE_MENU_BUTTONS_P2,
   },
   ps1: {
     ...BASE_D_PAD,
@@ -340,6 +363,7 @@ export const SYSTEM_KEY_MAPS: Record<SystemType, KeyMapping> = {
     KeyQ:  { player: 1, button: 6 },  // Q key → L2
     KeyW:  { player: 1, button: 7 },  // W key → R2
     ...BASE_MENU_BUTTONS,
+    ...BASE_MENU_BUTTONS_P2,
   },
 };
 
