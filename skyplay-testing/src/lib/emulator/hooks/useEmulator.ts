@@ -19,6 +19,7 @@ import { useGamepad } from "./useGamepad";
 import { SnesEmulatorAdapter } from "../adapters/SnesAdapter";
 import { GbEmulatorAdapter } from "../adapters/GbAdapter";
 import { GbaEmulatorAdapter } from "../adapters/GbaAdapter";
+import { NeoGeoEmulatorAdapter } from "../adapters/NeoGeoAdapter";
 import { InputDelayManager } from "../netplay/InputDelayManager";
 
 // jsnes is a CommonJS module with no types — we declare the interface we need
@@ -348,6 +349,8 @@ export function useEmulator(system: SystemType = "nes") {
         return new GbEmulatorAdapter(system, { onStatusChange: setStatus });
       case "gba":
         return new GbaEmulatorAdapter({ onStatusChange: setStatus });
+      case "neogeo":
+        return new NeoGeoEmulatorAdapter({ onStatusChange: setStatus });
       default:
         return null;
     }
