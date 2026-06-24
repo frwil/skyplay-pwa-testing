@@ -137,21 +137,14 @@ export function useEmulator(system: SystemType = "nes") {
   let inputUpLogCounter = 0;
 
   const buttonDown = useCallback((player: 1 | 2, button: number) => {
-    // Non-NES netplay: route P1 local inputs through InputDelayManager
+    // Non-NES netplay: route BOTH P1 and P2 local inputs through InputDelayManager
     // (applies locally immediately + sends to peer via DataChannel)
     const idm = inputDelayRef.current;
-    if (idm && isNetplayRef.current && player === 1) {
-      idm.onLocalInput(1, button, true);
+    if (idm && isNetplayRef.current) {
+      idm.onLocalInput(player, button, true);
       return;
     }
-    if (idm && isNetplayRef.current && player === 2) {
-      // Log every 60th P2 input to avoid spam
-      inputDownLogCounter++;
-      if (inputDownLogCounter % 60 === 1) {
-        console.log("[useEmulator] P2 input applied via InputDelay (count:", inputDownLogCounter, "btn:", button, ")");
-      }
-    }
-    // Normal path (solo, or P2 inputs from InputDelayManager via raw ref)
+    // Normal path (solo play, no netplay active)
     if (isNes) {
       nesRef.current?.buttonDown(player, button);
     } else {
@@ -161,15 +154,9 @@ export function useEmulator(system: SystemType = "nes") {
 
   const buttonUp = useCallback((player: 1 | 2, button: number) => {
     const idm = inputDelayRef.current;
-    if (idm && isNetplayRef.current && player === 1) {
-      idm.onLocalInput(1, button, false);
+    if (idm && isNetplayRef.current) {
+      idm.onLocalInput(player, button, false);
       return;
-    }
-    if (idm && isNetplayRef.current && player === 2) {
-      inputUpLogCounter++;
-      if (inputUpLogCounter % 60 === 1) {
-        console.log("[useEmulator] P2 input release via InputDelay (count:", inputUpLogCounter, "btn:", button, ")");
-      }
     }
     if (isNes) {
       nesRef.current?.buttonUp(player, button);

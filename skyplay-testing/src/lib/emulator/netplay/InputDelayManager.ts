@@ -335,7 +335,7 @@ export class InputDelayManager {
 
     for (const input of this.inputQueue) {
       if (now >= input.applyAt) {
-        this.injectKeyEvent?.(input.player, input.button, input.pressed);
+        this.applyButton?.(input.player, input.button, input.pressed);
         applied++;
       } else {
         remaining.push(input);
