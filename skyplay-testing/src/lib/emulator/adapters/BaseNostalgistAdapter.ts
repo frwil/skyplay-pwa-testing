@@ -123,16 +123,36 @@ export abstract class BaseNostalgistAdapter implements EmulatorAdapter {
       if (!this.canvasEl) {
         this.canvasEl = document.createElement("canvas");
       }
+
+      // Set canvas attributes to scaled size BEFORE launch so RetroArch
+      // initializes its WebGL viewport at the correct resolution.
+      // Nostalgist's postRun resize happens AFTER callMain, which can
+      // leave the viewport misaligned if it was initialized at a
+      // different resolution (e.g. 256×224 native set by useEmulator).
+      const size = this.buildCanvasSize();
+      this.canvasEl.width = size.width;
+      this.canvasEl.height = size.height;
       this.canvasEl.style.width = "100%";
       this.canvasEl.style.height = "100%";
+      this.canvasEl.style.display = "block";
 
       this.nostalgist = await Nostalgist.launch({
         core: this.coreName,
         rom: rom.path,
         element: this.canvasEl,
         retroarchConfig: this.buildRetroarchConfig(),
-        size: this.buildCanvasSize(),
+        size,
       });
+
+      // Emscripten's Module.setCanvasSize() (called by Nostalgist.postRun)
+      // sets CSS width/height to pixel values (e.g. "768px"/"672px"),
+      // overwriting our "100%" settings. Reset to percentage so the
+      // canvas fills the aspect-ratio container correctly.
+      if (this.canvasEl) {
+        this.canvasEl.style.width = "100%";
+        this.canvasEl.style.height = "100%";
+        this.canvasEl.style.display = "block";
+      }
 
       this._status = "running";
       this.callbacks.onStatusChange("running");
@@ -157,16 +177,28 @@ export abstract class BaseNostalgistAdapter implements EmulatorAdapter {
       if (!this.canvasEl) {
         this.canvasEl = document.createElement("canvas");
       }
+
+      const size = this.buildCanvasSize();
+      this.canvasEl.width = size.width;
+      this.canvasEl.height = size.height;
       this.canvasEl.style.width = "100%";
       this.canvasEl.style.height = "100%";
+      this.canvasEl.style.display = "block";
 
       this.nostalgist = await Nostalgist.launch({
         core: this.coreName,
         rom: romData,
         element: this.canvasEl,
         retroarchConfig: this.buildRetroarchConfig(),
-        size: this.buildCanvasSize(),
+        size,
       });
+
+      // Reset CSS after launch — Emscripten may have set pixel values
+      if (this.canvasEl) {
+        this.canvasEl.style.width = "100%";
+        this.canvasEl.style.height = "100%";
+        this.canvasEl.style.display = "block";
+      }
 
       this._status = "running";
       this.callbacks.onStatusChange("running");

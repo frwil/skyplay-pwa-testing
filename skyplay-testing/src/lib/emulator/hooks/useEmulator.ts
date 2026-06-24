@@ -366,18 +366,11 @@ export function useEmulator(system: SystemType = "nes") {
           adapterRef.current?.exit();
           adapterRef.current = null;
 
-          // Initialize canvas for non-NES (set dimensions from config)
+          // Canvas sizing is handled by the adapter (BaseNostalgistAdapter)
+          // which sets the correct scaled resolution before Nostalgist.launch().
+          // Setting native resolution here would cause RetroArch to initialize
+          // its WebGL viewport at the wrong size, resulting in misaligned rendering.
           const canvas = canvasRef.current;
-          if (canvas) {
-            const cfg = SYSTEM_CONFIGS[system];
-            canvas.width = cfg.width;
-            canvas.height = cfg.height;
-            const ctx = canvas.getContext("2d");
-            if (ctx) {
-              ctx.imageSmoothingEnabled = false;
-              ctxRef.current = ctx;
-            }
-          }
 
           const adapter = createAdapter();
           if (!adapter) throw new Error(`Unknown system: ${system}`);
