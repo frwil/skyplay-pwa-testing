@@ -3,6 +3,53 @@ import type { EmulatorAdapter } from "../EmulatorAdapter";
 import type { EmulatorStatus, RomEntry, SystemType } from "../types";
 import { SYSTEM_CONFIGS, SYSTEM_KEY_MAPS } from "../EmulatorAdapter";
 
+/**
+ * Map of KeyboardEvent.code → deprecated keyCode value.
+ *
+ * The KeyboardEvent constructor DOES NOT auto-compute keyCode from code —
+ * it defaults to 0. Emscripten's JSEvents keyboard handlers (compiled from C)
+ * often check event.keyCode, so we must provide it explicitly.
+ *
+ * This covers every code used in SYSTEM_KEY_MAPS across all systems.
+ */
+const CODE_TO_KEYCODE: Record<string, number> = {
+  Enter: 13, NumpadEnter: 13,
+  ShiftRight: 16, ShiftLeft: 16,
+  Space: 32, Tab: 9, Escape: 27, Backspace: 8,
+  ArrowUp: 38, ArrowDown: 40, ArrowLeft: 37, ArrowRight: 39,
+  KeyA: 65, KeyB: 66, KeyC: 67, KeyD: 68, KeyE: 69,
+  KeyF: 70, KeyG: 71, KeyH: 72, KeyI: 73, KeyJ: 74,
+  KeyK: 75, KeyL: 76, KeyM: 77, KeyN: 78, KeyO: 79,
+  KeyP: 80, KeyQ: 81, KeyR: 82, KeyS: 83, KeyT: 84,
+  KeyU: 85, KeyV: 86, KeyW: 87, KeyX: 88, KeyY: 89, KeyZ: 90,
+  Digit0: 48, Digit1: 49, Digit2: 50, Digit3: 51, Digit4: 52,
+  Digit5: 53, Digit6: 54, Digit7: 55, Digit8: 56, Digit9: 57,
+  Numpad0: 96, Numpad1: 97, Numpad2: 98, Numpad3: 99,
+  Numpad4: 100, Numpad5: 101, Numpad6: 102, Numpad7: 103,
+  Numpad8: 104, Numpad9: 105,
+  NumpadAdd: 107, NumpadSubtract: 109,
+  NumpadMultiply: 106, NumpadDivide: 111, NumpadDecimal: 110,
+  F1: 112, F2: 113, F3: 114, F4: 115,
+  F5: 116, F6: 117, F7: 118, F8: 119,
+  F9: 120, F10: 121, F11: 122, F12: 123,
+  Comma: 188, Period: 190, Semicolon: 186, Quote: 222,
+  BracketLeft: 219, BracketRight: 221, Backquote: 192,
+  Slash: 191, Backslash: 220, Minus: 189, Equal: 187,
+  AltLeft: 18, AltRight: 18, ControlLeft: 17, ControlRight: 17,
+  CapsLock: 20, NumLock: 144, ScrollLock: 145, Pause: 19,
+  Home: 36, End: 35, PageUp: 33, PageDown: 34,
+  Insert: 45, Delete: 46, PrintScreen: 44,
+};
+
+/** Derive a plausible event.key string from a KeyboardEvent.code value. */
+function codeToKey(code: string): string {
+  if (code.startsWith("Key")) return code[3].toLowerCase();        // KeyA → a
+  if (code.startsWith("Digit")) return code[5];                     // Digit1 → 1
+  if (code.startsWith("Numpad")) return code.substring(6);          // Numpad1 → 1
+  if (code.startsWith("Arrow")) return code;                        // ArrowUp → ArrowUp
+  return code; // Enter → Enter, ShiftLeft → ShiftLeft, etc.
+}
+
 /** RetroArch button name for each generic button index. */
 const INDEX_TO_RETROARCH: Record<number, string> = {
   0: "b",
@@ -254,33 +301,39 @@ export abstract class BaseNostalgistAdapter implements EmulatorAdapter {
   }
 
   /**
-   * Inject a raw keyboard event directly into Emscripten's JSEvents
-   * handlers, bypassing RetroArch config lookups entirely.
+   * Inject a real DOM KeyboardEvent dispatched on the canvas element.
    *
-   * Nostalgist's pressDown/pressUp read the RetroArch config file
-   * to find keyboard mappings, but the default config has NO gamepad
-   * key mappings (all "nul"). So pressDown("start") silently fails.
+   * Nostalgist's pressDown/pressUp → fireKeyboardEvent creates a plain
+   * object { code, target } and passes it directly to Emscripten's
+   * JSEvents eventListenerFunc. That function expects a full DOM
+   * KeyboardEvent with keyCode, which, key, etc. — when those are
+   * missing (undefined), the WASM handler sees keyCode=0 → no key.
    *
-   * This method mimics Nostalgist's internal fireKeyboardEvent:
-   * it iterates JSEvents.eventHandlers and calls each matching
-   * handler with { code, target }, exactly like a real keypress.
+   * This method constructs a proper KeyboardEvent (with keyCode and
+   * all modifiers) and dispatches it through the normal browser event
+   * pipeline. After updateKeyboardEventHandlers(), Nostalgist registers
+   * the keyboard handlers on the canvas element, so dispatching on
+   * canvas guarantees event.target === element and the handlers fire.
    */
   injectRawKey(code: string, pressed: boolean): void {
-    if (!this.nostalgist || !this.canvasEl) return;
+    if (!this.canvasEl) return;
     try {
-      // getEmscripten() returns the raw Emscripten module with JSEvents
-      const module = this.nostalgist.getEmscripten?.() as any;
-      if (!module?.JSEvents?.eventHandlers) return;
-      const type = pressed ? "keydown" : "keyup";
-      for (const handler of module.JSEvents.eventHandlers) {
-        if (handler.eventTypeString === type) {
-          try {
-            handler.eventListenerFunc({ code, target: this.canvasEl });
-          } catch {
-            // Individual handler failure shouldn't block others
-          }
-        }
-      }
+      const keyCode = CODE_TO_KEYCODE[code] ?? 0;
+      const event = new KeyboardEvent(pressed ? "keydown" : "keyup", {
+        code,
+        key: codeToKey(code),
+        keyCode,
+        which: keyCode,
+        bubbles: true,
+        cancelable: true,
+        view: window,
+        ctrlKey: false,
+        altKey: false,
+        shiftKey: false,
+        metaKey: false,
+        repeat: false,
+      });
+      this.canvasEl.dispatchEvent(event);
     } catch (err) {
       console.warn(`[${this.systemType}] injectRawKey failed:`, err);
     }

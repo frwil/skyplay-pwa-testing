@@ -3,7 +3,7 @@
 import { useRef, useCallback, useState, useEffect } from "react";
 import type { EmulatorStatus, RomEntry, EmulatorState, SystemType } from "../types";
 import type { EmulatorAdapter } from "../EmulatorAdapter";
-import { SYSTEM_CONFIGS } from "../EmulatorAdapter";
+import { SYSTEM_CONFIGS, SYSTEM_KEY_MAPS } from "../EmulatorAdapter";
 import { StateBuffer } from "../buffers/StateBuffer";
 import { InputBuffer } from "../buffers/InputBuffer";
 import {
@@ -650,10 +650,12 @@ export function useEmulator(system: SystemType = "nes") {
      * Inject a key event directly into the emulator.
      *
      * For NES: calls jsnes.buttonDown/buttonUp directly.
-     * For non-NES: calls the adapter's injectRawKey which
-     *   dispatches { code, target } objects directly to
-     *   Emscripten's JSEvents handlers — the same pipeline
-     *   Nostalgist's internal fireKeyboardEvent uses.
+     * For non-NES: dispatches a real DOM KeyboardEvent on the canvas
+     *   element. This is the CORRECT approach — Emscripten's JSEvents
+     *   keyboard handlers expect a full KeyboardEvent with keyCode,
+     *   which, etc. Nostalgist's internal fireKeyboardEvent creates
+     *   a plain { code, target } object that lacks keyCode (defaults
+     *   to 0), causing all programmatic input to be silently discarded.
      *
      * Used by the netplay managers for:
      *  - Start button simulation after countdown
@@ -669,25 +671,32 @@ export function useEmulator(system: SystemType = "nes") {
         }
         return;
       }
-      // Non-NES: use adapter's buttonDown/buttonUp which call
-      // Nostalgist's pressDown/pressUp. These read keyboard→gamepad
-      // mappings from the RetroArch config file we write at launch
-      // (via writeRetroArchInputConfig). Without that config write,
-      // all mappings are "nul" and pressDown/pressUp silently fail.
-      if (pressed) {
-        adapterRef.current?.buttonDown(player, button);
-      } else {
-        adapterRef.current?.buttonUp(player, button);
+      // Non-NES: find the KeyboardEvent.code mapped to this (player, button)
+      // and dispatch a real KeyboardEvent on the canvas.
+      const keyMap = SYSTEM_KEY_MAPS[system];
+      let foundCode: string | null = null;
+      if (keyMap) {
+        for (const [code, mapping] of Object.entries(keyMap)) {
+          if (mapping.player === player && mapping.button === button) {
+            foundCode = code;
+            break;
+          }
+        }
+      }
+      if (foundCode) {
+        adapterRef.current?.injectRawKey?.(foundCode, pressed);
       }
 
       if (button === 3) {
         console.log(
           "[useEmulator] ⌨️ injectKeyEvent:",
-          pressed ? "pressDown" : "pressUp",
+          pressed ? "keydown" : "keyup",
           "player:",
           player,
           "button:",
           button,
+          "code:",
+          foundCode,
         );
       }
     },
