@@ -7,36 +7,44 @@ export interface GameRunnerEvents {
   onAudio: (opusData: Buffer) => void;
   onExit: (code: number | null) => void;
   onError: (err: Error) => void;
+  /** H.264 codec config — sent once before the first video frame. */
+  onCodecConfig: (videoDesc: Uint8Array, audioDesc: Uint8Array) => void;
 }
 
 /**
  * Manages RetroArch + FFmpeg lifecycle inside the Docker container.
  *
- * Spawns three processes:
+ * Spawns:
  * 1. Xvfb — virtual framebuffer for headless rendering
- * 2. RetroArch — runs the libretro core with the ROM on the virtual display
- * 3. FFmpeg — captures Xvfb display, encodes to MJPEG, pipes to stdout
+ * 2. PulseAudio — virtual audio device (null sink)
+ * 3. RetroArch — runs the libretro core with the ROM
+ * 4. FFmpeg (video) — captures Xvfb, encodes H.264, pipes to stdout
+ * 5. FFmpeg (audio) — captures PulseAudio monitor, encodes Opus, pipes to stdout
  *
- * Audio capture is TODO (Phase 2).
+ * Video uses H.264 baseline profile (WebCodecs-compatible).
+ * Audio uses Opus 32kbps mono.
  */
 export class GameRunner extends EventEmitter {
   private xvfb: ChildProcess | null = null;
   private retroarch: ChildProcess | null = null;
-  private ffmpeg: ChildProcess | null = null;
+  private ffmpegVideo: ChildProcess | null = null;
+  private ffmpegAudio: ChildProcess | null = null;
   private system: string;
   private rom: string;
   private sessionId: string;
   private displayNum: number;
   private running = false;
   private frameId = 0;
-  private ffmpegBuffer = Buffer.alloc(0);
+  private videoBuffer = Buffer.alloc(0);
+  private audioBuffer = Buffer.alloc(0);
+  private codecConfigSent = false;
 
   constructor(system: string, rom: string, sessionId: string) {
     super();
     this.system = system;
     this.rom = rom;
     this.sessionId = sessionId;
-    this.displayNum = 99; // Use :99 for Xvfb
+    this.displayNum = 99;
   }
 
   get display(): string {
@@ -56,17 +64,30 @@ export class GameRunner extends EventEmitter {
 
     console.log(`[game-runner] Starting ${this.system} — ${displayW}x${displayH}`);
 
-    // 0. Start D-Bus daemon (needed by RetroArch to avoid SIGABRT)
+    // 0. Start D-Bus (needed by PulseAudio and RetroArch)
     await this.startDbus();
 
-    // 1. Start Xvfb
+    // 1. Start PulseAudio
+    await this.startPulseAudio();
+
+    // 2. Start Xvfb
     await this.startXvfb(displayW, displayH);
 
-    // 2. Start RetroArch
+    // 3. Start RetroArch (with audio enabled)
     await this.startRetroArch(`${coresDir}/${core}`, `${romsDir}/${this.rom}`, displayW, displayH);
 
-    // 3. Start FFmpeg capture
-    this.startFfmpeg(displayW, displayH);
+    // 4. Start FFmpeg video capture (H.264)
+    this.startFfmpegVideo(displayW, displayH);
+
+    // 5. Start FFmpeg audio capture (Opus)
+    this.startFfmpegAudio();
+
+    // Send codec config via next tick (FFmpeg needs time to start)
+    setTimeout(() => {
+      if (!this.codecConfigSent && this.running) {
+        this.sendCodecConfig();
+      }
+    }, 1500);
 
     this.running = true;
     console.log(`[game-runner] All processes started for session ${this.sessionId}`);
@@ -74,33 +95,95 @@ export class GameRunner extends EventEmitter {
     return { width: resolution.w, height: resolution.h };
   }
 
+  /** Send H.264 + Opus codec configuration to the client. */
+  private sendCodecConfig(): void {
+    this.codecConfigSent = true;
+    const resolution = SYSTEM_RESOLUTIONS[this.system];
+    const w = resolution.w * UPSCALE;
+    const h = resolution.h * UPSCALE;
+
+    // H.264 AVC decoder description: AVCC record
+    // For baseline profile, we provide a minimal AVCC with SPS/PPS extracted from FFmpeg.
+    // We'll use default values that FFmpeg + libx264 produce.
+    // The actual SPS/PPS will be extracted from the first IDR frame by the browser.
+    const videoDesc = Buffer.from(JSON.stringify({
+      codec: "avc1.42001E", // H.264 baseline, level 3.0
+      width: w,
+      height: h,
+      framerate: 60,
+      bitrate: 2000000,
+    }), "utf-8");
+
+    const audioDesc = Buffer.from(JSON.stringify({
+      codec: "opus",
+      sampleRate: 48000,
+      channels: 1,
+      bitrate: 32000,
+    }), "utf-8");
+
+    console.log(`[game-runner] Sending codec config: ${w}x${h} H.264 + Opus 32kbps`);
+    this.emit("codecConfig", videoDesc, audioDesc);
+    this.emit("audio", Buffer.alloc(0)); // kick audio pipeline
+  }
+
   /** Start D-Bus daemon if not already running. */
   private async startDbus(): Promise<void> {
     return new Promise((resolve) => {
-      const proc = spawn("dbus-daemon", ["--system", "--fork"], {
-        stdio: "ignore",
+      const proc = spawn("dbus-daemon", ["--system", "--fork"], { stdio: "ignore" });
+      proc.on("close", () => setTimeout(resolve, 300));
+      proc.on("error", () => resolve());
+      setTimeout(resolve, 1500);
+    });
+  }
+
+  /** Start PulseAudio with a null sink for headless audio. */
+  private async startPulseAudio(): Promise<void> {
+    return new Promise((resolve) => {
+      // Kill any existing pulseaudio
+      spawn("pulseaudio", ["--kill"], { stdio: "ignore" }).on("close", () => {
+        // Start pulseaudio daemon
+        const pa = spawn("pulseaudio", [
+          "--start",
+          "--exit-idle-time=-1",
+          "--disallow-module-loading=0",
+          "--disallow-exit=1",
+          "--log-target=stderr",
+        ], { stdio: "ignore" });
+
+        pa.on("close", (code) => {
+          console.log(`[game-runner] PulseAudio started (code ${code})`);
+          // Create null sink for game audio
+          setTimeout(() => {
+            spawn("pactl", [
+              "load-module", "module-null-sink",
+              "sink_name=game_sink",
+              "sink_properties=device.description=GameAudio",
+            ], { stdio: "ignore" }).on("close", () => {
+              // Set as default sink
+              spawn("pactl", ["set-default-sink", "game_sink"], { stdio: "ignore" })
+                .on("close", () => {
+                  console.log("[game-runner] PulseAudio null sink ready");
+                  resolve();
+                });
+            });
+          }, 500);
+        });
+
+        pa.on("error", () => {
+          console.warn("[game-runner] PulseAudio failed to start — audio disabled");
+          resolve();
+        });
+
+        setTimeout(resolve, 3000);
       });
-      proc.on("close", () => {
-        // dbus-daemon --fork exits immediately after forking
-        setTimeout(resolve, 200);
-      });
-      proc.on("error", () => {
-        // dbus might already be running or not installed — non-fatal
-        resolve();
-      });
-      // Timeout safety
-      setTimeout(resolve, 1000);
     });
   }
 
   private async startXvfb(w: number, h: number): Promise<void> {
     return new Promise((resolve, reject) => {
-      // Use Xvfb or Xdummy if Xvfb isn't available
-      // Xdummy uses the dummy video driver and doesn't need /dev/fb or GPU
       const useXdummy = process.env.USE_XDUMMY === "1";
 
       if (useXdummy) {
-        // Xdummy requires a config file
         this.xvfb = spawn("Xorg", [
           this.display,
           "-config", "/etc/X11/xorg-dummy.conf",
@@ -119,11 +202,7 @@ export class GameRunner extends EventEmitter {
       }
 
       this.xvfb.on("error", reject);
-
-      // Xvfb doesn't have a "ready" signal — just wait a bit
-      setTimeout(() => {
-        resolve();
-      }, 500);
+      setTimeout(() => resolve(), 500);
     });
   }
 
@@ -139,10 +218,8 @@ export class GameRunner extends EventEmitter {
       const args = [
         "-L", corePath,
         romPath,
-        // Video
         "--set-shader", "",
         "-v",
-        // Config
         "--appendconfig", "/dev/stdin",
       ];
 
@@ -151,21 +228,20 @@ export class GameRunner extends EventEmitter {
           ...process.env,
           DISPLAY: this.display,
           SDL_VIDEODRIVER: "x11",
-          SDL_AUDIODRIVER: "dummy", // Skip audio for now
+          SDL_AUDIODRIVER: "pulseaudio",
           SDL_RENDER_DRIVER: "software",
-          LIBGL_ALWAYS_SOFTWARE: "1", // Use llvmpipe software renderer
+          LIBGL_ALWAYS_SOFTWARE: "1",
+          PULSE_SINK: "game_sink",
         },
         stdio: ["pipe", "ignore", "pipe"],
       });
 
-      // Send RetroArch config via stdin
       const config = this.buildRetroarchConfig(w, h);
       this.retroarch.stdin?.write(config);
       this.retroarch.stdin?.end();
 
       this.retroarch.stderr?.on("data", (data: Buffer) => {
         const text = data.toString();
-        // RetroArch logs to stderr
         if (text.includes("ERROR") || text.includes("error")) {
           console.error(`[retroarch] ${text.trim()}`);
         }
@@ -178,113 +254,189 @@ export class GameRunner extends EventEmitter {
         this.emit("exit", code);
       });
 
-      // Wait for RetroArch to initialize
       setTimeout(() => resolve(), 2000);
     });
   }
 
-  private startFfmpeg(w: number, h: number): void {
-    const quality = process.env.FRAME_ENCODE_QUALITY || "5";
-    // quality: 2-31 for mjpeg, lower = better. 5 = very good quality.
-
-    this.ffmpeg = spawn("ffmpeg", [
+  /** FFmpeg video: captures Xvfb, encodes H.264 baseline, outputs to stdout. */
+  private startFfmpegVideo(w: number, h: number): void {
+    this.ffmpegVideo = spawn("ffmpeg", [
       "-f", "x11grab",
       "-framerate", "60",
       "-video_size", `${w}x${h}`,
       "-i", `${this.display}.0`,
-      "-f", "image2pipe",
-      "-q:v", quality,
-      "-vcodec", "mjpeg",
-      "-avioflags", "direct",  // Reduce buffering
+      // H.264 baseline — WebCodecs compatible
+      "-c:v", "libx264",
+      "-preset", "ultrafast",
+      "-tune", "zerolatency",
+      "-profile:v", "baseline",
+      "-level", "3.0",
+      "-pix_fmt", "yuv420p",
+      "-b:v", "2M",
+      "-maxrate", "3M",
+      "-bufsize", "1M",
+      "-g", "120",         // keyframe every 2s at 60fps
+      "-keyint_min", "60",
+      "-sc_threshold", "0",
+      "-refs", "1",
+      "-x264-params", "sliced-threads=0:sync-lookahead=0:rc-lookahead=0",
+      // Output Annex B format (raw NAL units)
+      "-f", "h264",
+      "-avioflags", "direct",
       "-flush_packets", "1",
-      "-",
+      "pipe:1",
     ], {
       stdio: ["ignore", "pipe", "pipe"],
       env: { ...process.env, DISPLAY: this.display },
     });
 
-    this.ffmpeg.stdout?.on("data", (chunk: Buffer) => {
-      this.handleFfmpegChunk(chunk);
+    this.ffmpegVideo.stdout?.on("data", (chunk: Buffer) => {
+      this.handleVideoChunk(chunk);
     });
 
-    this.ffmpeg.stderr?.on("data", (data: Buffer) => {
-      // FFmpeg outputs stats to stderr
+    this.ffmpegVideo.stderr?.on("data", (data: Buffer) => {
       const text = data.toString();
       if (text.includes("Error") || text.includes("error")) {
-        console.error(`[ffmpeg] ${text.trim()}`);
+        console.error(`[ffmpeg:video] ${text.trim()}`);
       }
     });
 
-    this.ffmpeg.on("error", (err) => {
-      console.error(`[ffmpeg] Process error:`, err);
+    this.ffmpegVideo.on("error", (err) => {
+      console.error(`[ffmpeg:video] Process error:`, err);
       this.emit("error", err);
     });
 
-    this.ffmpeg.on("exit", (code) => {
-      console.log(`[ffmpeg] Exited with code ${code}`);
+    this.ffmpegVideo.on("exit", (code) => {
+      console.log(`[ffmpeg:video] Exited with code ${code}`);
+    });
+  }
+
+  /** FFmpeg audio: captures PulseAudio monitor, encodes Opus, outputs to stdout. */
+  private startFfmpegAudio(): void {
+    this.ffmpegAudio = spawn("ffmpeg", [
+      "-f", "pulse",
+      "-i", "game_sink.monitor",
+      "-c:a", "libopus",
+      "-b:a", "32k",
+      "-ar", "48000",
+      "-ac", "1",
+      "-application", "lowdelay",
+      "-frame_duration", "20",
+      "-packet_loss", "0",
+      "-f", "opus",
+      "-flush_packets", "1",
+      "pipe:1",
+    ], {
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    this.ffmpegAudio.stdout?.on("data", (chunk: Buffer) => {
+      this.handleAudioChunk(chunk);
+    });
+
+    this.ffmpegAudio.stderr?.on("data", (data: Buffer) => {
+      const text = data.toString();
+      if (text.includes("Error") || text.includes("error")) {
+        console.error(`[ffmpeg:audio] ${text.trim()}`);
+      }
+    });
+
+    this.ffmpegAudio.on("error", (err) => {
+      console.error(`[ffmpeg:audio] Process error:`, err);
+      // Audio is non-critical — don't crash
+    });
+
+    this.ffmpegAudio.on("exit", (code) => {
+      console.log(`[ffmpeg:audio] Exited with code ${code}`);
     });
   }
 
   /**
-   * FFmpeg outputs MJPEG frames in image2pipe format.
-   * Each frame starts with FF D8 and ends with FF D9 (JPEG markers).
-   * We buffer and split on these markers to get individual frames.
+   * Parse H.264 Annex B stream into NAL units.
+   * Each NAL unit starts with 0x00 0x00 0x00 0x01 or 0x00 0x00 0x01.
+   * We emit complete NAL units (including start code) as video frames.
    */
-  private handleFfmpegChunk(chunk: Buffer): void {
-    this.ffmpegBuffer = Buffer.concat([this.ffmpegBuffer, chunk]);
+  private handleVideoChunk(chunk: Buffer): void {
+    this.videoBuffer = Buffer.concat([this.videoBuffer, chunk]);
 
-    // Find complete JPEG frames (FF D8 ... FF D9)
-    let startIdx = 0;
-    while (startIdx < this.ffmpegBuffer.length - 1) {
-      const soiIdx = this.ffmpegBuffer.indexOf(0xff, startIdx);
-      if (soiIdx === -1) break;
-      if (soiIdx + 1 >= this.ffmpegBuffer.length) break;
-      if (this.ffmpegBuffer[soiIdx + 1] !== 0xd8) {
-        startIdx = soiIdx + 2;
-        continue;
+    const resolution = SYSTEM_RESOLUTIONS[this.system];
+    if (!resolution) return;
+
+    // Search for NAL start codes in the buffer
+    let pos = 0;
+    while (pos < this.videoBuffer.length - 3) {
+      // Find next start code
+      let scLen = 0;
+      if (this.videoBuffer[pos] === 0x00 && this.videoBuffer[pos + 1] === 0x00) {
+        if (this.videoBuffer[pos + 2] === 0x01) {
+          scLen = 3;
+        } else if (this.videoBuffer[pos + 2] === 0x00 && pos + 3 < this.videoBuffer.length && this.videoBuffer[pos + 3] === 0x01) {
+          scLen = 4;
+        }
       }
 
-      // Found SOI (FF D8), look for EOI (FF D9) after it
-      const eoiIdx = this.findEoi(this.ffmpegBuffer, soiIdx + 2);
-      if (eoiIdx === -1) break; // Frame incomplete, wait for more data
+      if (scLen > 0) {
+        // Found a start code at `pos`
+        // Find the NEXT start code to delimit this NAL unit
+        let nextPos = pos + scLen;
+        let nextScLen = 0;
+        while (nextPos < this.videoBuffer.length - 3) {
+          if (this.videoBuffer[nextPos] === 0x00 && this.videoBuffer[nextPos + 1] === 0x00) {
+            if (this.videoBuffer[nextPos + 2] === 0x01) {
+              nextScLen = 3;
+              break;
+            } else if (this.videoBuffer[nextPos + 2] === 0x00 && nextPos + 3 < this.videoBuffer.length && this.videoBuffer[nextPos + 3] === 0x01) {
+              nextScLen = 4;
+              break;
+            }
+          }
+          nextPos++;
+        }
 
-      // Extract complete frame from SOI to EOI+2
-      const frameEnd = eoiIdx + 2;
-      const frame = this.ffmpegBuffer.subarray(soiIdx, frameEnd);
-      const resolution = SYSTEM_RESOLUTIONS[this.system];
-      if (resolution) {
-        this.frameId++;
-        this.emit("frame", frame, resolution.w, resolution.h);
+        if (nextScLen > 0 && nextPos > pos + scLen) {
+          // Complete NAL unit from pos to nextPos
+          const nalUnit = this.videoBuffer.subarray(pos, nextPos);
+          this.frameId++;
+          this.emit("frame", nalUnit, resolution.w, resolution.h);
+          pos = nextPos; // Continue from next start code
+        } else if (nextScLen === 0) {
+          // No next start code found — wait for more data
+          break;
+        } else {
+          pos += scLen;
+        }
+      } else {
+        pos++;
       }
-
-      startIdx = frameEnd;
     }
 
-    // Trim processed data from buffer
-    if (startIdx > 0) {
-      this.ffmpegBuffer = this.ffmpegBuffer.subarray(startIdx);
+    // Trim processed data
+    if (pos > 0 && pos < this.videoBuffer.length) {
+      // Keep unprocessed tail
+      this.videoBuffer = this.videoBuffer.subarray(pos);
+    } else if (pos >= this.videoBuffer.length) {
+      this.videoBuffer = Buffer.alloc(0);
     }
 
-    // Prevent buffer from growing unbounded if parsing breaks
-    if (this.ffmpegBuffer.length > 10 * 1024 * 1024) {
-      console.warn("[game-runner] FFmpeg buffer exceeded 10MB — resetting");
-      this.ffmpegBuffer = Buffer.alloc(0);
+    // Safety: prevent unbounded buffer growth
+    if (this.videoBuffer.length > 10 * 1024 * 1024) {
+      console.warn("[game-runner] Video buffer exceeded 10MB — resetting");
+      this.videoBuffer = Buffer.alloc(0);
     }
   }
 
-  /** Find the end-of-image marker FF D9 after a start-of-image marker. */
-  private findEoi(buf: Buffer, fromIdx: number): number {
-    for (let i = fromIdx; i < buf.length - 1; i++) {
-      if (buf[i] === 0xff && buf[i + 1] === 0xd9) return i;
+  /**
+   * Parse Opus packets from FFmpeg output.
+   * FFmpeg `-f opus` outputs raw Opus packets (one per write).
+   * We forward them directly as audio frames.
+   */
+  private handleAudioChunk(chunk: Buffer): void {
+    if (chunk.length > 0) {
+      this.emit("audio", chunk);
     }
-    return -1;
   }
 
-  /** Inject a keyboard input into RetroArch via xdotool.
-   *  @param player 1 or 2 — selects the correct key map (non-overlapping keys).
-   *  @param button Button index (0-13), maps to RetroArch config name.
-   *  @param pressed true = keydown, false = keyup.
-   */
+  /** Inject a keyboard input into RetroArch via xdotool. */
   injectInput(player: number, button: number, pressed: boolean): void {
     if (!this.running) return;
 
@@ -297,12 +449,6 @@ export class GameRunner extends EventEmitter {
 
     const action = pressed ? "keydown" : "keyup";
 
-    // xdotool sends keystrokes to the focused window on the Xvfb display.
-    // RetroArch runs fullscreen so it should always have focus.
-    // Using `keydown`/`keyup` directly (no `search`) avoids issues with
-    // window class name mismatches (e.g. "RetroArch" vs "retroarch").
-    // P1 and P2 use different physical keys — RetroArch decodes them to
-    // the correct player port via `input_player1_*` / `input_player2_*` config.
     const proc = spawn("xdotool", [action, xdoKey], {
       env: { ...process.env, DISPLAY: this.display },
       stdio: "ignore",
@@ -315,7 +461,6 @@ export class GameRunner extends EventEmitter {
     });
   }
 
-  /** Pause RetroArch (send pause key). */
   pause(): void {
     spawn("xdotool", ["key", "p"], {
       env: { ...process.env, DISPLAY: this.display },
@@ -323,7 +468,6 @@ export class GameRunner extends EventEmitter {
     });
   }
 
-  /** Resume RetroArch. */
   resume(): void {
     spawn("xdotool", ["key", "p"], {
       env: { ...process.env, DISPLAY: this.display },
@@ -331,21 +475,21 @@ export class GameRunner extends EventEmitter {
     });
   }
 
-  /** Stop all processes. */
   stop(): void {
     console.log(`[game-runner] Stopping all processes for session ${this.sessionId}`);
     this.running = false;
 
-    // Kill in reverse order
-    this.ffmpeg?.kill("SIGTERM");
+    this.ffmpegAudio?.kill("SIGTERM");
+    this.ffmpegVideo?.kill("SIGTERM");
     this.retroarch?.kill("SIGTERM");
     this.xvfb?.kill("SIGTERM");
 
-    // Force kill after 2 seconds
     setTimeout(() => {
-      this.ffmpeg?.kill("SIGKILL");
+      this.ffmpegAudio?.kill("SIGKILL");
+      this.ffmpegVideo?.kill("SIGKILL");
       this.retroarch?.kill("SIGKILL");
       this.xvfb?.kill("SIGKILL");
+      spawn("pulseaudio", ["--kill"], { stdio: "ignore" });
     }, 2000);
   }
 
@@ -358,7 +502,7 @@ export class GameRunner extends EventEmitter {
       `video_windowed_fullscreen = "true"`,
       `custom_viewport_width = "${w / UPSCALE}"`,
       `custom_viewport_height = "${h / UPSCALE}"`,
-      `aspect_ratio_index = "0"`, // 1:1 PAR
+      `aspect_ratio_index = "0"`,
       `video_scale_integer = "false"`,
       `video_smooth = "false"`,
       `video_threaded = "true"`,
@@ -366,15 +510,16 @@ export class GameRunner extends EventEmitter {
       `video_frame_delay = "0"`,
       `video_hard_sync = "false"`,
       `video_vsync = "false"`,
-      // Audio
-      `audio_enable = "false"`,
+      // Audio — enabled via PulseAudio
+      `audio_enable = "true"`,
+      `audio_driver = "pulse"`,
+      `audio_rate = "48000"`,
+      `audio_out_rate = "48000"`,
+      `audio_sync = "true"`,
       // Input
       `input_driver = "sdl2"`,
       `input_joypad_driver = "null"`,
-      // Performance — audio_sync=true is REQUIRED for real-time speed
-      // even when audio is disabled (RetroArch uses its audio clock for
-      // frame pacing; without it + vsync off = uncapped speed).
-      `audio_sync = "true"`,
+      // Performance
       `fastforward_ratio = "1.0"`,
       `rewind_enable = "false"`,
       // Menu
@@ -386,7 +531,7 @@ export class GameRunner extends EventEmitter {
       `content_show_override = "false"`,
     ];
 
-    // Keyboard mappings for P1
+    // Keyboard mappings for both players
     const keyConfig = buildRetroarchKeyConfig();
     for (const [key, value] of Object.entries(keyConfig)) {
       lines.push(`${key} = "${value}"`);

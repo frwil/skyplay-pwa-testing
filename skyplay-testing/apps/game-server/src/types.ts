@@ -61,16 +61,19 @@ export interface PlayerEventMessage {
 
 export type ServerMessage = StatusMessage | ReadyMessage | ErrorMessage | PongMessage | PlayerEventMessage;
 
-/** Binary frame header: 0x01 + width(u16) + height(u16) + frameId(u32) + flags(u8) + jpeg data */
+/** Binary frame header: 0x01 + width(u16) + height(u16) + frameId(u32) + nalLength(u16) + H.264 NAL data */
 export const FRAME_MAGIC = 0x01;
 
-/** Binary audio header: 0x02 + frameId(u32) + opus data */
+/** Binary audio header: 0x02 + opusLength(u32) + Opus data */
 export const AUDIO_MAGIC = 0x02;
+
+/** Binary codec config: 0x03 + payloadLength(u16) + videoDescLength(u16) + videoDesc(JSON) + audioDesc(JSON) */
+export const CODEC_CONFIG_MAGIC = 0x03;
 
 export interface FrameHeader {
   magic: number;    // 0x01
   width: number;    // uint16 LE
   height: number;   // uint16 LE
   frameId: number;  // uint32 LE
-  flags: number;    // uint8
+  nalLength: number; // uint16 LE — H.264 NAL unit length
 }

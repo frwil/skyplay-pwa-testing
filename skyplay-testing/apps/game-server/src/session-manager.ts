@@ -171,12 +171,9 @@ export function sendBinaryToSession(session: Session, data: Buffer): void {
   }
 }
 
-/** Send a JSON message to a specific player in a session. */
-export function sendToPlayer(session: Session, player: number, msg: ServerMessage): void {
-  const data = JSON.stringify(msg);
-  for (const conn of session.connections) {
-    if (conn.player === player && conn.ws.readyState === WebSocket.OPEN) {
-      conn.ws.send(data);
-    }
+/** Send binary data to a specific connection. */
+export function sendBinaryToConnection(conn: PlayerConnection, data: Buffer): void {
+  if (conn.ws.readyState === WebSocket.OPEN) {
+    conn.ws.send(data);
   }
 }

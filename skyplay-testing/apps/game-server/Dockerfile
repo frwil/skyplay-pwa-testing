@@ -31,6 +31,9 @@ RUN apt-get -o Acquire::Retries=5 update && \
     # D-Bus (needed by RetroArch to avoid SIGABRT on startup)
     dbus \
     dbus-x11 \
+    # PulseAudio (virtual audio for headless)
+    pulseaudio \
+    pulseaudio-utils \
     # Runtime libs
     libsdl2-2.0-0 \
     libpulse0 \

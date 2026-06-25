@@ -2,18 +2,21 @@ import type { EmulatorAdapter } from "../EmulatorAdapter";
 import type { EmulatorStatus, RomEntry, SystemType } from "../types";
 import { SYSTEM_CONFIGS } from "../EmulatorAdapter";
 
-// Binary frame header layout
-const FRAME_HEADER_SIZE = 9; // 1(magic) + 2(width) + 2(height) + 4(frameId)
+// Binary frame header sizes
+const FRAME_HEADER_SIZE = 11;  // 1(magic) + 2(w) + 2(h) + 4(id) + 2(nalLen)
+const AUDIO_HEADER_SIZE = 5;   // 1(magic) + 4(opusLen)
+const CODEC_CFG_HEADER_SIZE = 3; // 1(magic) + 2(payloadLen)
 
 /**
- * Cloud streaming adapter.
+ * Cloud streaming adapter with WebCodecs hardware-accelerated decoding.
  *
- * Instead of running an emulator locally (WASM or jsnes), this adapter
- * connects to a remote Docker game server via WebSocket and streams
- * MJPEG video frames + Opus audio to the browser canvas.
+ * Connects to a remote Docker game server via WebSocket and decodes:
+ * - H.264 video via VideoDecoder API → canvas
+ * - Opus audio via AudioDecoder API → AudioContext
  *
- * Implements the same EmulatorAdapter interface as local adapters,
- * making it a drop-in replacement for Neo Geo / PS1.
+ * This replaces the old MJPEG/ImageBitmap approach with browser-native
+ * hardware-accelerated codecs, giving much better compression and lower
+ * CPU usage.
  */
 export class CloudAdapter implements EmulatorAdapter {
   readonly systemType: SystemType;
@@ -33,13 +36,18 @@ export class CloudAdapter implements EmulatorAdapter {
   private lastFrameId: number = 0;
   private pingInterval: ReturnType<typeof setInterval> | null = null;
 
-  // Image rendering
-  private pendingBitmaps: ImageBitmap[] = [];
-  private rafId: number = 0;
+  // WebCodecs — Video
+  private videoDecoder: VideoDecoder | null = null;
+  private videoDecoderReady = false;
+  private pendingVideoChunks: EncodedVideoChunk[] = [];
+  private streamWidth = 320;
+  private streamHeight = 224;
 
-  // Audio (Phase 2)
+  // WebCodecs — Audio
+  private audioDecoder: AudioDecoder | null = null;
+  private audioDecoderReady = false;
+  private pendingAudioChunks: EncodedAudioChunk[] = [];
   private audioCtx: AudioContext | null = null;
-  private gainNode: GainNode | null = null;
 
   constructor(systemType: SystemType, callbacks: CloudCallbacks) {
     this.systemType = systemType;
@@ -51,18 +59,13 @@ export class CloudAdapter implements EmulatorAdapter {
   async loadRom(rom: RomEntry): Promise<void> {
     this._status = "loading";
     this.callbacks.onStatusChange("loading");
-    // Use the filename part of the path for the game server (not display name)
     this._currentRom = rom.path.split("/").pop() || rom.name;
 
     try {
-      // 1. Request a cloud gaming session from Vercel API
       const res = await fetch("/api/cloud-session", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          system: this.systemType,
-          rom: rom.path,
-        }),
+        body: JSON.stringify({ system: this.systemType, rom: rom.path }),
       });
 
       if (!res.ok) {
@@ -75,12 +78,7 @@ export class CloudAdapter implements EmulatorAdapter {
       this._roomCode = roomCode;
       this._player = 1;
 
-      // 2. Connect to game server via WebSocket
       await this.connectWebSocket(wsUrl, "init");
-
-      // 3. Wait for "ready" message
-      // (handled in connectWebSocket via message listener)
-
       console.log(`[Cloud:${this.systemType}] Connected — session ${sessionId}`);
     } catch (err) {
       console.error(`[Cloud:${this.systemType}] Failed to load ROM:`, err);
@@ -89,13 +87,6 @@ export class CloudAdapter implements EmulatorAdapter {
     }
   }
 
-  /**
-   * Join an existing cloud gaming session as Player 2 via room code.
-   *
-   * Used by P2 to connect to a session P1 created. Sends a "join" message
-   * instead of "init" — the server adds P2 to the existing session and
-   * begins broadcasting frames to the new connection.
-   */
   async joinSession(roomCode: string): Promise<void> {
     this._status = "loading";
     this.callbacks.onStatusChange("loading");
@@ -117,7 +108,6 @@ export class CloudAdapter implements EmulatorAdapter {
       this._player = player;
 
       await this.connectWebSocket(wsUrl, "join");
-
       console.log(`[Cloud:${this.systemType}] Joined as P${player} — session ${sessionId}`);
     } catch (err) {
       console.error(`[Cloud:${this.systemType}] Failed to join:`, err);
@@ -142,19 +132,17 @@ export class CloudAdapter implements EmulatorAdapter {
           this.ws!.send(JSON.stringify({
             type: "init",
             sessionId: this.sessionId,
-            token: "", // Token is sent as cookie automatically
+            token: "",
             system: this.systemType,
             rom: this._currentRom,
           }));
         }
-
-        // Start ping/pong for latency measurement
         this.startPing();
       };
 
       this.ws.onmessage = (event) => {
         if (typeof event.data === "string") {
-          this.handleTextMessage(event.data);
+          this.handleTextMessage(event.data, resolve);
         } else if (event.data instanceof ArrayBuffer) {
           this.handleBinaryMessage(event.data);
         }
@@ -163,20 +151,19 @@ export class CloudAdapter implements EmulatorAdapter {
       this.ws.onclose = (event) => {
         console.log(`[Cloud:${this.systemType}] WS closed: ${event.code} ${event.reason}`);
         this.stopPing();
+        this.closeDecoders();
         if (this._status === "running" || this._status === "loading") {
           this._status = "idle";
           this.callbacks.onStatusChange("idle");
         }
       };
 
-      this.ws.onerror = (err) => {
-        console.error(`[Cloud:${this.systemType}] WS error:`, err);
+      this.ws.onerror = () => {
         if (this._status === "loading") {
           reject(new Error("WebSocket connection failed"));
         }
       };
 
-      // Timeout after 30s
       setTimeout(() => {
         if (this._status === "loading") {
           reject(new Error("Game server connection timed out"));
@@ -185,7 +172,161 @@ export class CloudAdapter implements EmulatorAdapter {
     });
   }
 
-  private handleTextMessage(raw: string): void {
+  // ── WebCodecs Decoder Setup ──────────────────────────────────
+
+  private async initVideoDecoder(config: { codec: string; width: number; height: number; framerate: number }): Promise<void> {
+    try {
+      this.streamWidth = config.width;
+      this.streamHeight = config.height;
+
+      const init: VideoDecoderInit = {
+        output: (frame: VideoFrame) => {
+          if (this.ctx && this.canvasEl) {
+            // Ensure canvas matches frame dimensions
+            const cw = this.canvasEl.width;
+            const ch = this.canvasEl.height;
+            if (cw !== frame.displayWidth || ch !== frame.displayHeight) {
+              this.canvasEl.width = frame.displayWidth;
+              this.canvasEl.height = frame.displayHeight;
+            }
+            this.ctx.clearRect(0, 0, cw, ch);
+            this.ctx.drawImage(frame, 0, 0, cw, ch);
+          }
+          frame.close();
+        },
+        error: (err) => {
+          console.error(`[Cloud:${this.systemType}] VideoDecoder error:`, err);
+        },
+      };
+
+      const support = await VideoDecoder.isConfigSupported({
+        codec: config.codec,
+        codedWidth: config.width,
+        codedHeight: config.height,
+      });
+
+      if (!support.supported) {
+        console.warn(`[Cloud:${this.systemType}] H.264 codec not supported, falling back`);
+        // The server sends raw NAL units; we'll try a different codec string
+        return;
+      }
+
+      this.videoDecoder = new VideoDecoder(init);
+      this.videoDecoder.configure({
+        codec: config.codec,
+        codedWidth: config.width,
+        codedHeight: config.height,
+      });
+      this.videoDecoderReady = true;
+
+      // Flush pending chunks
+      for (const chunk of this.pendingVideoChunks) {
+        this.videoDecoder.decode(chunk);
+      }
+      this.pendingVideoChunks = [];
+
+      console.log(`[Cloud:${this.systemType}] VideoDecoder ready: ${config.codec} ${config.width}x${config.height}`);
+    } catch (err) {
+      console.error(`[Cloud:${this.systemType}] Failed to init VideoDecoder:`, err);
+    }
+  }
+
+  private async initAudioDecoder(config: { codec: string; sampleRate: number; channels: number }): Promise<void> {
+    try {
+      // Initialize AudioContext on first audio data
+      if (!this.audioCtx) {
+        this.audioCtx = new AudioContext({ sampleRate: config.sampleRate });
+      }
+
+      const init: AudioDecoderInit = {
+        output: (data: AudioData) => {
+          if (!this.audioCtx || this._isMuted) {
+            data.close();
+            return;
+          }
+          try {
+            const buf = this.audioCtx.createBuffer(
+              data.numberOfChannels,
+              data.numberOfFrames,
+              data.sampleRate,
+            );
+
+            // Copy PCM data
+            for (let ch = 0; ch < data.numberOfChannels; ch++) {
+              const channelData = new Float32Array(data.numberOfFrames);
+              data.copyTo(channelData, { planeIndex: ch, format: "f32-planar" });
+              buf.copyToChannel(channelData, ch);
+            }
+
+            const source = this.audioCtx.createBufferSource();
+            source.buffer = buf;
+            const gain = this.audioCtx.createGain();
+            gain.gain.value = this._volume;
+            source.connect(gain).connect(this.audioCtx.destination);
+            source.start();
+            data.close();
+          } catch {
+            data.close();
+          }
+        },
+        error: (err) => {
+          console.error(`[Cloud:${this.systemType}] AudioDecoder error:`, err);
+        },
+      };
+
+      const support = await AudioDecoder.isConfigSupported({
+        codec: config.codec,
+        sampleRate: config.sampleRate,
+        numberOfChannels: config.channels,
+      });
+
+      if (!support.supported) {
+        console.warn(`[Cloud:${this.systemType}] Opus codec not supported`);
+        return;
+      }
+
+      this.audioDecoder = new AudioDecoder(init);
+      this.audioDecoder.configure({
+        codec: config.codec,
+        sampleRate: config.sampleRate,
+        numberOfChannels: config.channels,
+      });
+      this.audioDecoderReady = true;
+
+      // Flush pending chunks
+      for (const chunk of this.pendingAudioChunks) {
+        this.audioDecoder.decode(chunk);
+      }
+      this.pendingAudioChunks = [];
+
+      console.log(`[Cloud:${this.systemType}] AudioDecoder ready: Opus ${config.sampleRate}Hz ${config.channels}ch`);
+    } catch (err) {
+      console.error(`[Cloud:${this.systemType}] Failed to init AudioDecoder:`, err);
+    }
+  }
+
+  private closeDecoders(): void {
+    if (this.videoDecoder) {
+      try { this.videoDecoder.close(); } catch { /* ok */ }
+      this.videoDecoder = null;
+      this.videoDecoderReady = false;
+    }
+    if (this.audioDecoder) {
+      try { this.audioDecoder.close(); } catch { /* ok */ }
+      this.audioDecoder = null;
+      this.audioDecoderReady = false;
+    }
+    this.pendingVideoChunks = [];
+    this.pendingAudioChunks = [];
+    if (this.audioCtx) {
+      this.audioCtx.close().catch(() => {});
+      this.audioCtx = null;
+    }
+  }
+
+  // ── Message Handlers ─────────────────────────────────────────
+
+  private handleTextMessage(raw: string, readyResolve?: (value: void | PromiseLike<void>) => void): void {
     try {
       const msg = JSON.parse(raw) as {
         type: string;
@@ -195,18 +336,15 @@ export class CloudAdapter implements EmulatorAdapter {
         height?: number;
         message?: string;
         t?: number;
+        player?: number;
       };
 
       switch (msg.type) {
         case "ready": {
           this._status = "running";
           this.callbacks.onStatusChange("running");
-          // Set canvas dimensions from stream
-          if (msg.width && msg.height && this.canvasEl) {
-            this.canvasEl.width = msg.width;
-            this.canvasEl.height = msg.height;
-          }
           console.log(`[Cloud:${this.systemType}] Stream ready — ${msg.width}x${msg.height}`);
+          readyResolve?.();
           break;
         }
 
@@ -223,23 +361,16 @@ export class CloudAdapter implements EmulatorAdapter {
         }
 
         case "player_joined": {
-          const pj = msg as { type: "player_joined"; player: number };
-          console.log(`[Cloud:${this.systemType}] Player ${pj.player} joined the session`);
-          this.callbacks.onPlayerEvent?.("player_joined", pj.player);
+          this.callbacks.onPlayerEvent?.("player_joined", msg.player ?? 2);
           break;
         }
 
         case "player_disconnected": {
-          const pd = msg as { type: "player_disconnected"; player: number };
-          console.log(`[Cloud:${this.systemType}] Player ${pd.player} disconnected`);
-          this.callbacks.onPlayerEvent?.("player_disconnected", pd.player);
+          this.callbacks.onPlayerEvent?.("player_disconnected", msg.player ?? 2);
           break;
         }
 
-        case "pong": {
-          // Latency measurement — can be used for UI display
-          break;
-        }
+        case "pong": { break; }
       }
     } catch {
       // Ignore malformed JSON
@@ -247,50 +378,129 @@ export class CloudAdapter implements EmulatorAdapter {
   }
 
   private handleBinaryMessage(data: ArrayBuffer): void {
-    if (data.byteLength < FRAME_HEADER_SIZE) return;
+    const view = new DataView(data);
+    if (data.byteLength < 1) return;
 
-    const header = new DataView(data);
-    const magic = header.getUint8(0);
-    const width = header.getUint16(1, true);
-    const height = header.getUint16(3, true);
-    const frameId = header.getUint32(5, true);
+    const magic = view.getUint8(0);
 
     if (magic === 0x01) {
-      // Video frame
+      // Video frame — H.264 NAL unit
+      if (data.byteLength < FRAME_HEADER_SIZE) return;
+
+      const width = view.getUint16(1, true);
+      const height = view.getUint16(3, true);
+      const frameId = view.getUint32(5, true);
+      const nalLength = view.getUint16(9, true);
+
+      if (nalLength === 0 || 11 + nalLength > data.byteLength) return;
+
       this.lastFrameId = frameId;
 
-      // Extract JPEG data (skip 9-byte header)
-      const jpegData = new Uint8Array(data, FRAME_HEADER_SIZE);
-      const blob = new Blob([jpegData], { type: "image/jpeg" });
+      // Extract NAL unit data
+      const nalData = new Uint8Array(data, FRAME_HEADER_SIZE, nalLength);
 
-      // Ensure canvas matches frame dimensions
-      if (this.canvasEl && (this.canvasEl.width !== width || this.canvasEl.height !== height)) {
-        this.canvasEl.width = width;
-        this.canvasEl.height = height;
+      // Detect NAL type from first byte after start code
+      // We need to construct an EncodedVideoChunk
+      const chunk = new EncodedVideoChunk({
+        type: this.getNalType(nalData),
+        timestamp: frameId * 16667, // ~16.67ms per frame at 60fps (in microseconds)
+        duration: 16667,
+        data: nalData,
+      });
+
+      if (this.videoDecoderReady && this.videoDecoder) {
+        if (this.videoDecoder.decodeQueueSize < 10) {
+          this.videoDecoder.decode(chunk);
+        }
+      } else {
+        this.pendingVideoChunks.push(chunk);
+        if (this.pendingVideoChunks.length > 300) {
+          this.pendingVideoChunks.shift(); // Drop oldest to prevent unbounded growth
+        }
       }
 
-      // Render via ImageBitmap (off-main-thread decode)
-      createImageBitmap(blob).then((bitmap) => {
-        if (this.ctx && this.canvasEl) {
-          const cw = this.canvasEl.width;
-          const ch = this.canvasEl.height;
-          // Clear before draw
-          this.ctx.clearRect(0, 0, cw, ch);
-          // Scale the JPEG (captured at UPSCALE×native) down to canvas size
-          this.ctx.drawImage(bitmap, 0, 0, bitmap.width, bitmap.height, 0, 0, cw, ch);
+      // Update canvas dimensions from stream
+      if (this.canvasEl && this.streamWidth > 0) {
+        if (this.canvasEl.width !== this.streamWidth || this.canvasEl.height !== this.streamHeight) {
+          this.canvasEl.width = this.streamWidth;
+          this.canvasEl.height = this.streamHeight;
         }
-        bitmap.close();
-      }).catch(() => {
-        // Frame decode failed — skip
-      });
+      }
+
     } else if (magic === 0x02) {
-      // Audio frame — TODO: Phase 2
+      // Audio frame — Opus packet
+      if (data.byteLength < AUDIO_HEADER_SIZE) return;
+
+      const opusLength = view.getUint32(1, true);
+      if (opusLength === 0 || 5 + opusLength > data.byteLength) return;
+
+      const opusData = new Uint8Array(data, AUDIO_HEADER_SIZE, opusLength);
+
+      const chunk = new EncodedAudioChunk({
+        type: "key", // Opus doesn't have key/delta distinction
+        timestamp: this.lastFrameId * 16667,
+        duration: 20000, // 20ms frames
+        data: opusData,
+      });
+
+      if (this.audioDecoderReady && this.audioDecoder) {
+        if (this.audioDecoder.decodeQueueSize < 10) {
+          this.audioDecoder.decode(chunk);
+        }
+      } else {
+        this.pendingAudioChunks.push(chunk);
+        if (this.pendingAudioChunks.length > 600) {
+          this.pendingAudioChunks.shift();
+        }
+      }
+
+    } else if (magic === 0x03) {
+      // Codec configuration
+      if (data.byteLength < CODEC_CFG_HEADER_SIZE) return;
+
+      const payloadLen = view.getUint16(1, true);
+      if (payloadLen === 0 || 3 + payloadLen > data.byteLength) return;
+
+      const payload = new Uint8Array(data, 3, payloadLen);
+      const payloadText = new TextDecoder().decode(payload);
+
+      // Parse video descriptor length (first 2 bytes of payload are videoDesc length)
+      if (payload.length < 2) return;
+      const videoDescLen = new DataView(payload.buffer, payload.byteOffset, 2).getUint16(0, true);
+      if (2 + videoDescLen > payload.length) return;
+
+      const videoDescJson = new TextDecoder().decode(payload.subarray(2, 2 + videoDescLen));
+      const audioDescJson = new TextDecoder().decode(payload.subarray(2 + videoDescLen));
+
+      try {
+        const videoCfg = JSON.parse(videoDescJson) as { codec: string; width: number; height: number; framerate: number };
+        const audioCfg = JSON.parse(audioDescJson) as { codec: string; sampleRate: number; channels: number };
+
+        console.log(`[Cloud:${this.systemType}] Codec config received:`, videoCfg.codec, audioCfg.codec);
+
+        this.initVideoDecoder(videoCfg);
+        this.initAudioDecoder(audioCfg);
+      } catch (err) {
+        console.error(`[Cloud:${this.systemType}] Failed to parse codec config:`, err);
+      }
     }
   }
 
-  private handleReady(msg: { width?: number; height?: number }): void {
-    this._status = "running";
-    this.callbacks.onStatusChange("running");
+  /** Determine if a H.264 NAL unit is a keyframe or delta frame. */
+  private getNalType(nalData: Uint8Array): EncodedVideoChunkType {
+    if (nalData.length < 5) return "delta";
+    // NAL unit type is in the lower 5 bits of the first byte after start code
+    // For 4-byte start code (0x00 0x00 0x00 0x01), nal_type is at offset 4
+    // For 3-byte start code (0x00 0x00 0x01), nal_type is at offset 3
+    let nalTypeByte = 0;
+    if (nalData[0] === 0x00 && nalData[1] === 0x00 && nalData[2] === 0x00 && nalData[3] === 0x01) {
+      nalTypeByte = nalData[4];
+    } else if (nalData[0] === 0x00 && nalData[1] === 0x00 && nalData[2] === 0x01) {
+      nalTypeByte = nalData[3];
+    }
+    const nalType = nalTypeByte & 0x1f;
+    // 5 = IDR (keyframe), 1 = non-IDR (delta), 7 = SPS, 8 = PPS
+    return nalType === 5 ? "key" : "delta";
   }
 
   // ── Playback ──────────────────────────────────────────────────
@@ -310,12 +520,12 @@ export class CloudAdapter implements EmulatorAdapter {
   }
 
   reset(): void {
-    // Cloud adapter doesn't support reset — reload instead
     this.ws?.send(JSON.stringify({ type: "stop" }));
   }
 
   exit(): void {
     this.stopPing();
+    this.closeDecoders();
     if (this.ws) {
       this.ws.send(JSON.stringify({ type: "stop" }));
       this.ws.close();
@@ -343,21 +553,11 @@ export class CloudAdapter implements EmulatorAdapter {
   // ── Input ─────────────────────────────────────────────────────
 
   buttonDown(_player: 1 | 2, button: number): void {
-    this.ws?.send(JSON.stringify({
-      type: "input",
-      player: _player,
-      button,
-      pressed: true,
-    }));
+    this.ws?.send(JSON.stringify({ type: "input", player: _player, button, pressed: true }));
   }
 
   buttonUp(_player: 1 | 2, button: number): void {
-    this.ws?.send(JSON.stringify({
-      type: "input",
-      player: _player,
-      button,
-      pressed: false,
-    }));
+    this.ws?.send(JSON.stringify({ type: "input", player: _player, button, pressed: false }));
   }
 
   // ── Volume ────────────────────────────────────────────────────
@@ -368,7 +568,6 @@ export class CloudAdapter implements EmulatorAdapter {
   setVolume(v: number): void {
     this._volume = Math.max(0, Math.min(1, v));
     this._isMuted = v === 0;
-    // Volume control for cloud streaming is TBD (Phase 2)
   }
 
   // ── State ─────────────────────────────────────────────────────

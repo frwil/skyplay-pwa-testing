@@ -1,12 +1,12 @@
 import { WebSocket } from "ws";
 import {
   createSession, addConnection, removeConnection, getSession,
-  sendToSession, sendBinaryToSession, resetIdleTimer, removeSession,
-  getPlayerInfo, hasActiveConnections,
+  sendToSession, sendBinaryToSession, sendBinaryToConnection, resetIdleTimer, removeSession,
+  getPlayerInfo, hasActiveConnections, getConnections,
 } from "./session-manager.js";
 import { GameRunner } from "./game-runner.js";
-import type { ClientMessage, FrameHeader } from "./types.js";
-import { FRAME_MAGIC, AUDIO_MAGIC } from "./types.js";
+import type { ClientMessage } from "./types.js";
+import { FRAME_MAGIC, AUDIO_MAGIC, CODEC_CONFIG_MAGIC } from "./types.js";
 
 /** Map sessionId → GameRunner for lifecycle management. */
 const sessionRunners = new Map<string, GameRunner>();
@@ -126,20 +126,54 @@ function handleInit(
   const runner = new GameRunner(system, rom, msg.sessionId);
   sessionRunners.set(msg.sessionId, runner);
 
-  runner.on("frame", (jpegData: Buffer, width: number, height: number) => {
+  // ── Video frame (H.264 NAL unit) ──
+  runner.on("frame", (nalUnit: Buffer, width: number, height: number) => {
     session.frameCount++;
-    if (!jpegData || jpegData.length === 0) return;
+    if (!nalUnit || nalUnit.length === 0) return;
 
-    const header = Buffer.alloc(9);
+    const header = Buffer.alloc(11);
     header.writeUInt8(FRAME_MAGIC, 0);
     header.writeUInt16LE(width, 1);
     header.writeUInt16LE(height, 3);
     header.writeUInt32LE(session.frameCount, 5);
+    header.writeUInt16LE(nalUnit.length, 9);
 
     try {
-      sendBinaryToSession(session, Buffer.concat([header, jpegData]));
+      sendBinaryToSession(session, Buffer.concat([header, nalUnit]));
     } catch {
       // WebSocket may be closed
+    }
+  });
+
+  // ── Audio frame (Opus packet) ──
+  runner.on("audio", (opusData: Buffer) => {
+    if (!opusData || opusData.length === 0) return;
+
+    const header = Buffer.alloc(5);
+    header.writeUInt8(AUDIO_MAGIC, 0);
+    header.writeUInt32LE(opusData.length, 1);
+
+    try {
+      sendBinaryToSession(session, Buffer.concat([header, opusData]));
+    } catch {
+      // ok
+    }
+  });
+
+  // ── Codec configuration (H.264 + Opus descriptors) ──
+  runner.on("codecConfig", (videoDesc: Uint8Array, audioDesc: Uint8Array) => {
+    const videoLen = Buffer.alloc(2);
+    videoLen.writeUInt16LE(videoDesc.length, 0);
+    const payload = Buffer.concat([videoLen, Buffer.from(videoDesc), Buffer.from(audioDesc)]);
+
+    const header = Buffer.alloc(3);
+    header.writeUInt8(CODEC_CONFIG_MAGIC, 0);
+    header.writeUInt16LE(payload.length, 1);
+
+    try {
+      sendBinaryToSession(session, Buffer.concat([header, payload]));
+    } catch {
+      // ok
     }
   });
 
