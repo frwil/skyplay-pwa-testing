@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { roomCodeToSession } from "../route";
+import { roomCodeToSession } from "../room-codes";
 
 /**
  * POST /api/cloud-session/join
