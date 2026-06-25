@@ -8,6 +8,12 @@ export interface InitMessage {
   rom: string;
 }
 
+export interface JoinMessage {
+  type: "join";
+  sessionId: string;
+  token: string;
+}
+
 export interface InputMessage {
   type: "input";
   player: number;
@@ -24,7 +30,7 @@ export interface ControlMessage {
   type: "pause" | "resume" | "stop";
 }
 
-export type ClientMessage = InitMessage | InputMessage | PingMessage | ControlMessage;
+export type ClientMessage = InitMessage | JoinMessage | InputMessage | PingMessage | ControlMessage;
 
 export interface StatusMessage {
   type: "status";
@@ -48,7 +54,12 @@ export interface PongMessage {
   t: number;
 }
 
-export type ServerMessage = StatusMessage | ReadyMessage | ErrorMessage | PongMessage;
+export interface PlayerEventMessage {
+  type: "player_joined" | "player_disconnected";
+  player: number;
+}
+
+export type ServerMessage = StatusMessage | ReadyMessage | ErrorMessage | PongMessage | PlayerEventMessage;
 
 /** Binary frame header: 0x01 + width(u16) + height(u16) + frameId(u32) + flags(u8) + jpeg data */
 export const FRAME_MAGIC = 0x01;

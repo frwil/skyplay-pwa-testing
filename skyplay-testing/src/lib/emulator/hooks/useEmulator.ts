@@ -597,9 +597,33 @@ export function useEmulator(system: SystemType = "nes") {
     }
   }, []);
 
+  // FPS tracking: for non-NES (CloudAdapter, Nostalgist), read from adapter.
+  // The NES game loop increments fpsFrameCountRef, but cloud adapters track
+  // their own FPS via server status messages (CloudAdapter._fps).
+  const displayFps = isNes ? fps : (adapterRef.current?.fps ?? fps);
+
+  // ─── Cloud Gaming: room code + join ────────────────────────────
+  const isCloud = system === "neogeo" || system === "ps1";
+  const roomCode = (adapterRef.current instanceof CloudAdapter) ? adapterRef.current.roomCode : null;
+
+  const joinSession = useCallback(async (code: string) => {
+    // Create a CloudAdapter if one isn't already active
+    let adapter = adapterRef.current;
+    if (!(adapter instanceof CloudAdapter)) {
+      adapterRef.current?.exit();
+      adapter = new CloudAdapter(system as "neogeo" | "ps1", { onStatusChange: setStatus });
+      adapterRef.current = adapter;
+      const canvas = canvasRef.current;
+      if (canvas) adapter.setCanvas?.(canvas);
+    }
+    setStatus("loading");
+    await (adapter as CloudAdapter).joinSession(code);
+    setStatus(adapter.status);
+  }, [system]);
+
   const emulatorState: EmulatorState = {
     status,
-    fps,
+    fps: displayFps,
     currentRom,
     romList,
     system,
@@ -653,6 +677,9 @@ export function useEmulator(system: SystemType = "nes") {
      *  - Start button simulation after countdown
      *  - Applying delayed remote inputs on the local emulator
      */
+    roomCode,
+    joinSession,
+    isCloud,
     injectKeyEvent: (player: 1 | 2, button: number, pressed: boolean) => {
       if (isNes) {
         // NES: jsnes handles buttonDown/buttonUp directly, no need for key events

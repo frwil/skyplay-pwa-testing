@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from "child_process";
 import { EventEmitter } from "events";
-import { SYSTEM_CORES, SYSTEM_RESOLUTIONS, UPSCALE, XDOTOOL_KEY_MAP, BUTTON_TO_RETROARCH, buildRetroarchKeyConfig } from "./config.js";
+import { SYSTEM_CORES, SYSTEM_RESOLUTIONS, UPSCALE, XDOTOOL_KEY_MAP, XDOTOOL_KEY_MAP_P2, BUTTON_TO_RETROARCH, buildRetroarchKeyConfig } from "./config.js";
 
 export interface GameRunnerEvents {
   onFrame: (jpegData: Buffer, width: number, height: number) => void;
@@ -280,14 +280,19 @@ export class GameRunner extends EventEmitter {
     return -1;
   }
 
-  /** Inject a keyboard input into RetroArch via xdotool. */
-  injectInput(button: number, pressed: boolean): void {
+  /** Inject a keyboard input into RetroArch via xdotool.
+   *  @param player 1 or 2 — selects the correct key map (non-overlapping keys).
+   *  @param button Button index (0-13), maps to RetroArch config name.
+   *  @param pressed true = keydown, false = keyup.
+   */
+  injectInput(player: number, button: number, pressed: boolean): void {
     if (!this.running) return;
 
     const retroarchName = BUTTON_TO_RETROARCH[button];
     if (!retroarchName) return;
 
-    const xdoKey = XDOTOOL_KEY_MAP[retroarchName];
+    const keyMap = player === 1 ? XDOTOOL_KEY_MAP : XDOTOOL_KEY_MAP_P2;
+    const xdoKey = keyMap[retroarchName];
     if (!xdoKey) return;
 
     const action = pressed ? "keydown" : "keyup";
@@ -296,6 +301,8 @@ export class GameRunner extends EventEmitter {
     // RetroArch runs fullscreen so it should always have focus.
     // Using `keydown`/`keyup` directly (no `search`) avoids issues with
     // window class name mismatches (e.g. "RetroArch" vs "retroarch").
+    // P1 and P2 use different physical keys — RetroArch decodes them to
+    // the correct player port via `input_player1_*` / `input_player2_*` config.
     const proc = spawn("xdotool", [action, xdoKey], {
       env: { ...process.env, DISPLAY: this.display },
       stdio: "ignore",
@@ -303,7 +310,7 @@ export class GameRunner extends EventEmitter {
 
     proc.on("error", (err) => {
       if (this.frameId < 3) {
-        console.warn(`[game-runner] xdotool error:`, err.message);
+        console.warn(`[game-runner] xdotool error (P${player}):`, err.message);
       }
     });
   }
@@ -364,8 +371,10 @@ export class GameRunner extends EventEmitter {
       // Input
       `input_driver = "sdl2"`,
       `input_joypad_driver = "null"`,
-      // Performance
-      `audio_sync = "false"`,
+      // Performance — audio_sync=true is REQUIRED for real-time speed
+      // even when audio is disabled (RetroArch uses its audio clock for
+      // frame pacing; without it + vsync off = uncapped speed).
+      `audio_sync = "true"`,
       `fastforward_ratio = "1.0"`,
       `rewind_enable = "false"`,
       // Menu

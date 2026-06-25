@@ -4,7 +4,7 @@ import { useState, useCallback, useEffect } from "react";
 import type { EmulatorState, SystemType } from "@/lib/emulator/types";
 import { SYSTEM_CONFIGS } from "@/lib/emulator/EmulatorAdapter";
 import { useTranslation } from "@/lib/i18n/TranslationContext";
-import { Gamepad2, Pause, RotateCcw, Maximize2, Minimize2, Info, Activity, Zap, Wifi, Cloud } from "lucide-react";
+import { Gamepad2, Pause, RotateCcw, Maximize2, Minimize2, Info, Activity, Zap, Wifi, Cloud, Copy, Users } from "lucide-react";
 import GameControls from "./GameControls";
 import TouchControls from "./TouchControls";
 import AutoDetectBanner from "./AutoDetectBanner";
@@ -107,6 +107,23 @@ export default function EmulatorCore({
 
   // ─── Info Overlay ───────────────────────────────────────
   const [showInfo, setShowInfo] = useState(true);
+
+  // ─── Room Code Join ─────────────────────────────────────
+  const [joinCode, setJoinCode] = useState("");
+  const [joining, setJoining] = useState(false);
+  const [joinError, setJoinError] = useState<string | null>(null);
+
+  // Auto-join via URL parameter: ?roomCode=ABC123
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const codeFromUrl = params.get("roomCode");
+    if (codeFromUrl && emu.isCloud && emu.status === "idle") {
+      setJoining(true);
+      emu.joinSession(codeFromUrl).catch((err) => {
+        setJoinError(err instanceof Error ? err.message : "Join failed");
+      }).finally(() => setJoining(false));
+    }
+  }, [emu.isCloud, emu.status]);
 
   // Toggle info overlay with I key
   useEffect(() => {
@@ -276,6 +293,29 @@ export default function EmulatorCore({
               </div>
             )}
 
+            {/* Room code badge (P1 — cloud mode, game active, room code available) */}
+            {cfg.cloud && emu.roomCode && gameActive && (
+              <div
+                className="flex items-center gap-1.5 rounded-full pl-2.5 pr-1.5 py-0.5 text-[10px] font-bold pointer-events-auto cursor-pointer"
+                style={{
+                  backgroundColor: "rgba(34,197,94,0.15)",
+                  backdropFilter: "blur(4px)",
+                  color: "rgba(34,197,94,0.8)",
+                  border: "1px solid rgba(34,197,94,0.25)",
+                }}
+                onClick={async () => {
+                  try {
+                    await navigator.clipboard.writeText(emu.roomCode!);
+                  } catch { /* clipboard denied */ }
+                }}
+                title="Click to copy room code"
+              >
+                <Users className="w-2.5 h-2.5" />
+                {emu.roomCode}
+                <Copy className="w-2.5 h-2.5 ml-0.5 opacity-60" />
+              </div>
+            )}
+
             {/* Netplay status */}
             {netplayInfo?.status && netplayInfo.status !== "idle" && (
               <div
@@ -425,6 +465,72 @@ export default function EmulatorCore({
                 >
                   {t.play.noRomDescription}
                 </p>
+
+                {/* P2 Join by Room Code (cloud mode, idle only) */}
+                {emu.isCloud && (
+                  <div className="mt-6 flex flex-col items-center gap-2">
+                    <div
+                      className="text-[10px] font-bold uppercase tracking-wider mb-1"
+                      style={{ color: "rgba(255,255,255,0.3)" }}
+                    >
+                      <Users className="w-3 h-3 inline mr-1" />
+                      Join a game
+                    </div>
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        value={joinCode}
+                        onChange={(e) => {
+                          setJoinCode(e.target.value.toUpperCase().slice(0, 6));
+                          setJoinError(null);
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" && joinCode.length === 6 && !joining) {
+                            setJoining(true);
+                            setJoinError(null);
+                            emu.joinSession(joinCode).catch((err) => {
+                              setJoinError(err instanceof Error ? err.message : "Join failed");
+                            }).finally(() => setJoining(false));
+                          }
+                        }}
+                        placeholder="ABC123"
+                        maxLength={6}
+                        disabled={joining}
+                        className="w-24 px-3 py-1.5 rounded-lg text-center text-sm font-mono font-bold uppercase tracking-widest
+                                  focus:outline-none disabled:opacity-50"
+                        style={{
+                          backgroundColor: "rgba(255,255,255,0.05)",
+                          border: "1px solid rgba(255,255,255,0.12)",
+                          color: "rgba(0,200,255,0.8)",
+                        }}
+                      />
+                      <button
+                        onClick={() => {
+                          if (joinCode.length !== 6 || joining) return;
+                          setJoining(true);
+                          setJoinError(null);
+                          emu.joinSession(joinCode).catch((err) => {
+                            setJoinError(err instanceof Error ? err.message : "Join failed");
+                          }).finally(() => setJoining(false));
+                        }}
+                        disabled={joinCode.length !== 6 || joining}
+                        className="px-3 py-1.5 rounded-lg text-xs font-bold transition-colors disabled:opacity-40"
+                        style={{
+                          backgroundColor: joining ? "rgba(0,200,255,0.1)" : "rgba(0,200,255,0.2)",
+                          border: "1px solid rgba(0,200,255,0.3)",
+                          color: "rgba(0,200,255,0.9)",
+                        }}
+                      >
+                        {joining ? "..." : "Join"}
+                      </button>
+                    </div>
+                    {joinError && (
+                      <p className="text-[10px]" style={{ color: "#fd2e5f" }}>
+                        {joinError}
+                      </p>
+                    )}
+                  </div>
+                )}
               </>
             )}
           </div>

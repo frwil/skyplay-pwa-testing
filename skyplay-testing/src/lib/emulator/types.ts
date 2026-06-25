@@ -110,6 +110,12 @@ export interface EmulatorState {
    *  - Applying delayed remote inputs on the local emulator
    */
   injectKeyEvent: (player: 1 | 2, button: number, pressed: boolean) => void;
+  /** Cloud gaming room code (P1 creates, P2 joins). null if not in cloud mode. */
+  roomCode: string | null;
+  /** Join an existing cloud session as Player 2 via room code. */
+  joinSession: (roomCode: string) => Promise<void>;
+  /** Whether this emulator is running in cloud streaming mode. */
+  isCloud: boolean;
 }
 
 // ─── Buffer Interfaces ─────────────────────────────────────────────

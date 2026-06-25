@@ -28,6 +28,8 @@ export class CloudAdapter implements EmulatorAdapter {
   private _isMuted: boolean = false;
   private callbacks: CloudCallbacks;
   private sessionId: string | null = null;
+  private _roomCode: string | null = null;
+  private _player: 1 | 2 = 1;
   private lastFrameId: number = 0;
   private pingInterval: ReturnType<typeof setInterval> | null = null;
 
@@ -68,11 +70,13 @@ export class CloudAdapter implements EmulatorAdapter {
         throw new Error(err.error || `Session creation failed (${res.status})`);
       }
 
-      const { sessionId, wsUrl } = await res.json() as { sessionId: string; wsUrl: string };
+      const { sessionId, wsUrl, roomCode } = await res.json() as { sessionId: string; wsUrl: string; roomCode: string };
       this.sessionId = sessionId;
+      this._roomCode = roomCode;
+      this._player = 1;
 
       // 2. Connect to game server via WebSocket
-      await this.connectWebSocket(wsUrl);
+      await this.connectWebSocket(wsUrl, "init");
 
       // 3. Wait for "ready" message
       // (handled in connectWebSocket via message listener)
@@ -85,20 +89,64 @@ export class CloudAdapter implements EmulatorAdapter {
     }
   }
 
-  private connectWebSocket(wsUrl: string): Promise<void> {
+  /**
+   * Join an existing cloud gaming session as Player 2 via room code.
+   *
+   * Used by P2 to connect to a session P1 created. Sends a "join" message
+   * instead of "init" — the server adds P2 to the existing session and
+   * begins broadcasting frames to the new connection.
+   */
+  async joinSession(roomCode: string): Promise<void> {
+    this._status = "loading";
+    this.callbacks.onStatusChange("loading");
+
+    try {
+      const res = await fetch("/api/cloud-session/join", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ roomCode }),
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: "Unknown error" }));
+        throw new Error(err.error || `Join failed (${res.status})`);
+      }
+
+      const { sessionId, wsUrl, player } = await res.json() as { sessionId: string; wsUrl: string; player: 2 };
+      this.sessionId = sessionId;
+      this._player = player;
+
+      await this.connectWebSocket(wsUrl, "join");
+
+      console.log(`[Cloud:${this.systemType}] Joined as P${player} — session ${sessionId}`);
+    } catch (err) {
+      console.error(`[Cloud:${this.systemType}] Failed to join:`, err);
+      this._status = "error";
+      this.callbacks.onStatusChange("error");
+    }
+  }
+
+  private connectWebSocket(wsUrl: string, mode: "init" | "join" = "init"): Promise<void> {
     return new Promise((resolve, reject) => {
       this.ws = new WebSocket(wsUrl);
       this.ws.binaryType = "arraybuffer";
 
       this.ws.onopen = () => {
-        // Send init message
-        this.ws!.send(JSON.stringify({
-          type: "init",
-          sessionId: this.sessionId,
-          token: "", // Token is sent as cookie automatically
-          system: this.systemType,
-          rom: this._currentRom,
-        }));
+        if (mode === "join") {
+          this.ws!.send(JSON.stringify({
+            type: "join",
+            sessionId: this.sessionId,
+            token: "",
+          }));
+        } else {
+          this.ws!.send(JSON.stringify({
+            type: "init",
+            sessionId: this.sessionId,
+            token: "", // Token is sent as cookie automatically
+            system: this.systemType,
+            rom: this._currentRom,
+          }));
+        }
 
         // Start ping/pong for latency measurement
         this.startPing();
@@ -171,6 +219,20 @@ export class CloudAdapter implements EmulatorAdapter {
           console.error(`[Cloud:${this.systemType}] Server error:`, msg.message);
           this._status = "error";
           this.callbacks.onStatusChange("error");
+          break;
+        }
+
+        case "player_joined": {
+          const pj = msg as { type: "player_joined"; player: number };
+          console.log(`[Cloud:${this.systemType}] Player ${pj.player} joined the session`);
+          this.callbacks.onPlayerEvent?.("player_joined", pj.player);
+          break;
+        }
+
+        case "player_disconnected": {
+          const pd = msg as { type: "player_disconnected"; player: number };
+          console.log(`[Cloud:${this.systemType}] Player ${pd.player} disconnected`);
+          this.callbacks.onPlayerEvent?.("player_disconnected", pd.player);
           break;
         }
 
@@ -314,6 +376,8 @@ export class CloudAdapter implements EmulatorAdapter {
   get status(): EmulatorStatus { return this._status; }
   get fps(): number { return this._fps; }
   get currentRom(): string | null { return this._currentRom; }
+  get roomCode(): string | null { return this._roomCode; }
+  get player(): 1 | 2 { return this._player; }
 
   // ── Helpers ───────────────────────────────────────────────────
 
@@ -335,4 +399,6 @@ export class CloudAdapter implements EmulatorAdapter {
 
 export interface CloudCallbacks {
   onStatusChange: (status: EmulatorStatus) => void;
+  /** Fired when another player joins or leaves the session. */
+  onPlayerEvent?: (event: "player_joined" | "player_disconnected", player: number) => void;
 }

@@ -2,6 +2,22 @@ import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { jwtVerify } from "jose";
 
+/** In-memory room code → sessionId store.
+ *  WARNING: Lost on cold starts. For production, use Vercel KV or DB. */
+const roomCodeToSession = new Map<string, string>();
+
+/** Generate a 6-char room code (no ambiguous chars O/0/I/1). */
+function generateRoomCode(): string {
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  let code = "";
+  for (let i = 0; i < 6; i++) {
+    code += chars[Math.floor(Math.random() * chars.length)];
+  }
+  return code;
+}
+
+export { roomCodeToSession };
+
 /**
  * POST /api/cloud-session
  *
@@ -9,7 +25,7 @@ import { jwtVerify } from "jose";
  * on Northflank (production) or returning a local WebSocket URL (dev).
  *
  * Body: { system: "neogeo" | "ps1", rom: string }
- * Returns: { sessionId: string, wsUrl: string }
+ * Returns: { sessionId: string, wsUrl: string, roomCode: string }
  */
 export async function POST(req: NextRequest) {
   try {
@@ -66,7 +82,11 @@ export async function POST(req: NextRequest) {
       wsUrl = `ws://${localHost}:${localPort}?sessionId=${sessionId}`;
     }
 
-    return NextResponse.json({ sessionId, wsUrl });
+    // ── Room code for P2 join ──
+    const roomCode = generateRoomCode();
+    roomCodeToSession.set(roomCode, sessionId);
+
+    return NextResponse.json({ sessionId, wsUrl, roomCode });
   } catch (err) {
     console.error("[cloud-session] Error:", err);
     return NextResponse.json(

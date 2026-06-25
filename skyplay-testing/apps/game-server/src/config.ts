@@ -47,16 +47,45 @@ export const XDOTOOL_KEY_MAP: Record<string, string> = {
   select: "Shift_R",
 };
 
-/** Build RetroArch keyboard config entries from button mapping. */
+/** P2 xdotool key map — uses completely different physical keys from P1.
+ *  P1 occupies: x, z, c, v, a, s, q, w, arrows, Return, Shift_R
+ *  P2 uses (right side of keyboard): i, k, o, l, u, j, y, h, t, g, f, r, n, m
+ *  These are all free and non-overlapping with P1. */
+export const XDOTOOL_KEY_MAP_P2: Record<string, string> = {
+  a: "i",       // P2 A → I key
+  b: "k",       // P2 B → K key
+  x: "o",       // P2 X → O key
+  y: "l",       // P2 Y → L key
+  l: "u",       // P2 L → U key
+  r: "j",       // P2 R → J key
+  l2: "y",      // P2 L2 → Y key
+  r2: "h",      // P2 R2 → H key
+  up: "t",      // P2 Up → T key
+  down: "g",    // P2 Down → G key
+  left: "f",    // P2 Left → F key
+  right: "r",   // P2 Right → R key
+  start: "n",   // P2 Start → N key
+  select: "m",  // P2 Select → M key
+};
+
+/** Build RetroArch keyboard config entries for both players. */
 export function buildRetroarchKeyConfig(): Record<string, string> {
   const config: Record<string, string> = {};
+  // Player 1
   for (const [btnIdx, retroarchName] of Object.entries(BUTTON_TO_RETROARCH)) {
     const xdoKey = XDOTOOL_KEY_MAP[retroarchName];
     if (!xdoKey) continue;
-    // Convert xdotool key to RetroArch key name
     const raKey = xdotoolToRetroarchKey(xdoKey);
     if (!raKey) continue;
     config[`input_player1_${retroarchName}`] = raKey;
+  }
+  // Player 2
+  for (const [btnIdx, retroarchName] of Object.entries(BUTTON_TO_RETROARCH)) {
+    const xdoKey = XDOTOOL_KEY_MAP_P2[retroarchName];
+    if (!xdoKey) continue;
+    const raKey = xdotoolToRetroarchKey(xdoKey);
+    if (!raKey) continue;
+    config[`input_player2_${retroarchName}`] = raKey;
   }
   return config;
 }
@@ -65,6 +94,9 @@ export function buildRetroarchKeyConfig(): Record<string, string> {
 function xdotoolToRetroarchKey(xdo: string): string | null {
   const map: Record<string, string> = {
     x: "x", z: "z", c: "c", v: "v", a: "a", s: "s",
+    i: "i", k: "k", o: "o", l: "l", u: "u", j: "j",
+    y: "y", h: "h", t: "t", g: "g", f: "f", r: "r",
+    n: "n", m: "m",
     Up: "up", Down: "down", Left: "left", Right: "right",
     Return: "enter", Shift_R: "rshift",
   };

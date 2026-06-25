@@ -1,9 +1,14 @@
-import type { WebSocket } from "ws";
-import { createSession, getSession, removeSession, sendToSession, sendBinaryToSession, resetIdleTimer } from "./session-manager.js";
+import { WebSocket } from "ws";
+import {
+  createSession, addConnection, removeConnection, getSession,
+  sendToSession, sendBinaryToSession, resetIdleTimer, removeSession,
+  getPlayerInfo, hasActiveConnections,
+} from "./session-manager.js";
 import { GameRunner } from "./game-runner.js";
 import type { ClientMessage, FrameHeader } from "./types.js";
 import { FRAME_MAGIC, AUDIO_MAGIC } from "./types.js";
 
+/** Map sessionId → GameRunner for lifecycle management. */
 const sessionRunners = new Map<string, GameRunner>();
 
 export function handleConnection(ws: WebSocket, sessionId: string): void {
@@ -11,38 +16,61 @@ export function handleConnection(ws: WebSocket, sessionId: string): void {
 
   ws.on("message", (raw: Buffer) => {
     try {
-      // Check if it's a text message (JSON) or binary
       if (typeof raw === "string" || raw[0] === 0x7b) {
-        // JSON text message
         const text = typeof raw === "string" ? raw : raw.toString();
         const msg: ClientMessage = JSON.parse(text);
         handleMessage(ws, msg, sessionId);
       }
-      // Binary messages from client are not expected for now
     } catch (err) {
       console.error(`[ws] Failed to parse message:`, err);
     }
   });
 
   ws.on("close", (code, reason) => {
-    console.log(`[ws] Connection closed: ${sessionId} (${code}: ${reason})`);
-    stopSession(sessionId);
+    const info = getPlayerInfo(ws);
+    const playerLabel = info ? `P${info.player}` : "?";
+    console.log(`[ws] ${playerLabel} disconnected: ${sessionId} (${code})`);
+
+    // Remove this specific connection
+    if (info) {
+      removeConnection(info.sessionId, info.player);
+      const session = getSession(info.sessionId);
+      if (session && hasActiveConnections(session)) {
+        // One player remains — notify them
+        sendToSession(session, { type: "player_disconnected", player: info.player });
+        resetIdleTimer(session);
+      } else {
+        // No connections left — cleanup entirely
+        stopSession(sessionId);
+      }
+    }
   });
 
   ws.on("error", (err) => {
     console.error(`[ws] WebSocket error for ${sessionId}:`, err);
-    stopSession(sessionId);
+    // close handler will fire after error
   });
 }
 
 function handleMessage(ws: WebSocket, msg: ClientMessage, sessionId: string): void {
+  // Reset idle timer on ANY message from ANY connection
+  const info = getPlayerInfo(ws);
+  if (info) {
+    const session = getSession(info.sessionId);
+    if (session) resetIdleTimer(session);
+  }
+
   switch (msg.type) {
     case "init":
-      handleInit(ws, msg);
+      handleInit(ws, msg, sessionId);
+      break;
+
+    case "join":
+      handleJoin(ws, msg, sessionId);
       break;
 
     case "input":
-      handleInput(msg);
+      handleInput(ws, msg);
       break;
 
     case "pause":
@@ -63,10 +91,14 @@ function handleMessage(ws: WebSocket, msg: ClientMessage, sessionId: string): vo
   }
 }
 
-function handleInit(ws: WebSocket, msg: { type: "init"; sessionId: string; token: string; system: string; rom: string }): void {
+function handleInit(
+  ws: WebSocket,
+  msg: { type: "init"; sessionId: string; token: string; system: string; rom: string },
+  sessionId: string,
+): void {
   const { system, rom } = msg;
 
-  // Validate token (simple check — in production, verify JWT)
+  // Validate token
   const expectedToken = process.env.SESSION_TOKEN_SECRET;
   if (expectedToken && msg.token !== expectedToken) {
     ws.send(JSON.stringify({ type: "error", message: "Invalid session token" }));
@@ -74,9 +106,21 @@ function handleInit(ws: WebSocket, msg: { type: "init"; sessionId: string; token
     return;
   }
 
-  // Create session
-  const session = createSession(msg.sessionId, ws, system, rom);
+  // Check if session already exists (P1 reconnecting)
+  let session = getSession(msg.sessionId);
+  if (session) {
+    // Reconnection: just add the WS to existing session
+    addConnection(msg.sessionId, ws, 1);
+    if (session.videoWidth && session.videoHeight) {
+      ws.send(JSON.stringify({ type: "ready", width: session.videoWidth, height: session.videoHeight }));
+    }
+    return;
+  }
+
+  // ── New session (P1 first connection) ──
+  session = createSession(msg.sessionId, system, rom);
   session.status = "loading";
+  addConnection(msg.sessionId, ws, 1);
 
   // Start game runner
   const runner = new GameRunner(system, rom, msg.sessionId);
@@ -86,12 +130,11 @@ function handleInit(ws: WebSocket, msg: { type: "init"; sessionId: string; token
     session.frameCount++;
     if (!jpegData || jpegData.length === 0) return;
 
-    // Build binary frame message
     const header = Buffer.alloc(9);
-    header.writeUInt8(FRAME_MAGIC, 0);        // magic
-    header.writeUInt16LE(width, 1);            // width
-    header.writeUInt16LE(height, 3);           // height
-    header.writeUInt32LE(session.frameCount, 5); // frameId
+    header.writeUInt8(FRAME_MAGIC, 0);
+    header.writeUInt16LE(width, 1);
+    header.writeUInt16LE(height, 3);
+    header.writeUInt32LE(session.frameCount, 5);
 
     try {
       sendBinaryToSession(session, Buffer.concat([header, jpegData]));
@@ -107,15 +150,15 @@ function handleInit(ws: WebSocket, msg: { type: "init"; sessionId: string; token
 
   runner.on("exit", (code: number | null) => {
     console.log(`[ws] Game runner exited for ${msg.sessionId} (code ${code})`);
-    // Don't stop — let the user reconnect or close naturally
   });
 
   // Start the game
   runner.start().then(({ width, height }) => {
+    session.videoWidth = width;
+    session.videoHeight = height;
     session.status = "running";
     sendToSession(session, { type: "ready", width, height });
 
-    // Start FPS counter
     let lastFrameCount = 0;
     const fpsInterval = setInterval(() => {
       if (session.status === "stopped") {
@@ -133,12 +176,53 @@ function handleInit(ws: WebSocket, msg: { type: "init"; sessionId: string; token
   });
 }
 
-function handleInput(msg: { player: number; button: number; pressed: boolean }): void {
-  // Input messages don't have sessionId directly — find the runner
-  // For now, apply to all runners (in future, track which session the ws belongs to)
-  for (const runner of sessionRunners.values()) {
-    runner.injectInput(msg.button, msg.pressed);
+function handleJoin(
+  ws: WebSocket,
+  msg: { type: "join"; sessionId: string; token: string },
+  _sessionId: string,
+): void {
+  const session = getSession(msg.sessionId);
+  if (!session) {
+    ws.send(JSON.stringify({ type: "error", message: "Session not found" }));
+    ws.close(4004, "Session not found");
+    return;
   }
+
+  // Validate token
+  const expectedToken = process.env.SESSION_TOKEN_SECRET;
+  if (expectedToken && msg.token !== expectedToken) {
+    ws.send(JSON.stringify({ type: "error", message: "Invalid session token" }));
+    ws.close(4001, "Unauthorized");
+    return;
+  }
+
+  // Add P2 connection
+  addConnection(msg.sessionId, ws, 2);
+
+  // Notify P1 that P2 joined
+  sendToSession(session, { type: "player_joined", player: 2 });
+
+  // Send ready to P2 with current video dimensions
+  ws.send(JSON.stringify({
+    type: "ready",
+    width: session.videoWidth,
+    height: session.videoHeight,
+  }));
+}
+
+function handleInput(
+  ws: WebSocket,
+  msg: { player: number; button: number; pressed: boolean },
+): void {
+  // Route input to the correct session's runner
+  const info = getPlayerInfo(ws);
+  if (!info) return;
+
+  const runner = sessionRunners.get(info.sessionId);
+  if (!runner) return;
+
+  // Pass the declared player number (from client) to injectInput
+  runner.injectInput(msg.player, msg.button, msg.pressed);
 }
 
 function handleControl(action: "pause" | "resume", sessionId: string): void {
@@ -156,7 +240,7 @@ function handleControl(action: "pause" | "resume", sessionId: string): void {
 }
 
 function handlePing(ws: WebSocket, t: number): void {
-  if (ws.readyState === ws.OPEN) {
+  if (ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({ type: "pong", t }));
   }
 }
