@@ -33,7 +33,11 @@ export async function POST(req: NextRequest) {
       wsUrl = `wss://<northflank-container>?sessionId=${sessionId}`;
     } else if (process.env.GAME_SERVER_PUBLIC_URL) {
       // Public tunnel (cloudflared, ngrok, localtunnel)
-      wsUrl = `${process.env.GAME_SERVER_PUBLIC_URL}?sessionId=${sessionId}`;
+      const base = process.env.GAME_SERVER_PUBLIC_URL
+        .replace(/^﻿/, "")
+        .replace(/[\r\n]+/g, "")
+        .trim();
+      wsUrl = `${base}?sessionId=${sessionId}`;
     } else {
       // Local dev
       const localHost = process.env.GAME_SERVER_HOST || "localhost";
