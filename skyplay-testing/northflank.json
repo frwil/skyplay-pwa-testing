@@ -1,0 +1,47 @@
+{
+  "services": [
+    {
+      "id": "game-server",
+      "name": "SkyPlay Game Server",
+      "type": "docker",
+      "source": {
+        "type": "git",
+        "repository": "https://github.com/frwil/skyplay-pwa-testing",
+        "branch": "main",
+        "dockerfile": "apps/game-server/Dockerfile",
+        "context": "apps/game-server"
+      },
+      "deployment": {
+        "minInstances": 0,
+        "maxInstances": 10,
+        "idleTimeout": 300,
+        "instanceType": {
+          "cpu": 1,
+          "memory": 1024
+        },
+        "regions": ["auto"]
+      },
+      "ports": [
+        {
+          "port": 8080,
+          "protocol": "http",
+          "public": true
+        }
+      ],
+      "healthCheck": {
+        "path": "/",
+        "interval": 30,
+        "initialDelay": 15,
+        "timeout": 5
+      },
+      "env": {
+        "RETROARCH_CORES_DIR": "/usr/lib/libretro",
+        "MAX_SESSIONS": "3",
+        "FRAME_ENCODE_QUALITY": "5",
+        "NODE_ENV": "production",
+        "SESSION_TOKEN_SECRET": "@{SESSION_TOKEN_SECRET}"
+      },
+      "volumes": []
+    }
+  ]
+}

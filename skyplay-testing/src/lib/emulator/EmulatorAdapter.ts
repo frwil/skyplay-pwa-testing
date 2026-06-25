@@ -192,7 +192,7 @@ export const SYSTEM_CONFIGS: Record<SystemType, SystemConfig> = {
     coreName: "fbneo",
     romExtensions: [".zip", ".neo"],
     touchLayout: "snes",
-    desktopOnly: true,
+    cloud: true,
   },
   ps1: {
     type: "ps1",
@@ -220,7 +220,7 @@ export const SYSTEM_CONFIGS: Record<SystemType, SystemConfig> = {
     coreName: "pcsx_rearmed",
     romExtensions: [".bin", ".cue", ".iso", ".pbp", ".img", ".m3u"],
     touchLayout: "snes",
-    desktopOnly: true,
+    cloud: true,
   },
 };
 
@@ -342,14 +342,29 @@ export const SYSTEM_KEY_MAPS: Record<SystemType, KeyMapping> = {
     ...BASE_MENU_BUTTONS_P2,
   },
   neogeo: {
-    ...BASE_D_PAD,
-    // Neo Geo: A=0, B=1, C=2, D=3, SELECT=4, START=5
-    KeyX:  { player: 1, button: 0 },  // X key → A
-    KeyZ:  { player: 1, button: 1 },  // Z key → B
-    KeyC:  { player: 1, button: 2 },  // C key → C
-    KeyV:  { player: 1, button: 3 },  // V key → D
-    ...BASE_MENU_BUTTONS,
-    ...BASE_MENU_BUTTONS_P2,
+    // Neo Geo: A=0, B=1, C=2, D=3, SELECT=4, START=5, UP=6, DOWN=7, LEFT=8, RIGHT=9
+    // D-Pad
+    ArrowUp:    { player: 1, button: 6 },
+    ArrowDown:  { player: 1, button: 7 },
+    ArrowLeft:  { player: 1, button: 8 },
+    ArrowRight: { player: 1, button: 9 },
+    KeyW:       { player: 1, button: 6 },
+    KeyS:       { player: 1, button: 7 },
+    KeyA:       { player: 1, button: 8 },
+    KeyD:       { player: 1, button: 9 },
+    // Face buttons
+    KeyX:  { player: 1, button: 0 },  // X → A
+    KeyZ:  { player: 1, button: 1 },  // Z → B
+    KeyC:  { player: 1, button: 2 },  // C → C
+    KeyV:  { player: 1, button: 3 },  // V → D
+    // Menu (Neo Geo: SELECT=4, START=5)
+    Enter:      { player: 1, button: 5 },  // Enter → START
+    Space:      { player: 1, button: 5 },  // Space → START (alt)
+    ShiftRight: { player: 1, button: 4 },  // Shift Right → SELECT
+    Tab:        { player: 1, button: 4 },  // Tab → SELECT (alt)
+    // P2
+    NumpadEnter: { player: 2, button: 5 },
+    NumpadAdd:   { player: 2, button: 4 },
   },
   ps1: {
     ...BASE_D_PAD,

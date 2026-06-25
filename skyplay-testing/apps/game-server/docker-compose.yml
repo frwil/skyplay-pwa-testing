@@ -1,0 +1,43 @@
+services:
+  game-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8888:8080"
+    volumes:
+      # Mount ROMs from the PWA's public/roms directory
+      - ../../public/roms:/roms:ro
+    environment:
+      - PORT=8080
+      - HOST=0.0.0.0
+      - RETROARCH_CORES_DIR=/usr/lib/libretro
+      - ROMS_DIR=/roms
+      - FRAME_ENCODE_QUALITY=5
+      # Use Xdummy for environments without /dev/fb (CI, some cloud)
+      - USE_XDUMMY=0
+      # Session token — disabled for local dev (no JWT needed on localhost)
+      # - SESSION_TOKEN_SECRET=dev-secret-change-in-production
+    # Needed for Xvfb
+    stdin_open: true
+    tty: true
+
+  # Optional: cores downloader for local dev
+  download-cores:
+    image: alpine:latest
+    volumes:
+      - ./cores:/cores
+    command: |
+      sh -c "
+        mkdir -p /cores
+        echo 'Downloading fbneo core...'
+        wget -q -O /tmp/fbneo.zip https://buildbot.libretro.com/nightly/linux/x86_64/latest/fbneo_libretro.so.zip 2>/dev/null || echo 'fbneo: download failed'
+        if [ -f /tmp/fbneo.zip ]; then unzip -o /tmp/fbneo.zip -d /cores/ 2>/dev/null || echo 'fbneo: unzip failed'; fi
+        echo 'Downloading pcsx_rearmed core...'
+        wget -q -O /tmp/pcsx.zip https://buildbot.libretro.com/nightly/linux/x86_64/latest/pcsx_rearmed_libretro.so.zip 2>/dev/null || echo 'pcsx: download failed'
+        if [ -f /tmp/pcsx.zip ]; then unzip -o /tmp/pcsx.zip -d /cores/ 2>/dev/null || echo 'pcsx: unzip failed'; fi
+        ls -la /cores/
+        echo 'Done.'
+      "
+    profiles:
+      - tools

@@ -20,6 +20,7 @@ import { SnesEmulatorAdapter } from "../adapters/SnesAdapter";
 import { GbEmulatorAdapter } from "../adapters/GbAdapter";
 import { GbaEmulatorAdapter } from "../adapters/GbaAdapter";
 import { NeoGeoEmulatorAdapter } from "../adapters/NeoGeoAdapter";
+import { CloudAdapter } from "../adapters/CloudAdapter";
 import { InputDelayManager } from "../netplay/InputDelayManager";
 
 // jsnes is a CommonJS module with no types — we declare the interface we need
@@ -349,8 +350,16 @@ export function useEmulator(system: SystemType = "nes") {
         return new GbEmulatorAdapter(system, { onStatusChange: setStatus });
       case "gba":
         return new GbaEmulatorAdapter({ onStatusChange: setStatus });
-      case "neogeo":
+      case "neogeo": {
+        // Check if cloud streaming is preferred for this system
+        const cfg = SYSTEM_CONFIGS.neogeo;
+        if (cfg.cloud) {
+          return new CloudAdapter("neogeo", { onStatusChange: setStatus });
+        }
         return new NeoGeoEmulatorAdapter({ onStatusChange: setStatus });
+      }
+      case "ps1":
+        return new CloudAdapter("ps1", { onStatusChange: setStatus });
       default:
         return null;
     }

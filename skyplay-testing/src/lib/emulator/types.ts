@@ -43,6 +43,7 @@ export interface SystemConfig {
   romExtensions: string[];    // e.g. [".nes"] or [".sfc", ".smc"]
   touchLayout: "nes" | "snes" | "gb";  // which touch control layout
   desktopOnly?: boolean;      // true for systems only available on desktop app
+  cloud?: boolean;            // true for systems streamed via Docker cloud gaming
 }
 
 // ─── NES Button Constants (bit positions) ──────────────────────────

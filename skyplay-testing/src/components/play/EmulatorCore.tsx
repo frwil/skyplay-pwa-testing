@@ -4,7 +4,7 @@ import { useState, useCallback, useEffect } from "react";
 import type { EmulatorState, SystemType } from "@/lib/emulator/types";
 import { SYSTEM_CONFIGS } from "@/lib/emulator/EmulatorAdapter";
 import { useTranslation } from "@/lib/i18n/TranslationContext";
-import { Gamepad2, Pause, RotateCcw, Maximize2, Minimize2, Info, Activity, Zap, Wifi } from "lucide-react";
+import { Gamepad2, Pause, RotateCcw, Maximize2, Minimize2, Info, Activity, Zap, Wifi, Cloud } from "lucide-react";
 import GameControls from "./GameControls";
 import TouchControls from "./TouchControls";
 import AutoDetectBanner from "./AutoDetectBanner";
@@ -259,6 +259,22 @@ export default function EmulatorCore({
               <Gamepad2 className="w-2.5 h-2.5" />
               {system.toUpperCase()}
             </div>
+
+            {/* Cloud badge */}
+            {cfg.cloud && (
+              <div
+                className="flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-[10px] font-bold"
+                style={{
+                  backgroundColor: "rgba(139,92,246,0.15)",
+                  backdropFilter: "blur(4px)",
+                  color: "rgba(139,92,246,0.8)",
+                  border: "1px solid rgba(139,92,246,0.25)",
+                }}
+              >
+                <Cloud className="w-2.5 h-2.5" />
+                Cloud
+              </div>
+            )}
 
             {/* Netplay status */}
             {netplayInfo?.status && netplayInfo.status !== "idle" && (
