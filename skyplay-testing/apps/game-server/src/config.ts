@@ -7,6 +7,7 @@
  *
  * We also accept extended SNES-style indices (10=l, 11=r) for compatibility.
  */
+/** Neo Geo / arcade layout: A=0,B=1,C=2,D=3,SELECT=4,START=5,UP=6,DOWN=7,LEFT=8,RIGHT=9 */
 export const BUTTON_TO_RETROARCH: Record<number, string> = {
   // Face buttons (Neo Geo / arcade layout)
   0: "a",
@@ -27,6 +28,37 @@ export const BUTTON_TO_RETROARCH: Record<number, string> = {
   12: "r",
   13: "r2",     // R2 if supported
 };
+
+/**
+ * PS1 layout (pcsx_rearmed): CROSS=0,CIRCLE=1,SQUARE=2,TRIANGLE=3,
+ * L1=4,R1=5,L2=6,R2=7,SELECT=8,START=9,UP=10,DOWN=11,LEFT=12,RIGHT=13
+ */
+export const PS1_BUTTON_TO_RETROARCH: Record<number, string> = {
+  // Face buttons
+  0: "a",
+  1: "b",
+  2: "x",
+  3: "y",
+  // L1 / R1 / L2 / R2
+  4: "l",
+  5: "r",
+  6: "l2",
+  7: "r2",
+  // SELECT / START
+  8: "select",
+  9: "start",
+  // D-Pad
+  10: "up",
+  11: "down",
+  12: "left",
+  13: "right",
+};
+
+/** Return the correct BUTTON_TO_RETROARCH for a given system. */
+export function getButtonToRetroarch(system: string): Record<number, string> {
+  if (system === "ps1") return PS1_BUTTON_TO_RETROARCH;
+  return BUTTON_TO_RETROARCH;
+}
 
 /** X11 keysym name → xdotool key name.
  *  Maps RetroArch config names to keyboard keys injected via xdotool. */

@@ -5,7 +5,8 @@ const nextConfig: NextConfig = {
   // Required: use webpack bundler for PWA plugin compatibility
   turbopack: {},
   // Allow ngrok tunnel for mobile testing
-  allowedDevOrigins: ["fc3f-143-105-152-80.ngrok-free.app"],
+  allowedDevOrigins: ['localhost',
+    '*.ngrok-free.app','*.trycloudflare.com'],
 };
 
 const pwaConfig = withPWA({

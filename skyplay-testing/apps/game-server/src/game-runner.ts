@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from "child_process";
 import { EventEmitter } from "events";
-import { SYSTEM_CORES, SYSTEM_RESOLUTIONS, UPSCALE, XDOTOOL_KEY_MAP, XDOTOOL_KEY_MAP_P2, BUTTON_TO_RETROARCH, buildRetroarchKeyConfig } from "./config.js";
+import { SYSTEM_CORES, SYSTEM_RESOLUTIONS, UPSCALE, XDOTOOL_KEY_MAP, XDOTOOL_KEY_MAP_P2, getButtonToRetroarch, buildRetroarchKeyConfig } from "./config.js";
 
 export interface GameRunnerEvents {
   onFrame: (jpegData: Buffer, width: number, height: number) => void;
@@ -440,7 +440,8 @@ export class GameRunner extends EventEmitter {
   injectInput(player: number, button: number, pressed: boolean): void {
     if (!this.running) return;
 
-    const retroarchName = BUTTON_TO_RETROARCH[button];
+    const buttonToRetroarch = getButtonToRetroarch(this.system);
+    const retroarchName = buttonToRetroarch[button];
     if (!retroarchName) return;
 
     const keyMap = player === 1 ? XDOTOOL_KEY_MAP : XDOTOOL_KEY_MAP_P2;

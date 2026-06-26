@@ -408,7 +408,11 @@ export const SYSTEM_KEY_MAPS: Record<SystemType, KeyMapping> = {
     NumpadAdd:   { player: 2, button: 4 },
   },
   ps1: {
-    ...BASE_D_PAD,
+    // PS1 D-Pad (UP=10, DOWN=11, LEFT=12, RIGHT=13 — overrides BASE_D_PAD defaults of 4-7)
+    ArrowUp:    { player: 1, button: 10 },
+    ArrowDown:  { player: 1, button: 11 },
+    ArrowLeft:  { player: 1, button: 12 },
+    ArrowRight: { player: 1, button: 13 },
     // PS1: CROSS=0, CIRCLE=1, SQUARE=2, TRIANGLE=3, L1=4, R1=5, L2=6, R2=7, SELECT=8, START=9
     KeyX:  { player: 1, button: 0 },  // X key → Cross
     KeyZ:  { player: 1, button: 1 },  // Z key → Circle
@@ -418,13 +422,17 @@ export const SYSTEM_KEY_MAPS: Record<SystemType, KeyMapping> = {
     KeyS:  { player: 1, button: 5 },  // S key → R1
     KeyQ:  { player: 1, button: 6 },  // Q key → L2
     KeyW:  { player: 1, button: 7 },  // W key → R2
-    ...BASE_MENU_BUTTONS,
+    // Menu (PS1: SELECT=8, START=9 — overrides BASE_MENU_BUTTONS defaults)
+    Enter:      { player: 1, button: 9 },  // Enter → START
+    Space:      { player: 1, button: 9 },  // Space → START (alt)
+    ShiftRight: { player: 1, button: 8 },  // Shift Right → SELECT
+    Tab:        { player: 1, button: 8 },  // Tab → SELECT (alt)
     // P2 cloud gaming (right-side keys)
-    // PS1 P2 D-Pad: T G F R (uses same indices as P1 BASE_D_PAD: UP=4,DOWN=5,LEFT=6,RIGHT=7)
-    KeyT:  { player: 2, button: 4 },   // P2 UP
-    KeyG:  { player: 2, button: 5 },   // P2 DOWN
-    KeyF:  { player: 2, button: 6 },   // P2 LEFT
-    KeyR:  { player: 2, button: 7 },   // P2 RIGHT
+    // PS1 P2 D-Pad: T G F R (PS1 D-Pad: UP=10, DOWN=11, LEFT=12, RIGHT=13)
+    KeyT:  { player: 2, button: 10 },  // P2 UP
+    KeyG:  { player: 2, button: 11 },  // P2 DOWN
+    KeyF:  { player: 2, button: 12 },  // P2 LEFT
+    KeyR:  { player: 2, button: 13 },  // P2 RIGHT
     ...CLOUD_P2_FACE,
     ...CLOUD_P2_SHOULDERS,
     // P2 menu (PS1: SELECT=8, START=9)

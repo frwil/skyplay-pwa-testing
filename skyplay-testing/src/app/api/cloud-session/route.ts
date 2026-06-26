@@ -54,6 +54,7 @@ export async function POST(req: NextRequest) {
 
     // ── Determine WebSocket URL ─────────────────────────────
     let wsUrl: string;
+    console.log(process.env.GAME_SERVER_PUBLIC_URL);
 
     if (process.env.NORTHFLANK_API_KEY && process.env.NORTHFLANK_GAME_SERVICE_ID) {
       // ── Production: provision container on Northflank ────
