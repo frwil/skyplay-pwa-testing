@@ -176,6 +176,30 @@ export function useEmulator(system: SystemType = "nes") {
   kbBitmaskRef.current = keyboard.getP1Bitmask;
   gpBitmaskRef.current = gamepad.getP1Bitmask;
 
+  // ─── Gamepad polling for non-NES systems ────────────────────────
+  // NES has its own rAF game loop that calls gamepad.poll() each frame.
+  // Cloud adapters and Nostalgist manage their own render loops but
+  // don't poll gamepad — we need a dedicated polling loop here.
+  const gamepadPollRef_ = useRef(gamepad.poll);
+  gamepadPollRef_.current = gamepad.poll;
+
+  useEffect(() => {
+    if (isNes || !enabled) return;
+
+    let running = true;
+    const pollLoop = () => {
+      if (!running) return;
+      gamepadPollRef_.current();
+      requestAnimationFrame(pollLoop);
+    };
+    const raf = requestAnimationFrame(pollLoop);
+
+    return () => {
+      running = false;
+      cancelAnimationFrame(raf);
+    };
+  }, [isNes, enabled]);
+
   // ─── Canvas Render ─────────────────────────────────────────────
   // jsnes provides a Uint32Array with pixels in 0x00BBGGRR format.
   // We overlay it onto an ImageData's buffer (Uint32Array view),
