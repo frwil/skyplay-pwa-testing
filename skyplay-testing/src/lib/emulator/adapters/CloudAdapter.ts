@@ -39,7 +39,8 @@ export class CloudAdapter implements EmulatorAdapter {
   // WebCodecs — Video
   private videoDecoder: VideoDecoder | null = null;
   private videoDecoderReady = false;
-  private pendingVideoChunks: EncodedVideoChunk[] = [];
+  private videoNeedsKeyframe = false; // true after configure/flush until first IDR
+  private pendingVideoChunks: { chunk: EncodedVideoChunk; nalType: number }[] = [];
   private streamWidth = 320;
   private streamHeight = 224;
 
@@ -48,6 +49,7 @@ export class CloudAdapter implements EmulatorAdapter {
   private audioDecoderReady = false;
   private pendingAudioChunks: EncodedAudioChunk[] = [];
   private audioCtx: AudioContext | null = null;
+  private audioFrameCount = 0;
 
   constructor(systemType: SystemType, callbacks: CloudCallbacks) {
     this.systemType = systemType;
@@ -117,30 +119,59 @@ export class CloudAdapter implements EmulatorAdapter {
   }
 
   private connectWebSocket(wsUrl: string, mode: "init" | "join" = "init"): Promise<void> {
-    return new Promise((resolve, reject) => {
+  return new Promise((resolve, reject) => {
+    try {
+      // Log BEFORE creating WebSocket
+      console.log(`[Cloud:${this.systemType}] Attempting WebSocket connection:`, {
+        url: wsUrl,
+        mode,
+        sessionId: this.sessionId,
+        currentRom: this._currentRom,
+      });
+      
+      // Check URL validity before creating WebSocket
+      try {
+        new URL(wsUrl); // Will throw if invalid
+      } catch (urlError) {
+        console.error(`[Cloud:${this.systemType}] Invalid WebSocket URL:`, wsUrl);
+        this._status = "error";
+        this.callbacks.onStatusChange("error");
+        reject(new Error(`Invalid WebSocket URL: ${wsUrl}`));
+        return;
+      }
+      
       this.ws = new WebSocket(wsUrl);
       this.ws.binaryType = "arraybuffer";
+      
+      console.log(`[Cloud:${this.systemType}] WebSocket created, readyState: ${this.ws.readyState}`);
 
       this.ws.onopen = () => {
-        if (mode === "join") {
-          this.ws!.send(JSON.stringify({
-            type: "join",
-            sessionId: this.sessionId,
-            token: "",
-          }));
-        } else {
-          this.ws!.send(JSON.stringify({
-            type: "init",
-            sessionId: this.sessionId,
-            token: "",
-            system: this.systemType,
-            rom: this._currentRom,
-          }));
-        }
+        console.log(`[Cloud:${this.systemType}] ✅ WebSocket OPEN - connected to ${wsUrl}`);
+        
+        const initMessage = mode === "join" ? {
+          type: "join",
+          sessionId: this.sessionId,
+          token: "",
+        } : {
+          type: "init",
+          sessionId: this.sessionId,
+          token: "",
+          system: this.systemType,
+          rom: this._currentRom,
+        };
+        
+        console.log(`[Cloud:${this.systemType}] Sending:`, initMessage);
+        this.ws!.send(JSON.stringify(initMessage));
         this.startPing();
       };
 
       this.ws.onmessage = (event) => {
+        console.log(`[Cloud:${this.systemType}] Message received:`, {
+          type: typeof event.data,
+          size: event.data instanceof ArrayBuffer ? event.data.byteLength : event.data.length,
+          isString: typeof event.data === "string",
+        });
+        
         if (typeof event.data === "string") {
           this.handleTextMessage(event.data, resolve);
         } else if (event.data instanceof ArrayBuffer) {
@@ -149,7 +180,29 @@ export class CloudAdapter implements EmulatorAdapter {
       };
 
       this.ws.onclose = (event) => {
-        console.log(`[Cloud:${this.systemType}] WS closed: ${event.code} ${event.reason}`);
+        console.log(`[Cloud:${this.systemType}] WebSocket CLOSED:`, {
+          code: event.code,
+          reason: event.reason,
+          wasClean: event.wasClean,
+          codes: {
+            1000: 'Normal Closure',
+            1001: 'Going Away',
+            1002: 'Protocol Error',
+            1003: 'Unsupported Data',
+            1005: 'No Status Received',
+            1006: 'Abnormal Closure',
+            1007: 'Invalid frame payload data',
+            1008: 'Policy Violation',
+            1009: 'Message too big',
+            1010: 'Missing Extension',
+            1011: 'Internal Error',
+            1012: 'Service Restart',
+            1013: 'Try Again Later',
+            1014: 'Bad Gateway',
+            1015: 'TLS Handshake'
+          }[event.code] || 'Unknown'
+        });
+        
         this.stopPing();
         this.closeDecoders();
         if (this._status === "running" || this._status === "loading") {
@@ -158,20 +211,47 @@ export class CloudAdapter implements EmulatorAdapter {
         }
       };
 
-      this.ws.onerror = () => {
+      this.ws.onerror = (event) => {
+        // The browser hides most error details for security
+        console.error(`[Cloud:${this.systemType}] ❌ WebSocket ERROR:`, {
+          url: wsUrl,
+          readyState: this.ws?.readyState,
+          readyStateText: this.ws ? ['CONNECTING', 'OPEN', 'CLOSING', 'CLOSED'][this.ws.readyState] : 'null',
+          timestamp: new Date().toISOString(),
+          // Check if the server exists
+          hostname: new URL(wsUrl).hostname,
+          port: new URL(wsUrl).port,
+          protocol: new URL(wsUrl).protocol,
+        });
+        
+        // Check if it's a CORS or mixed-content issue
+        const currentProtocol = window.location.protocol;
+        const wsProtocol = new URL(wsUrl).protocol;
+        if (currentProtocol === 'https:' && wsProtocol === 'ws:') {
+          console.error(`[Cloud:${this.systemType}] ❌ MIXED CONTENT: Cannot connect to WS from HTTPS page. Use WSS.`);
+        }
+        
         if (this._status === "loading") {
-          reject(new Error("WebSocket connection failed"));
+          reject(new Error(`WebSocket connection failed to ${wsUrl} (check browser console for details)`));
         }
       };
 
+      // Add a shorter timeout for initial connection
       setTimeout(() => {
-        if (this._status === "loading") {
-          reject(new Error("Game server connection timed out"));
+        if (this.ws?.readyState === WebSocket.CONNECTING) {
+          console.error(`[Cloud:${this.systemType}] Connection timeout after 10s`);
+          if (this._status === "loading") {
+            reject(new Error(`Connection timeout - server at ${wsUrl} not responding`));
+          }
         }
-      }, 30000);
-    });
-  }
-
+      }, 10000); // 10 seconds for initial connection
+      
+    } catch (err) {
+      console.error(`[Cloud:${this.systemType}] Failed to create WebSocket:`, err);
+      reject(err);
+    }
+  });
+}
   // ── WebCodecs Decoder Setup ──────────────────────────────────
 
   private async initVideoDecoder(config: { codec: string; width: number; height: number; framerate: number }): Promise<void> {
@@ -182,20 +262,23 @@ export class CloudAdapter implements EmulatorAdapter {
       const init: VideoDecoderInit = {
         output: (frame: VideoFrame) => {
           if (this.ctx && this.canvasEl) {
-            // Ensure canvas matches frame dimensions
             const cw = this.canvasEl.width;
             const ch = this.canvasEl.height;
             if (cw !== frame.displayWidth || ch !== frame.displayHeight) {
               this.canvasEl.width = frame.displayWidth;
               this.canvasEl.height = frame.displayHeight;
             }
-            this.ctx.clearRect(0, 0, cw, ch);
-            this.ctx.drawImage(frame, 0, 0, cw, ch);
+            this.ctx.clearRect(0, 0, frame.displayWidth, frame.displayHeight);
+            this.ctx.drawImage(frame, 0, 0);
           }
           frame.close();
         },
         error: (err) => {
           console.error(`[Cloud:${this.systemType}] VideoDecoder error:`, err);
+          this.videoDecoderReady = false;
+          this.videoNeedsKeyframe = true;
+          try { this.videoDecoder?.close(); } catch { /* ok */ }
+          this.videoDecoder = null;
         },
       };
 
@@ -207,7 +290,6 @@ export class CloudAdapter implements EmulatorAdapter {
 
       if (!support.supported) {
         console.warn(`[Cloud:${this.systemType}] H.264 codec not supported, falling back`);
-        // The server sends raw NAL units; we'll try a different codec string
         return;
       }
 
@@ -218,14 +300,47 @@ export class CloudAdapter implements EmulatorAdapter {
         codedHeight: config.height,
       });
       this.videoDecoderReady = true;
+      this.videoNeedsKeyframe = true;
 
-      // Flush pending chunks
-      for (const chunk of this.pendingVideoChunks) {
-        this.videoDecoder.decode(chunk);
+      // Find the first keyframe in pending chunks
+      const firstKeyIdx = this.pendingVideoChunks.findIndex(p => p.nalType === 5);
+      
+      if (firstKeyIdx >= 0) {
+        // Collect SPS/PPS that appear before the keyframe
+        const spsPpsBeforeKey: typeof this.pendingVideoChunks = [];
+        const keyframeChunk = this.pendingVideoChunks[firstKeyIdx];
+        
+        for (let i = 0; i < firstKeyIdx; i++) {
+          const { nalType } = this.pendingVideoChunks[i];
+          if (nalType === 7 || nalType === 8) {
+            spsPpsBeforeKey.push(this.pendingVideoChunks[i]);
+          }
+          // Skip delta frames before keyframe
+        }
+        
+        // Feed SPS first, then PPS, then the keyframe itself
+        for (const pending of spsPpsBeforeKey) {
+          this.videoDecoder.decode(pending.chunk);
+        }
+        this.videoDecoder.decode(keyframeChunk.chunk);
+        this.videoNeedsKeyframe = false;
+        
+        // Process remaining chunks after keyframe normally
+        for (let i = firstKeyIdx + 1; i < this.pendingVideoChunks.length; i++) {
+          if (this.videoDecoder.decodeQueueSize < 10) {
+            this.videoDecoder.decode(this.pendingVideoChunks[i].chunk);
+          }
+        }
+        
+        this.pendingVideoChunks = [];
+        console.log(`[Cloud:${this.systemType}] VideoDecoder ready: ${config.codec} ${config.width}x${config.height}`);
+      } else {
+        // No keyframe found - only keep SPS/PPS for later, drop deltas
+        this.pendingVideoChunks = this.pendingVideoChunks.filter(p => 
+          p.nalType === 7 || p.nalType === 8
+        );
+        console.log(`[Cloud:${this.systemType}] VideoDecoder ready (awaiting keyframe)`);
       }
-      this.pendingVideoChunks = [];
-
-      console.log(`[Cloud:${this.systemType}] VideoDecoder ready: ${config.codec} ${config.width}x${config.height}`);
     } catch (err) {
       console.error(`[Cloud:${this.systemType}] Failed to init VideoDecoder:`, err);
     }
@@ -271,6 +386,12 @@ export class CloudAdapter implements EmulatorAdapter {
         },
         error: (err) => {
           console.error(`[Cloud:${this.systemType}] AudioDecoder error:`, err);
+          // AudioDecoder enters "closed" state on error.
+          // Mark as not ready so subsequent packets go to pending queue.
+          this.audioDecoderReady = false;
+          try { this.audioDecoder?.close(); } catch { /* ok */ }
+          this.audioDecoder = null;
+          // The decoder will be re-created on next codec config.
         },
       };
 
@@ -286,16 +407,24 @@ export class CloudAdapter implements EmulatorAdapter {
       }
 
       this.audioDecoder = new AudioDecoder(init);
+
+      // Build OpusHead description (19 bytes) for proper decoder init.
+      // This tells the browser the exact Opus stream parameters.
+      const opusHead = this.buildOpusHead(config.channels, config.sampleRate);
+
       this.audioDecoder.configure({
         codec: config.codec,
         sampleRate: config.sampleRate,
         numberOfChannels: config.channels,
+        description: opusHead,
       });
       this.audioDecoderReady = true;
 
-      // Flush pending chunks
-      for (const chunk of this.pendingAudioChunks) {
-        this.audioDecoder.decode(chunk);
+      // Flush pending chunks — but only if decoder is still valid
+      if (this.audioDecoder.state === "configured") {
+        for (const chunk of this.pendingAudioChunks) {
+          try { this.audioDecoder.decode(chunk); } catch { break; }
+        }
       }
       this.pendingAudioChunks = [];
 
@@ -310,6 +439,7 @@ export class CloudAdapter implements EmulatorAdapter {
       try { this.videoDecoder.close(); } catch { /* ok */ }
       this.videoDecoder = null;
       this.videoDecoderReady = false;
+      this.videoNeedsKeyframe = false;
     }
     if (this.audioDecoder) {
       try { this.audioDecoder.close(); } catch { /* ok */ }
@@ -318,6 +448,7 @@ export class CloudAdapter implements EmulatorAdapter {
     }
     this.pendingVideoChunks = [];
     this.pendingAudioChunks = [];
+    this.audioFrameCount = 0;
     if (this.audioCtx) {
       this.audioCtx.close().catch(() => {});
       this.audioCtx = null;
@@ -400,20 +531,38 @@ export class CloudAdapter implements EmulatorAdapter {
       const nalData = new Uint8Array(data, FRAME_HEADER_SIZE, nalLength);
 
       // Detect NAL type from first byte after start code
+      const nalUnitType = this.getNalUnitType(nalData);
+      const chunkType: EncodedVideoChunkType = nalUnitType === 5 ? "key" : "delta";
+
       // We need to construct an EncodedVideoChunk
       const chunk = new EncodedVideoChunk({
-        type: this.getNalType(nalData),
+        type: chunkType,
         timestamp: frameId * 16667, // ~16.67ms per frame at 60fps (in microseconds)
         duration: 16667,
         data: nalData,
       });
 
       if (this.videoDecoderReady && this.videoDecoder) {
-        if (this.videoDecoder.decodeQueueSize < 10) {
-          this.videoDecoder.decode(chunk);
+        // After configure()/flush(), the first chunk MUST be a keyframe.
+        // Drop non-IDR slices and feed SPS/PPS (needed for decode context).
+        if (this.videoNeedsKeyframe) {
+          if (nalUnitType === 5) {
+            // Found first IDR — feed it and lift the restriction
+            this.videoDecoder.decode(chunk);
+            this.videoNeedsKeyframe = false;
+          } else if (nalUnitType === 7 || nalUnitType === 8) {
+            // SPS/PPS — feed to prime the decoder
+            this.videoDecoder.decode(chunk);
+          }
+          // else: drop delta slices before first keyframe
+        } else {
+          // Normal operation
+          if (this.videoDecoder.decodeQueueSize < 10) {
+            this.videoDecoder.decode(chunk);
+          }
         }
       } else {
-        this.pendingVideoChunks.push(chunk);
+        this.pendingVideoChunks.push({ chunk, nalType: nalUnitType });
         if (this.pendingVideoChunks.length > 300) {
           this.pendingVideoChunks.shift(); // Drop oldest to prevent unbounded growth
         }
@@ -436,14 +585,15 @@ export class CloudAdapter implements EmulatorAdapter {
 
       const opusData = new Uint8Array(data, AUDIO_HEADER_SIZE, opusLength);
 
+      this.audioFrameCount++;
       const chunk = new EncodedAudioChunk({
         type: "key", // Opus doesn't have key/delta distinction
-        timestamp: this.lastFrameId * 16667,
-        duration: 20000, // 20ms frames
+        timestamp: this.audioFrameCount * 20000, // 20ms per Opus frame (in microseconds)
+        duration: 20000,
         data: opusData,
       });
 
-      if (this.audioDecoderReady && this.audioDecoder) {
+      if (this.audioDecoderReady && this.audioDecoder && this.audioDecoder.state === "configured") {
         if (this.audioDecoder.decodeQueueSize < 10) {
           this.audioDecoder.decode(chunk);
         }
@@ -486,21 +636,51 @@ export class CloudAdapter implements EmulatorAdapter {
     }
   }
 
-  /** Determine if a H.264 NAL unit is a keyframe or delta frame. */
-  private getNalType(nalData: Uint8Array): EncodedVideoChunkType {
-    if (nalData.length < 5) return "delta";
-    // NAL unit type is in the lower 5 bits of the first byte after start code
-    // For 4-byte start code (0x00 0x00 0x00 0x01), nal_type is at offset 4
-    // For 3-byte start code (0x00 0x00 0x01), nal_type is at offset 3
+  /** Extract raw NAL unit type from H.264 Annex B data.
+   *  Returns 0 if the data doesn't contain a recognizable start code. */
+  private getNalUnitType(nalData: Uint8Array): number {
+    if (nalData.length < 5) return 0;
     let nalTypeByte = 0;
     if (nalData[0] === 0x00 && nalData[1] === 0x00 && nalData[2] === 0x00 && nalData[3] === 0x01) {
       nalTypeByte = nalData[4];
     } else if (nalData[0] === 0x00 && nalData[1] === 0x00 && nalData[2] === 0x01) {
       nalTypeByte = nalData[3];
     }
-    const nalType = nalTypeByte & 0x1f;
-    // 5 = IDR (keyframe), 1 = non-IDR (delta), 7 = SPS, 8 = PPS
-    return nalType === 5 ? "key" : "delta";
+    return nalTypeByte & 0x1f;
+  }
+
+  /** Determine if a H.264 NAL unit is a keyframe or delta frame. */
+  private getNalType(nalData: Uint8Array): EncodedVideoChunkType {
+    return this.getNalUnitType(nalData) === 5 ? "key" : "delta";
+  }
+
+  /** Build OpusHead descriptor for AudioDecoder.configure().
+   *  This 19-byte structure primes the Opus decoder with stream params. */
+  private buildOpusHead(channels: number, sampleRate: number): ArrayBuffer {
+    const buf = new ArrayBuffer(19);
+    const view = new DataView(buf);
+    // "OpusHead" magic (8 bytes)
+    view.setUint8(0, 0x4F);  // O
+    view.setUint8(1, 0x70);  // p
+    view.setUint8(2, 0x75);  // u
+    view.setUint8(3, 0x73);  // s
+    view.setUint8(4, 0x48);  // H
+    view.setUint8(5, 0x65);  // e
+    view.setUint8(6, 0x61);  // a
+    view.setUint8(7, 0x64);  // d
+    // Version (1 byte)
+    view.setUint8(8, 0x01);
+    // Channel count (1 byte)
+    view.setUint8(9, channels);
+    // Pre-skip (2 bytes LE) — 80ms at 48kHz = 3840 samples, but standard is 312
+    view.setUint16(10, 312, true);
+    // Input sample rate (4 bytes LE)
+    view.setUint32(12, sampleRate, true);
+    // Output gain (2 bytes LE) — 0 dB
+    view.setUint16(16, 0, true);
+    // Channel mapping family (1 byte) — 0 = mono/stereo
+    view.setUint8(18, 0x00);
+    return buf;
   }
 
   // ── Playback ──────────────────────────────────────────────────

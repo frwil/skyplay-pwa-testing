@@ -16,6 +16,7 @@ export async function POST(req: NextRequest) {
   try {
     // ── Auth check (skipped in local dev without Northflank) ─
     const isLocalDev = !process.env.NORTHFLANK_API_KEY;
+    const wsHost = process.env.WS_HOST || 'localhost:8080';
     if (!isLocalDev) {
       const token = (await cookies()).get("auth_token")?.value;
       if (!token) {
