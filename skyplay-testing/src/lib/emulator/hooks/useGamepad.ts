@@ -66,13 +66,22 @@ export function useGamepad(
       const prevSet = prevButtonsRef.current.get(player) ?? new Set();
       const playerNum = (player + 1) as 1 | 2;
 
-      // D-pad via axes (0 = horizontal, 1 = vertical)
+      // D-pad via left stick axes (0 = horizontal, 1 = vertical)
       const [upIdx, downIdx, leftIdx, rightIdx] = gpMap.dPadIndices;
       if (gp.axes.length >= 2) {
         if (gp.axes[0] < -GAMEPAD_AXIS_THRESHOLD) currentSet.add(leftIdx);
         if (gp.axes[0] > GAMEPAD_AXIS_THRESHOLD)  currentSet.add(rightIdx);
         if (gp.axes[1] < -GAMEPAD_AXIS_THRESHOLD) currentSet.add(upIdx);
         if (gp.axes[1] > GAMEPAD_AXIS_THRESHOLD)  currentSet.add(downIdx);
+      }
+
+      // D-pad via standard mapping axes (6 = horizontal, 7 = vertical)
+      // Many controllers (PS, Xbox) report the physical D-pad on these axes
+      if (gp.axes.length >= 8) {
+        if (gp.axes[6] < -GAMEPAD_AXIS_THRESHOLD) currentSet.add(leftIdx);
+        if (gp.axes[6] > GAMEPAD_AXIS_THRESHOLD)  currentSet.add(rightIdx);
+        if (gp.axes[7] < -GAMEPAD_AXIS_THRESHOLD) currentSet.add(upIdx);
+        if (gp.axes[7] > GAMEPAD_AXIS_THRESHOLD)  currentSet.add(downIdx);
       }
 
       // Face/shoulder/menu buttons (via per-system mapping)

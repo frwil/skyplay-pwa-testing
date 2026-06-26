@@ -606,10 +606,16 @@ export class CloudAdapter implements EmulatorAdapter {
   getCanvas(): HTMLCanvasElement | null { return this.canvasEl; }
 
   buttonDown(_player: 1 | 2, button: number): void {
+    if (_player === 2) {
+      console.log(`[CloudAdapter] P2 buttonDown: player=${_player} button=${button}`);
+    }
     this.ws?.send(JSON.stringify({ type: "input", player: _player, button, pressed: true }));
   }
 
   buttonUp(_player: 1 | 2, button: number): void {
+    if (_player === 2) {
+      console.log(`[CloudAdapter] P2 buttonUp: player=${_player} button=${button}`);
+    }
     this.ws?.send(JSON.stringify({ type: "input", player: _player, button, pressed: false }));
   }
 

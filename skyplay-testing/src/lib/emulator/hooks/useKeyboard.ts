@@ -45,6 +45,11 @@ export function useKeyboard(
     const mapping = keyMap[e.code];
     if (!mapping) return;
 
+    // Debug: log P2 keyboard inputs
+    if (mapping.player === 2) {
+      console.log(`[KB] P2 key: ${e.code} → button ${mapping.button}`);
+    }
+
     e.preventDefault();
     e.stopPropagation();
 
