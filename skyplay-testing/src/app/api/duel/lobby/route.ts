@@ -66,11 +66,12 @@ export async function POST(req: NextRequest) {
       await ensureUser(user.userId, user.username);
     }
     await db.execute({
-      sql: `INSERT INTO duel_lobby (user_id, system, rom, status)
-            VALUES (?, ?, ?, 'waiting')
+      sql: `INSERT INTO duel_lobby (user_id, system, rom, status, last_heartbeat)
+            VALUES (?, ?, ?, 'waiting', CURRENT_TIMESTAMP)
             ON CONFLICT(user_id) DO UPDATE SET
               system = excluded.system, rom = excluded.rom,
-              status = 'waiting', created_at = CURRENT_TIMESTAMP`,
+              status = 'waiting', created_at = CURRENT_TIMESTAMP,
+              last_heartbeat = CURRENT_TIMESTAMP`,
       args: [user.userId, system, rom],
     });
 
@@ -120,6 +121,23 @@ export async function GET(req: NextRequest) {
     }
 
     const db = await getDb();
+
+    // Clean stale lobby entries (no heartbeat for > 30s = disconnected)
+    const staleClean = await db.execute({
+      sql: `DELETE FROM duel_lobby
+            WHERE last_heartbeat < datetime('now', '-30 seconds')
+               OR last_heartbeat IS NULL`,
+      args: [],
+    });
+    if (staleClean.rowsAffected > 0) {
+      console.log(`[duel/lobby] Cleaned ${staleClean.rowsAffected} stale lobby entr${staleClean.rowsAffected > 1 ? 'ies' : 'y'}`);
+    }
+
+    // Update own heartbeat to prove we're still here
+    await db.execute({
+      sql: "UPDATE duel_lobby SET last_heartbeat = CURRENT_TIMESTAMP WHERE user_id = ?",
+      args: [user.userId],
+    });
 
     const rs = await db.execute({
       sql: `SELECT dl.user_id, dl.system, dl.rom, dl.status, dl.created_at

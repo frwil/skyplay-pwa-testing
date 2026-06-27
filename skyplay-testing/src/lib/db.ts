@@ -328,6 +328,9 @@ async function initializeSchema(): Promise<void> {
   try { await getClient().execute("CREATE INDEX IF NOT EXISTS idx_duel_results_winner ON duel_results(winner_id)"); } catch {}
   try { await getClient().execute("CREATE INDEX IF NOT EXISTS idx_duel_results_loser ON duel_results(loser_id)"); } catch {}
 
+  // Duel lobby heartbeat column (added post-migration)
+  try { await getClient().execute("ALTER TABLE duel_lobby ADD COLUMN last_heartbeat TIMESTAMP DEFAULT NULL"); } catch { /* column already exists */ }
+
   // Netplay indexes
   try { await getClient().execute("CREATE INDEX IF NOT EXISTS idx_challenge_participants_challenge ON challenge_participants(challenge_id)"); } catch {}
   try { await getClient().execute("CREATE INDEX IF NOT EXISTS idx_challenge_participants_user ON challenge_participants(user_id)"); } catch {}

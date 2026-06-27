@@ -289,6 +289,28 @@ export default function DuelPage() {
     };
   }, []);
 
+  // ── Cleanup on tab close (beforeunload) ───────────────────────
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      const devId = isDevMode ? currentUserId : 0;
+      const devName = currentUsername || "";
+      const body: Record<string, unknown> = { action: "leave" };
+      if (devId) {
+        body.devUserId = devId;
+        body.devUsername = devName;
+      }
+      fetch("/api/duel/lobby", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        keepalive: true,
+        credentials: "include",
+      });
+    };
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+  }, [isDevMode, currentUserId, currentUsername]);
+
   // ── Derived state ──────────────────────────────────────────────
   const gameActive = emu.status === "running" || emu.status === "paused";
   const isLoading = emu.status === "loading";
