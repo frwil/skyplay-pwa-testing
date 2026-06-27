@@ -606,19 +606,22 @@ export class CloudAdapter implements EmulatorAdapter {
   getCanvas(): HTMLCanvasElement | null { return this.canvasEl; }
 
   buttonDown(_player: 1 | 2, button: number): void {
-    // 🔍 DEBUG P2
-    if (_player === 2) {
+    // 🔍 DEBUG: log all cloud inputs
+    if (this._player === 2) {
       console.log(`[CloudAdapter] P2 btn=${button} DOWN ws=${this.ws?.readyState}`);
     }
-    this.ws?.send(JSON.stringify({ type: "input", player: _player, button, pressed: true }));
+    // For cloud gaming, each player uses their own machine — force the player
+    // number to this._player (1=host, 2=guest) instead of trusting the keymap.
+    // This lets P2 use the same intuitive keys as P1 (arrows, X/Z/C/V, etc.)
+    // instead of the right-side keys meant for local same-keyboard multiplayer.
+    this.ws?.send(JSON.stringify({ type: "input", player: this._player, button, pressed: true }));
   }
 
   buttonUp(_player: 1 | 2, button: number): void {
-    // 🔍 DEBUG P2
-    if (_player === 2) {
+    if (this._player === 2) {
       console.log(`[CloudAdapter] P2 btn=${button} UP ws=${this.ws?.readyState}`);
     }
-    this.ws?.send(JSON.stringify({ type: "input", player: _player, button, pressed: false }));
+    this.ws?.send(JSON.stringify({ type: "input", player: this._player, button, pressed: false }));
   }
 
   get volume(): number { return this._volume; }
