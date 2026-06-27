@@ -1,0 +1,170 @@
+import { NextRequest, NextResponse } from "next/server";
+import { getDb, ensureUser } from "@/lib/db";
+import { getAuthFromRequest } from "@/lib/auth";
+
+/**
+ * Extract user identity. In production, uses JWT cookie.
+ * In local dev (no NORTHFLANK_API_KEY), reads devUserId/devUsername from body or query.
+ */
+async function getUserId(req: NextRequest, body?: Record<string, unknown>): Promise<{ userId: number; username: string } | null> {
+  const isLocalDev = !process.env.NORTHFLANK_API_KEY;
+  if (isLocalDev) {
+    const devUserId = (body?.devUserId as number) || parseInt(req.nextUrl.searchParams.get("devUserId") || "0", 10);
+    const devUsername = (body?.devUsername as string) || req.nextUrl.searchParams.get("devUsername") || "dev";
+    if (devUserId) return { userId: devUserId, username: devUsername };
+    // Fallback: use a hash of a provided name as ID
+    const name = devUsername || "anonymous";
+    return { userId: Math.abs(hashCode(name)), username: name };
+  }
+
+  const auth = await getAuthFromRequest(req);
+  if (!auth) return null;
+  return { userId: auth.userId, username: "" };
+}
+
+function hashCode(s: string): number {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) {
+    h = ((h << 5) - h) + s.charCodeAt(i);
+    h |= 0;
+  }
+  return Math.abs(h);
+}
+
+/**
+ * POST /api/duel/lobby
+ * Join or leave the duel lobby.
+ * Local dev: body can include { devUserId, devUsername }
+ * Body: { action: "join" | "leave", system?: string, rom?: string, devUserId?: number, devUsername?: string }
+ */
+export async function POST(req: NextRequest) {
+  try {
+    const body = await req.json() as Record<string, unknown>;
+    const user = await getUserId(req, body);
+    if (!user) {
+      return NextResponse.json({ error: "Authentification requise" }, { status: 401 });
+    }
+
+    const action = body.action as string;
+    const system = (body.system as string) || "neogeo";
+    const rom = (body.rom as string) || "kof98.zip";
+
+    if (action !== "join" && action !== "leave") {
+      return NextResponse.json({ error: "action must be 'join' or 'leave'" }, { status: 400 });
+    }
+
+    const db = await getDb();
+
+    if (action === "leave") {
+      await db.execute({ sql: "DELETE FROM duel_lobby WHERE user_id = ?", args: [user.userId] });
+      return NextResponse.json({ success: true, action: "leave" });
+    }
+
+    // Join: UPSERT
+    const isLocalDev = !process.env.NORTHFLANK_API_KEY;
+    if (isLocalDev) {
+      await ensureUser(user.userId, user.username);
+    }
+    await db.execute({
+      sql: `INSERT INTO duel_lobby (user_id, system, rom, status)
+            VALUES (?, ?, ?, 'waiting')
+            ON CONFLICT(user_id) DO UPDATE SET
+              system = excluded.system, rom = excluded.rom,
+              status = 'waiting', created_at = CURRENT_TIMESTAMP`,
+      args: [user.userId, system, rom],
+    });
+
+    // Clean up any stale pending challenges for this user
+    // (happens on page reload — cancels challenges that may have been left hanging)
+    const cancelledRs = await db.execute({
+      sql: `UPDATE duel_challenges
+            SET status = 'cancelled'
+            WHERE (challenger_id = ? OR target_id = ?)
+            AND status IN ('pending', 'accepted')
+            RETURNING id`,
+      args: [user.userId, user.userId],
+    });
+    if (cancelledRs.rows.length > 0) {
+      console.log(`[duel/lobby] Cleaned ${cancelledRs.rows.length} stale challenge(s) for user ${user.userId}`);
+    }
+
+    // Also mark any unread duel notifications as read (stale)
+    await db.execute("PRAGMA foreign_keys = OFF");
+    try {
+      await db.execute({
+        sql: `UPDATE netplay_notifications SET read = 1
+              WHERE user_id = ? AND type LIKE 'duel_%' AND read = 0`,
+        args: [user.userId],
+      });
+    } finally {
+      await db.execute("PRAGMA foreign_keys = ON");
+    }
+
+    return NextResponse.json({ success: true, action: "join" });
+  } catch (error) {
+    console.error("POST /api/duel/lobby error:", error);
+    return NextResponse.json({ error: "Erreur interne du serveur" }, { status: 500 });
+  }
+}
+
+/**
+ * GET /api/duel/lobby
+ * List players currently in the duel lobby (excluding self).
+ * Local dev: ?devUserId=X&devUsername=Y
+ */
+export async function GET(req: NextRequest) {
+  try {
+    const user = await getUserId(req);
+    if (!user) {
+      return NextResponse.json({ error: "Authentification requise" }, { status: 401 });
+    }
+
+    const db = await getDb();
+
+    const rs = await db.execute({
+      sql: `SELECT dl.user_id, dl.system, dl.rom, dl.status, dl.created_at
+            FROM duel_lobby dl
+            WHERE dl.user_id != ? AND dl.status = 'waiting'
+            ORDER BY dl.created_at ASC
+            LIMIT 50`,
+      args: [user.userId],
+    });
+
+    const players = rs.rows.map((row) => ({
+      userId: row.user_id as number,
+      username: `Player-${row.user_id}`, // fallback
+      system: row.system as string,
+      rom: row.rom as string,
+      status: row.status as string,
+      createdAt: row.created_at as string,
+    }));
+
+    // Fetch display names from users table (works in both dev and prod — ensureUser creates dev users)
+    if (players.length > 0) {
+      const userIds = players.map((p) => p.userId);
+      const placeholders = userIds.map(() => "?").join(", ");
+      const userRs = await db.execute({
+        sql: `SELECT id, username FROM users WHERE id IN (${placeholders})`,
+        args: userIds,
+      });
+      const userMap = new Map<number, string>();
+      for (const row of userRs.rows) {
+        userMap.set(row.id as number, row.username as string);
+      }
+      for (const p of players) {
+        p.username = userMap.get(p.userId) || p.username;
+      }
+    }
+
+    const meRs = await db.execute({
+      sql: "SELECT id FROM duel_lobby WHERE user_id = ?",
+      args: [user.userId],
+    });
+    const inLobby = meRs.rows.length > 0;
+
+    return NextResponse.json({ players, inLobby });
+  } catch (error) {
+    console.error("GET /api/duel/lobby error:", error);
+    return NextResponse.json({ error: "Erreur interne du serveur" }, { status: 500 });
+  }
+}

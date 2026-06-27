@@ -114,8 +114,42 @@ export interface EmulatorState {
   roomCode: string | null;
   /** Join an existing cloud session as Player 2 via room code. */
   joinSession: (roomCode: string) => Promise<void>;
+  /** Connect as host (P1) to a pre-created cloud session (for duel matchmaking). */
+  connectDuelHost?: (wsUrl: string, sessionId: string, rom: string, roomCode: string) => Promise<void>;
   /** Whether this emulator is running in cloud streaming mode. */
   isCloud: boolean;
+  /** Latest duel round result (null until first KO detected). */
+  duelRoundResult: DuelRoundResult | null;
+  /** Final duel match result (null until match is over). */
+  duelMatchResult: DuelMatchResult | null;
+  /** Request a rematch from the opponent. */
+  requestRematch: () => void;
+  /** Accept a rematch with new session info (P2 side). */
+  acceptRematch: (newSessionId: string, newWsUrl: string, newRoomCode: string) => void;
+  /** Decline a rematch request (P2 side). */
+  declineRematch: () => void;
+  /** True when opponent requested a rematch — show accept/decline UI. */
+  rematchRequested: boolean;
+  /** True when opponent declined the rematch — show message, return to lobby. */
+  rematchDeclined: boolean;
+  /** True when the server closed the session — client should return to lobby and reload. */
+  duelSessionClosed: boolean;
+}
+
+/** Result of a single round in a duel. */
+export interface DuelRoundResult {
+  loser: number;
+  winner: number;
+  p1Losses: number;
+  p2Losses: number;
+}
+
+/** Result of a full duel match (best-of-3, first to 2 losses). */
+export interface DuelMatchResult {
+  winner: number;
+  loser: number;
+  p1Losses: number;
+  p2Losses: number;
 }
 
 // ─── Buffer Interfaces ─────────────────────────────────────────────

@@ -145,6 +145,12 @@ export default async function HomePage() {
               Play
             </a>
             <a
+              href="/duel"
+              className="text-xs text-white/40 hover:text-white transition font-medium flex items-center gap-1"
+            >
+              ⚔️ Duel
+            </a>
+            <a
               href="/admin"
               className="text-xs text-white/40 hover:text-white transition font-medium"
             >

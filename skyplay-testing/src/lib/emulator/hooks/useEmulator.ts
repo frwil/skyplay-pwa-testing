@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, useCallback, useState, useEffect } from "react";
-import type { EmulatorStatus, RomEntry, EmulatorState, SystemType } from "../types";
+import type { EmulatorStatus, RomEntry, EmulatorState, SystemType, DuelRoundResult, DuelMatchResult } from "../types";
 import type { EmulatorAdapter } from "../EmulatorAdapter";
 import { SYSTEM_CONFIGS, SYSTEM_KEY_MAPS } from "../EmulatorAdapter";
 import { StateBuffer } from "../buffers/StateBuffer";
@@ -88,6 +88,62 @@ export function useEmulator(system: SystemType = "nes") {
   const [fps, setFps] = useState(0);
   const [currentRom, setCurrentRom] = useState<string | null>(null);
   const [romList, setRomList] = useState<RomEntry[]>([]);
+  const [duelRoundResult, setDuelRoundResult] = useState<DuelRoundResult | null>(null);
+  const [duelMatchResult, setDuelMatchResult] = useState<DuelMatchResult | null>(null);
+  const [duelSessionClosed, setDuelSessionClosed] = useState(false);
+  const [rematchRequested, setRematchRequested] = useState(false); // opponent wants rematch
+  const [rematchDeclined, setRematchDeclined] = useState(false); // opponent declined
+
+  // ── Duel callbacks (stable refs) ──────────────────────────────────
+  const duelCallbacksRef = useRef({
+    onRoundResult: (loser: number, winner: number, p1Losses: number, p2Losses: number) => {
+      console.log(`[useEmulator] 🏆 Round result: P${winner} wins! P${loser} KO. P1=${p1Losses} P2=${p2Losses}`);
+      setDuelRoundResult({ loser, winner, p1Losses, p2Losses });
+    },
+    onMatchEnd: (winner: number, loser: number, p1Losses: number, p2Losses: number) => {
+      console.log(`[useEmulator] 🏁 Match over! P${winner} wins 2-${Math.max(p1Losses, p2Losses)}. P1=${p1Losses} P2=${p2Losses}`);
+      setDuelMatchResult({ winner, loser, p1Losses, p2Losses });
+      setStatus("paused");
+    },
+    onRematchStarting: () => {
+      console.log("[useEmulator] 🔄 Rematch starting — resetting duel state");
+      setDuelRoundResult(null);
+      setDuelMatchResult(null);
+      setStatus("running");
+    },
+    onSessionClosed: () => {
+      console.log("[useEmulator] 🚪 Session closed — returning to lobby");
+      setDuelSessionClosed(true);
+      setStatus("idle");
+    },
+    onRematchRequested: () => {
+      console.log("[useEmulator] 🔄 Rematch requested by opponent");
+      setRematchRequested(true);
+    },
+    onRematchAccepted: (newSessionId: string, newWsUrl: string, newRoomCode: string) => {
+      console.log("[useEmulator] ✅ Rematch accepted — reconnecting to new session", newSessionId);
+      setRematchRequested(false);
+      setDuelRoundResult(null);
+      setDuelMatchResult(null);
+      setStatus("loading");
+      // Reconnect to new session
+      const adapter = adapterRef.current;
+      if (adapter instanceof CloudAdapter) {
+        adapter.reconnectToNewSession(newWsUrl, newSessionId, newRoomCode)
+          .then(() => {
+            setStatus(adapter.status);
+          })
+          .catch(() => {
+            setStatus("error");
+          });
+      }
+    },
+    onRematchDeclined: () => {
+      console.log("[useEmulator] ❌ Rematch declined by opponent");
+      setRematchDeclined(true);
+      setRematchRequested(false);
+    },
+  });
 
   // ─── Buffers (NES only) ────────────────────────────────────────
   const stateBufferRef = useRef<StateBuffer>(new StateBuffer());
@@ -378,12 +434,30 @@ export function useEmulator(system: SystemType = "nes") {
         // Check if cloud streaming is preferred for this system
         const cfg = SYSTEM_CONFIGS.neogeo;
         if (cfg.cloud) {
-          return new CloudAdapter("neogeo", { onStatusChange: setStatus });
+          return new CloudAdapter("neogeo", {
+            onStatusChange: setStatus,
+            onRoundResult: duelCallbacksRef.current.onRoundResult,
+            onMatchEnd: duelCallbacksRef.current.onMatchEnd,
+            onRematchStarting: duelCallbacksRef.current.onRematchStarting,
+            onSessionClosed: duelCallbacksRef.current.onSessionClosed,
+            onRematchRequested: duelCallbacksRef.current.onRematchRequested,
+            onRematchAccepted: duelCallbacksRef.current.onRematchAccepted,
+            onRematchDeclined: duelCallbacksRef.current.onRematchDeclined,
+          });
         }
         return new NeoGeoEmulatorAdapter({ onStatusChange: setStatus });
       }
       case "ps1":
-        return new CloudAdapter("ps1", { onStatusChange: setStatus });
+        return new CloudAdapter("ps1", {
+          onStatusChange: setStatus,
+          onRoundResult: duelCallbacksRef.current.onRoundResult,
+          onMatchEnd: duelCallbacksRef.current.onMatchEnd,
+          onRematchStarting: duelCallbacksRef.current.onRematchStarting,
+          onSessionClosed: duelCallbacksRef.current.onSessionClosed,
+            onRematchRequested: duelCallbacksRef.current.onRematchRequested,
+            onRematchAccepted: duelCallbacksRef.current.onRematchAccepted,
+            onRematchDeclined: duelCallbacksRef.current.onRematchDeclined,
+        });
       default:
         return null;
     }
@@ -635,13 +709,46 @@ export function useEmulator(system: SystemType = "nes") {
     let adapter = adapterRef.current;
     if (!(adapter instanceof CloudAdapter)) {
       adapterRef.current?.exit();
-      adapter = new CloudAdapter(system as "neogeo" | "ps1", { onStatusChange: setStatus });
+      adapter = new CloudAdapter(system as "neogeo" | "ps1", {
+        onStatusChange: setStatus,
+        onRoundResult: duelCallbacksRef.current.onRoundResult,
+        onMatchEnd: duelCallbacksRef.current.onMatchEnd,
+        onRematchStarting: duelCallbacksRef.current.onRematchStarting,
+        onSessionClosed: duelCallbacksRef.current.onSessionClosed,
+            onRematchRequested: duelCallbacksRef.current.onRematchRequested,
+            onRematchAccepted: duelCallbacksRef.current.onRematchAccepted,
+            onRematchDeclined: duelCallbacksRef.current.onRematchDeclined,
+      });
       adapterRef.current = adapter;
       const canvas = canvasRef.current;
       if (canvas) adapter.setCanvas?.(canvas);
     }
     setStatus("loading");
     await (adapter as CloudAdapter).joinSession(code);
+    setStatus(adapter.status);
+  }, [system]);
+
+  const connectDuelHost = useCallback(async (wsUrl: string, sessionId: string, rom: string, roomCode: string) => {
+    let adapter = adapterRef.current;
+    if (!(adapter instanceof CloudAdapter)) {
+      adapterRef.current?.exit();
+      adapter = new CloudAdapter(system as "neogeo" | "ps1", {
+        onStatusChange: setStatus,
+        onRoundResult: duelCallbacksRef.current.onRoundResult,
+        onMatchEnd: duelCallbacksRef.current.onMatchEnd,
+        onRematchStarting: duelCallbacksRef.current.onRematchStarting,
+        onSessionClosed: duelCallbacksRef.current.onSessionClosed,
+            onRematchRequested: duelCallbacksRef.current.onRematchRequested,
+            onRematchAccepted: duelCallbacksRef.current.onRematchAccepted,
+            onRematchDeclined: duelCallbacksRef.current.onRematchDeclined,
+      });
+      adapterRef.current = adapter;
+      const canvas = canvasRef.current;
+      if (canvas) adapter.setCanvas?.(canvas);
+    }
+    setCurrentRom(rom);
+    setStatus("loading");
+    await (adapter as CloudAdapter).connectAsHost(wsUrl, sessionId, rom, roomCode);
     setStatus(adapter.status);
   }, [system]);
 
@@ -703,7 +810,31 @@ export function useEmulator(system: SystemType = "nes") {
      */
     roomCode,
     joinSession,
+    connectDuelHost,
     isCloud,
+    duelRoundResult,
+    duelMatchResult,
+    duelSessionClosed,
+    rematchRequested,
+    rematchDeclined,
+    requestRematch: useCallback(() => {
+      const adapter = adapterRef.current;
+      if (adapter instanceof CloudAdapter) {
+        adapter.requestRematch();
+      }
+    }, []),
+    acceptRematch: useCallback((newSessionId: string, newWsUrl: string, newRoomCode: string) => {
+      const adapter = adapterRef.current;
+      if (adapter instanceof CloudAdapter) {
+        adapter.acceptRematch(newSessionId, newWsUrl, newRoomCode);
+      }
+    }, []),
+    declineRematch: useCallback(() => {
+      const adapter = adapterRef.current;
+      if (adapter instanceof CloudAdapter) {
+        adapter.declineRematch();
+      }
+    }, []),
     injectKeyEvent: (player: 1 | 2, button: number, pressed: boolean) => {
       if (isNes) {
         // NES: jsnes handles buttonDown/buttonUp directly, no need for key events

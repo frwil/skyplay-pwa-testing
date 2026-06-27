@@ -14,7 +14,7 @@ export interface Session {
   rom: string;
   videoWidth?: number;
   videoHeight?: number;
-  status: "init" | "loading" | "running" | "paused" | "stopped";
+  status: "reserved" | "init" | "loading" | "running" | "paused" | "stopped";
   createdAt: number;
   frameCount: number;
   fps: number;

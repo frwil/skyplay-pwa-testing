@@ -97,6 +97,21 @@ function handleMessage(ws: WebSocket, msg: ClientMessage, sessionId: string): vo
       stopSession(sessionId);
       break;
 
+    case "rematch_request":
+      logMsg("rematch_request");
+      handleRematchRequest(sessionId);
+      break;
+
+    case "rematch_accept":
+      logMsg("rematch_accept");
+      handleRematchAccept(sessionId, msg as { type: "rematch_accept"; newSessionId: string; newWsUrl: string; newRoomCode: string });
+      break;
+
+    case "rematch_decline":
+      logMsg("rematch_decline");
+      handleRematchDecline(sessionId);
+      break;
+
     case "ping":
       // Too frequent to log
       handlePing(ws, msg.t);
@@ -122,20 +137,29 @@ function handleInit(
     return;
   }
 
-  // Check if session already exists (P1 reconnecting)
+  // Check if session already exists (P1 reconnecting or P2 already waiting)
   let session = getSession(msg.sessionId);
   if (session) {
-    // Reconnection: just add the WS to existing session
-    addConnection(msg.sessionId, ws, 1);
-    if (session.videoWidth && session.videoHeight) {
-      ws.send(JSON.stringify({ type: "ready", width: session.videoWidth, height: session.videoHeight }));
+    if (session.status === "reserved") {
+      // P2 joined first — claim the reserved session and start the game
+      console.log(`[ws] P1 claiming reserved session ${msg.sessionId}`);
+      session.system = system;
+      session.rom = rom;
+      session.status = "loading";
+    } else {
+      // Reconnection: just add the WS to existing session
+      addConnection(msg.sessionId, ws, 1);
+      if (session.videoWidth && session.videoHeight) {
+        ws.send(JSON.stringify({ type: "ready", width: session.videoWidth, height: session.videoHeight }));
+      }
+      return;
     }
-    return;
+  } else {
+    // ── New session (P1 first connection, no P2 yet) ──
+    session = createSession(msg.sessionId, system, rom);
+    session.status = "loading";
   }
 
-  // ── New session (P1 first connection) ──
-  session = createSession(msg.sessionId, system, rom);
-  session.status = "loading";
   addConnection(msg.sessionId, ws, 1);
 
   // Start game runner
@@ -208,12 +232,77 @@ runner.on("frame", (nalUnit: Buffer, width: number, height: number) => {
     console.log(`[ws] Game runner exited for ${msg.sessionId} (code ${code})`);
   });
 
+  // ── Round win/loss detection (memory watcher) ──
+  runner.on("roundResult", (data: { loser: number; winner: number; p1Losses: number; p2Losses: number }) => {
+    console.log(`[ws] 🏆 Round result: P${data.winner} wins round! Score: P1=${data.p1Losses} P2=${data.p2Losses}`);
+    sendToSession(session, {
+      type: "round_result",
+      loser: data.loser,
+      winner: data.winner,
+      p1Losses: data.p1Losses,
+      p2Losses: data.p2Losses,
+    });
+  });
+
+  runner.on("matchEnd", (data: { winner: number; loser: number; p1Losses: number; p2Losses: number }) => {
+    console.log(`[ws] 🏁 MATCH OVER! P${data.winner} wins! Score: P1=${data.p1Losses} P2=${data.p2Losses}`);
+    sendToSession(session, {
+      type: "match_end",
+      winner: data.winner,
+      loser: data.loser,
+      p1Losses: data.p1Losses,
+      p2Losses: data.p2Losses,
+    });
+    // Auto-stop the game session after 30s to free resources
+    setTimeout(() => {
+      console.log(`[ws] ⏰ Auto-stopping session ${msg.sessionId} after match end`);
+      stopSession(msg.sessionId);
+    }, 30000);
+  });
+
   // Start the game
   runner.start().then(({ width, height }) => {
     session.videoWidth = width;
     session.videoHeight = height;
     session.status = "running";
     sendToSession(session, { type: "ready", width, height });
+
+    // ── Auto coin + start for both players (skip title screen) ──
+    // Insert 2 coins via P1 at 15s after launch
+    setTimeout(() => {
+      if (session.status !== "running") return;
+      console.log(`[ws] 🪙 Inserting coin 1/2 via P1 for session ${msg.sessionId}`);
+      runner.injectInput(1, 4, true);  // SELECT = coin
+      setTimeout(() => {
+        runner.injectInput(1, 4, false);
+        console.log(`[ws] 🪙 Inserting coin 2/2 via P1 for session ${msg.sessionId}`);
+        runner.injectInput(1, 4, true);
+        setTimeout(() => {
+          runner.injectInput(1, 4, false);
+          console.log(`[ws] ✅ 2 coins inserted for session ${msg.sessionId}`);
+        }, 150);
+      }, 150);
+    }, 15000);
+
+    // Start game for both players 5s after coins (20s total)
+    setTimeout(() => {
+      if (session.status !== "running") return;
+      console.log(`[ws] ▶️  Starting game for P1+P2 in session ${msg.sessionId}`);
+      runner.injectInput(1, 5, true);  // START
+      runner.injectInput(2, 5, true);
+      setTimeout(() => {
+        runner.injectInput(1, 5, false);
+        runner.injectInput(2, 5, false);
+        console.log(`[ws] ✅ Auto-start complete for session ${msg.sessionId}`);
+        // Start memory watcher 5s after game starts (give time for character select)
+        setTimeout(() => {
+          if (session.status === "running") {
+            console.log(`[ws] 🧠 Starting round detection for session ${msg.sessionId}`);
+            runner.startMemoryWatcher();
+          }
+        }, 5000);
+      }, 150);
+    }, 20000);
 
     let lastFrameCount = 0;
     const fpsInterval = setInterval(() => {
@@ -237,13 +326,6 @@ function handleJoin(
   msg: { type: "join"; sessionId: string; token: string },
   _sessionId: string,
 ): void {
-  const session = getSession(msg.sessionId);
-  if (!session) {
-    ws.send(JSON.stringify({ type: "error", message: "Session not found" }));
-    ws.close(4004, "Session not found");
-    return;
-  }
-
   // Validate token
   const expectedToken = process.env.SESSION_TOKEN_SECRET;
   if (expectedToken && msg.token !== expectedToken) {
@@ -252,9 +334,25 @@ function handleJoin(
     return;
   }
 
+  let session = getSession(msg.sessionId);
+  if (!session) {
+    // P2 joined before P1 — reserve the session and wait for P1's init
+    console.log(`[ws] P2 joined before P1 — reserving session ${msg.sessionId}`);
+    session = createSession(msg.sessionId, "pending", "pending");
+    session.status = "reserved";
+  }
+
   // Add P2 connection
   addConnection(msg.sessionId, ws, 2);
 
+  if (session.status === "reserved") {
+    // P1 hasn't connected yet — tell P2 to wait
+    console.log(`[ws] P2 waiting for P1 to start session ${msg.sessionId}`);
+    ws.send(JSON.stringify({ type: "waiting", message: "Waiting for host to start the game..." }));
+    return;
+  }
+
+  // Session is already running (P1 connected first) — normal flow
   // Notify P1 that P2 joined
   sendToSession(session, { type: "player_joined", player: 2 });
 
@@ -312,10 +410,51 @@ function handlePing(ws: WebSocket, t: number): void {
 }
 
 function stopSession(sessionId: string): void {
-  const runner = sessionRunners.get(sessionId);
-  if (runner) {
-    runner.stop();
-    sessionRunners.delete(sessionId);
+  const session = getSession(sessionId);
+  if (session) {
+    // Notify ALL connected players that the session is closing
+    sendToSession(session, { type: "session_closed" });
   }
-  removeSession(sessionId);
+
+  // Small delay to ensure the message is flushed before cleanup
+  setTimeout(() => {
+    const runner = sessionRunners.get(sessionId);
+    if (runner) {
+      runner.stop();
+      sessionRunners.delete(sessionId);
+    }
+    removeSession(sessionId);
+  }, 200);
+}
+
+/** P1 requests a rematch — relay to P2. */
+function handleRematchRequest(sessionId: string): void {
+  const session = getSession(sessionId);
+  if (!session) return;
+  console.log(`[ws] 🔄 Rematch REQUESTED for ${sessionId} — relaying to P2`);
+  sendToSession(session, { type: "rematch_requested" });
+}
+
+/** P2 accepted the rematch — broadcast new session info to ALL players. */
+function handleRematchAccept(
+  sessionId: string,
+  msg: { type: "rematch_accept"; newSessionId: string; newWsUrl: string; newRoomCode: string },
+): void {
+  const session = getSession(sessionId);
+  if (!session) return;
+  console.log(`[ws] ✅ Rematch ACCEPTED for ${sessionId} — new session: ${msg.newSessionId}`);
+  sendToSession(session, {
+    type: "rematch_accepted",
+    newSessionId: msg.newSessionId,
+    newWsUrl: msg.newWsUrl,
+    newRoomCode: msg.newRoomCode,
+  });
+}
+
+/** P2 declined the rematch — relay to P1. */
+function handleRematchDecline(sessionId: string): void {
+  const session = getSession(sessionId);
+  if (!session) return;
+  console.log(`[ws] ❌ Rematch DECLINED for ${sessionId}`);
+  sendToSession(session, { type: "rematch_declined" });
 }

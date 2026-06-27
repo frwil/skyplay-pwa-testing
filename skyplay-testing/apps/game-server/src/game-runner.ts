@@ -14,6 +14,9 @@ export interface GameRunnerEvents {
   onCodecConfig: (videoDesc: Uint8Array, audioDesc: Uint8Array) => void;
 }
 
+/** RetroArch network command port (NCI). */
+const RA_CMD_PORT = 55355;
+
 /**
  * Manages RetroArch + FFmpeg lifecycle inside the Docker container.
  *
@@ -41,8 +44,29 @@ export class GameRunner extends EventEmitter {
   private videoBuffer = Buffer.alloc(0);
   private audioBuffer = Buffer.alloc(0);
   private codecConfigSent = false;
+  private audioPacketsSkipped = 0; // Skip OpusHead + OpusTags from FFmpeg muxer
   private retroarchWindowId: string | null = null;
   private configPath: string | null = null;
+
+  // ── Round win/loss detection via screenshot pixel analysis (health bars) ──
+  private healthFfmpeg: ChildProcess | null = null;
+  private healthPollTimer: ReturnType<typeof setInterval> | null = null;
+  private healthPollEnabled = false;
+  private healthFrameBuf = Buffer.alloc(0);
+  private healthPollErrorCount = 0;
+  private previousP1Health = -1;
+  private previousP2Health = -1;
+  private koDetected = false;
+  private p1Losses = 0;
+  private p2Losses = 0;
+  private matchEnded = false;
+  private healthStableFrames = 0; // frames with stable health readings
+  private healthDetectionArmed = false; // KO detection enabled after warmup
+  private lastKoTimestamp = 0; // prevent double-triggers within cooldown window
+  private koCooldownFrames = 0; // countdown after KO before re-arming detection
+  /** Width of the upscaled display (set when game starts). */
+  private displayW = 0;
+  private displayH = 0;
 
   constructor(system: string, rom: string, sessionId: string) {
     super();
@@ -97,7 +121,231 @@ export class GameRunner extends EventEmitter {
     this.running = true;
     console.log(`[game-runner] All processes started for session ${this.sessionId}`);
 
+    // Start health bar watcher (ffmpeg-based pixel capture)
+    this.startHealthBarCapture();
+
     return { width: resolution.w, height: resolution.h };
+  }
+
+  // ─────────────────────────────────────────────────────────────────
+  //  Health bar watcher (screenshot-based round detection)
+  // ─────────────────────────────────────────────────────────────────
+
+  /**
+   * Start an ffmpeg process that captures a thin horizontal stripe at the
+   * top of the screen (where KOF '98 health bars are) at 2 fps.
+   * Raw RGB24 pixels are parsed to detect health bar presence/absence.
+   */
+  private startHealthBarCapture(): void {
+    this.displayW = (SYSTEM_RESOLUTIONS[this.system]?.w ?? 320) * UPSCALE;
+    this.displayH = (SYSTEM_RESOLUTIONS[this.system]?.h ?? 224) * UPSCALE;
+
+    // Capture a 6-pixel-high stripe where health bars are (top area).
+    // KOF '98 health bars at 3x upscale (960x672): y=24, height ~12.
+    // That's ~3.6% from top — use 4% to be safe.
+    const stripeY = Math.floor(this.displayH * 0.04); // ~4% from top
+    const stripeH = 10;
+
+    try {
+      this.healthFfmpeg = spawn("ffmpeg", [
+        "-f", "x11grab",
+        "-framerate", "2",
+        "-video_size", `${this.displayW}x${stripeH}`,
+        "-i", `${this.display}.0+0,${stripeY}`,
+        "-f", "rawvideo",
+        "-pix_fmt", "rgb24",
+        "-loglevel", "quiet",
+        "pipe:1",
+      ], {
+        stdio: ["ignore", "pipe", "ignore"],
+        env: { ...process.env, DISPLAY: this.display },
+      });
+
+      this.healthFfmpeg.stdout?.on("data", (chunk: Buffer) => {
+        this.healthFrameBuf = Buffer.concat([this.healthFrameBuf, chunk]);
+        const frameSize = this.displayW * stripeH * 3; // RGB = 3 bytes/pixel
+        while (this.healthFrameBuf.length >= frameSize) {
+          const frame = this.healthFrameBuf.subarray(0, frameSize);
+          this.healthFrameBuf = this.healthFrameBuf.subarray(frameSize);
+          this.analyzeHealthFrame(frame, this.displayW, stripeH);
+        }
+        // Safety: prevent unbounded buffer growth
+        if (this.healthFrameBuf.length > frameSize * 3) {
+          this.healthFrameBuf = Buffer.alloc(0);
+        }
+      });
+
+      this.healthFfmpeg.on("error", (err) => {
+        if (this.healthPollErrorCount < 3) {
+          console.warn("[game-runner] 🧠 Health bar ffmpeg error:", err.message);
+        }
+        this.healthPollErrorCount++;
+      });
+
+      console.log(`[game-runner] 🧠 Health bar capture started: ${this.displayW}x${stripeH} at y=${stripeY}`);
+    } catch (err) {
+      console.warn("[game-runner] 🧠 Failed to start health bar capture:", err);
+    }
+  }
+
+  /** Analyze a raw RGB24 frame of the health bar stripe. */
+  private analyzeHealthFrame(frame: Buffer, width: number, height: number): void {
+    if (!this.running || this.matchEnded) return;
+    if (this.healthPollErrorCount >= 10) return;
+    this.healthPollErrorCount = 0;
+
+    // Divide the stripe into left half (P2) and right half (P1).
+    // In KOF '98, P1's health bar is on the right, P2's on the left.
+    const midX = Math.floor(width / 2);
+
+    const p2Pixels = this.countHealthPixels(frame, width, 0, 0, midX, height);
+    const p1Pixels = this.countHealthPixels(frame, width, midX, 0, width - midX, height);
+
+    // Normalize to "health percentage" based on max observed bright pixels
+    const maxPixels = midX * height * 0.3;
+    const p1Health = Math.min(103, Math.round((p1Pixels / Math.max(1, maxPixels)) * 103));
+    const p2Health = Math.min(103, Math.round((p2Pixels / Math.max(1, maxPixels)) * 103));
+
+    // ── Warmup: require N consecutive stable frames before arming KO detection ──
+    const WARMUP_FRAMES = 20; // ~10 seconds at 2fps
+    const HEALTHYTHRESHOLD = 30;
+
+    if (!this.healthDetectionArmed) {
+      // Check if both health bars are in a "healthy" state (game is in a round)
+      const bothHealthy = p1Health >= HEALTHYTHRESHOLD && p2Health >= HEALTHYTHRESHOLD;
+      if (bothHealthy) {
+        this.healthStableFrames++;
+      } else {
+        // Only reset after 3+ consecutive bad frames (tolerate brief dips)
+        if (this.healthStableFrames > 0) {
+          this.healthStableFrames = Math.max(0, this.healthStableFrames - 1);
+        }
+      }
+
+      if (this.healthStableFrames === 1) {
+        console.log(`[game-runner] 🧠 Warmup: health bars detected (P1=${p1Health}% P2=${p2Health}%), arming in ${WARMUP_FRAMES} frames...`);
+      } else if (this.healthStableFrames > 0 && this.healthStableFrames % 10 === 0) {
+        console.log(`[game-runner] 🧠 Warmup: ${this.healthStableFrames}/${WARMUP_FRAMES} stable frames`);
+      }
+
+      if (this.healthStableFrames >= WARMUP_FRAMES) {
+        this.healthDetectionArmed = true;
+        this.previousP1Health = p1Health;
+        this.previousP2Health = p2Health;
+        console.log(`[game-runner] 🧠 KO detection ARMED — health stable after ${WARMUP_FRAMES} frames: P1=${p1Health}% P2=${p2Health}%`);
+        return;
+      }
+      return;
+    }
+
+    // ── KO Detection (armed) ──────────────────────────────────────
+    const KOTHRESHOLD = 10;
+    const KO_COOLDOWN_FRAMES = 10; // ~5 seconds at 2fps — prevents double-triggers
+
+    // Count down cooldown after a KO
+    if (this.koCooldownFrames > 0) {
+      this.koCooldownFrames--;
+    }
+
+    if (!this.koDetected && this.koCooldownFrames === 0) {
+      if (this.previousP1Health > HEALTHYTHRESHOLD && p1Health <= KOTHRESHOLD) {
+        this.koDetected = true;
+        this.p1Losses++;
+        this.koCooldownFrames = KO_COOLDOWN_FRAMES;
+        console.log(`[game-runner] 🧠 P1 KO'd! P2 wins round. P1=${p1Health}% P2=${p2Health}% Score: P1=${this.p1Losses} P2=${this.p2Losses}`);
+        this.emit("roundResult", { loser: 1, winner: 2, p1Losses: this.p1Losses, p2Losses: this.p2Losses });
+      } else if (this.previousP2Health > HEALTHYTHRESHOLD && p2Health <= KOTHRESHOLD) {
+        this.koDetected = true;
+        this.p2Losses++;
+        this.koCooldownFrames = KO_COOLDOWN_FRAMES;
+        console.log(`[game-runner] 🧠 P2 KO'd! P1 wins round. P1=${p1Health}% P2=${p2Health}% Score: P1=${this.p1Losses} P2=${this.p2Losses}`);
+        this.emit("roundResult", { loser: 2, winner: 1, p1Losses: this.p1Losses, p2Losses: this.p2Losses });
+      }
+    }
+
+    // ── Detect new round (both health bars back high) ─────────────
+    if (this.koDetected && p1Health >= HEALTHYTHRESHOLD && p2Health >= HEALTHYTHRESHOLD) {
+      this.koDetected = false;
+      console.log(`[game-runner] 🧠 New round: P1=${p1Health}% P2=${p2Health}%`);
+    }
+
+    // ── Check match end ───────────────────────────────────────────
+    if (!this.matchEnded && (this.p1Losses >= 2 || this.p2Losses >= 2)) {
+      this.matchEnded = true;
+      const winner = this.p1Losses >= 2 ? 2 : 1;
+      const loser = winner === 1 ? 2 : 1;
+      console.log(`[game-runner] 🧠 MATCH OVER! Winner: P${winner} Score: P1=${this.p1Losses} P2=${this.p2Losses}`);
+      this.emit("matchEnd", { winner, loser, p1Losses: this.p1Losses, p2Losses: this.p2Losses });
+      this.stopHealthWatcher();
+    }
+
+    // Update previous values
+    this.previousP1Health = p1Health;
+    this.previousP2Health = p2Health;
+  }
+
+  /** Count non-dark pixels in a region (pixels that are part of a health bar). */
+  private countHealthPixels(
+    frame: Buffer, frameWidth: number,
+    startX: number, startY: number, regionW: number, regionH: number,
+  ): number {
+    let count = 0;
+    const MIN_BRIGHTNESS = 80; // RGB sum threshold for "not dark"
+
+    for (let y = startY; y < startY + regionH; y++) {
+      for (let x = startX; x < startX + regionW; x++) {
+        const idx = (y * frameWidth + x) * 3;
+        const r = frame[idx] ?? 0;
+        const g = frame[idx + 1] ?? 0;
+        const b = frame[idx + 2] ?? 0;
+        // Health bar pixels in KOF '98 are yellow/green/red — all have R+G+B > threshold
+        if (r + g + b > MIN_BRIGHTNESS * 3) {
+          count++;
+        }
+      }
+    }
+    return count;
+  }
+
+  /** Start the round detection polling (kept for API compatibility, actual detection is ffmpeg-driven). */
+  startMemoryWatcher(): void {
+    if (this.healthPollEnabled || this.matchEnded) return;
+    this.healthPollEnabled = true;
+    console.log("[game-runner] 🧠 Round detection activated (screenshot-based)");
+
+    // Reset state
+    this.previousP1Health = -1;
+    this.previousP2Health = -1;
+    this.koDetected = false;
+    this.p1Losses = 0;
+    this.p2Losses = 0;
+    this.matchEnded = false;
+    this.healthStableFrames = 0;
+    this.healthDetectionArmed = false;
+    this.koCooldownFrames = 0;
+
+    // Log periodic debug info every 10s
+    this.healthPollTimer = setInterval(() => {
+      if (!this.running || this.matchEnded) return;
+      if (this.previousP1Health >= 0) {
+        console.log(`[game-runner] 🧠 Health: P1=${this.previousP1Health}% P2=${this.previousP2Health}% ko=${this.koDetected} losses: P1=${this.p1Losses} P2=${this.p2Losses}`);
+      }
+    }, 10000);
+  }
+
+  /** Stop the health watcher. */
+  stopHealthWatcher(): void {
+    this.healthPollEnabled = false;
+    if (this.healthPollTimer) {
+      clearInterval(this.healthPollTimer);
+      this.healthPollTimer = null;
+    }
+    console.log("[game-runner] 🧠 Round detection stopped");
+  }
+
+  // (keep stopMemoryWatcher for backwards compat)
+  stopMemoryWatcher(): void {
+    this.stopHealthWatcher();
   }
 
   /** Send H.264 + Opus codec configuration to the client. */
@@ -465,13 +713,24 @@ export class GameRunner extends EventEmitter {
 
   /**
    * Parse Opus packets from FFmpeg output.
-   * FFmpeg `-f opus` outputs raw Opus packets (one per write).
-   * We forward them directly as audio frames.
+   * FFmpeg `-f opus` muxer writes OpusHead + OpusTags as the first 2 packets.
+   * We skip those because the client already configures its AudioDecoder
+   * with its own OpusHead. Subsequent packets are raw Opus audio data.
    */
   private handleAudioChunk(chunk: Buffer): void {
-    if (chunk.length > 0) {
-      this.emit("audio", chunk);
+    if (chunk.length === 0) return;
+
+    // Skip OpusHead (ID header) and OpusTags (comment header) from the muxer.
+    // The client builds its own OpusHead — feeding duplicates causes
+    // "EncodingError: Decoding error" in the browser's AudioDecoder.
+    if (this.audioPacketsSkipped < 2) {
+      this.audioPacketsSkipped++;
+      const label = this.audioPacketsSkipped === 1 ? "OpusHead" : "OpusTags";
+      console.log(`[game-runner] Skipping ${label} header (${chunk.length} bytes)`);
+      return;
     }
+
+    this.emit("audio", chunk);
   }
 
   /** Inject a keyboard input into RetroArch via xdotool. */
@@ -554,6 +813,15 @@ export class GameRunner extends EventEmitter {
     console.log(`[game-runner] Stopping all processes for session ${this.sessionId}`);
     this.running = false;
 
+    // Stop health watcher
+    this.stopHealthWatcher();
+
+    // Stop health bar ffmpeg
+    if (this.healthFfmpeg) {
+      this.healthFfmpeg.kill("SIGTERM");
+      this.healthFfmpeg = null;
+    }
+
     this.ffmpegAudio?.kill("SIGTERM");
     this.ffmpegVideo?.kill("SIGTERM");
     this.retroarch?.kill("SIGTERM");
@@ -610,6 +878,9 @@ export class GameRunner extends EventEmitter {
       `auto_remaps_enable = "false"`,
       `config_save_on_exit = "false"`,
       `content_show_override = "false"`,
+      // Network commands — allows reading core memory via UDP
+      `network_cmd_enable = "true"`,
+      `network_cmd_port = "${RA_CMD_PORT}"`,
     ];
 
     // Keyboard mappings for both players

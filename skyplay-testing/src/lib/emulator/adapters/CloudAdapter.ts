@@ -109,6 +109,29 @@ export class CloudAdapter implements EmulatorAdapter {
     }
   }
 
+  /**
+   * Connect as host (P1) to a pre-created cloud session.
+   * Used by the duel matchmaking system where the server creates the
+   * session before the client connects (after P2 accepts the challenge).
+   */
+  async connectAsHost(wsUrl: string, sessionId: string, rom: string, roomCode: string): Promise<void> {
+    this._status = "loading";
+    this.callbacks.onStatusChange("loading");
+    this._currentRom = rom;
+    this.sessionId = sessionId;
+    this._roomCode = roomCode;
+    this._player = 1;
+
+    try {
+      await this.connectWebSocket(wsUrl, "init");
+      console.log(`[Cloud:${this.systemType}] Connected as host — session ${sessionId}`);
+    } catch (err) {
+      console.error(`[Cloud:${this.systemType}] Failed to connect as host:`, err);
+      this._status = "error";
+      this.callbacks.onStatusChange("error");
+    }
+  }
+
   private connectWebSocket(wsUrl: string, mode: "init" | "join" = "init"): Promise<void> {
     return new Promise((resolve, reject) => {
       try {
@@ -415,6 +438,52 @@ export class CloudAdapter implements EmulatorAdapter {
           this.callbacks.onPlayerEvent?.("player_disconnected", msg.player ?? 2);
           break;
         }
+        case "waiting": {
+          console.log(`[Cloud:${this.systemType}] Waiting for host:`, msg.message);
+          break;
+        }
+        case "round_result": {
+          const rrData = msg as unknown as { loser: number; winner: number; p1Losses: number; p2Losses: number };
+          console.log(`[Cloud:${this.systemType}] 🏆 Round result: P${rrData.winner} wins! P${rrData.loser} KO. Score: P1=${rrData.p1Losses} P2=${rrData.p2Losses}`);
+          this.callbacks.onRoundResult?.(
+            rrData.loser, rrData.winner, rrData.p1Losses, rrData.p2Losses,
+          );
+          break;
+        }
+        case "match_end": {
+          const meData = msg as unknown as { winner: number; loser: number; p1Losses: number; p2Losses: number };
+          console.log(`[Cloud:${this.systemType}] 🏁 MATCH OVER! P${meData.winner} wins! Score: P1=${meData.p1Losses} P2=${meData.p2Losses}`);
+          this.callbacks.onMatchEnd?.(
+            meData.winner, meData.loser, meData.p1Losses, meData.p2Losses,
+          );
+          break;
+        }
+        case "rematch_starting": {
+          console.log(`[Cloud:${this.systemType}] 🔄 Rematch starting`);
+          this.callbacks.onRematchStarting?.();
+          break;
+        }
+        case "rematch_requested": {
+          console.log(`[Cloud:${this.systemType}] 🔄 Rematch requested by opponent`);
+          this.callbacks.onRematchRequested?.();
+          break;
+        }
+        case "rematch_accepted": {
+          const raData = msg as unknown as { newSessionId: string; newWsUrl: string; newRoomCode: string };
+          console.log(`[Cloud:${this.systemType}] ✅ Rematch accepted — new session: ${raData.newSessionId}`);
+          this.callbacks.onRematchAccepted?.(raData.newSessionId, raData.newWsUrl, raData.newRoomCode);
+          break;
+        }
+        case "rematch_declined": {
+          console.log(`[Cloud:${this.systemType}] ❌ Rematch declined`);
+          this.callbacks.onRematchDeclined?.();
+          break;
+        }
+        case "session_closed": {
+          console.log(`[Cloud:${this.systemType}] 🚪 Session closed by server`);
+          this.callbacks.onSessionClosed?.();
+          break;
+        }
         case "pong": { break; }
       }
     } catch {
@@ -582,6 +651,42 @@ export class CloudAdapter implements EmulatorAdapter {
     this.ws?.send(JSON.stringify({ type: "stop" }));
   }
 
+  /** Request a rematch (notify opponent). */
+  requestRematch(): void {
+    this.ws?.send(JSON.stringify({ type: "rematch_request" }));
+  }
+
+  /** P2 accepts the rematch — sends new session info back. */
+  acceptRematch(newSessionId: string, newWsUrl: string, newRoomCode: string): void {
+    this.ws?.send(JSON.stringify({
+      type: "rematch_accept",
+      newSessionId,
+      newWsUrl,
+      newRoomCode,
+    }));
+  }
+
+  /** P2 declines the rematch. */
+  declineRematch(): void {
+    this.ws?.send(JSON.stringify({ type: "rematch_decline" }));
+  }
+
+  /** Reconnect to a new session (used for rematch transition). */
+  async reconnectToNewSession(wsUrl: string, sessionId: string, roomCode: string): Promise<void> {
+    console.log(`[Cloud:${this.systemType}] 🔄 Reconnecting to new session ${sessionId}`);
+    this.stopPing();
+    this.closeDecoders();
+    if (this.ws) {
+      try { this.ws.close(); } catch { /* ok */ }
+      this.ws = null;
+    }
+    this.sessionId = sessionId;
+    this._roomCode = roomCode;
+    // _player stays the same (1=host, 2=guest)
+    const mode = this._player === 1 ? "init" : "join";
+    await this.connectWebSocket(wsUrl, mode);
+  }
+
   exit(): void {
     this.stopPing();
     this.closeDecoders();
@@ -657,4 +762,18 @@ export class CloudAdapter implements EmulatorAdapter {
 export interface CloudCallbacks {
   onStatusChange: (status: EmulatorStatus) => void;
   onPlayerEvent?: (event: "player_joined" | "player_disconnected", player: number) => void;
+  /** Called when a round ends (character KO detected). loser/winner are player numbers (1 or 2). */
+  onRoundResult?: (loser: number, winner: number, p1Losses: number, p2Losses: number) => void;
+  /** Called when the match is over (one player has accumulated 2+ losses). */
+  onMatchEnd?: (winner: number, loser: number, p1Losses: number, p2Losses: number) => void;
+  /** Called when the opponent requests a rematch. */
+  onRematchRequested?: () => void;
+  /** Called when the opponent accepts the rematch (new session info provided). */
+  onRematchAccepted?: (newSessionId: string, newWsUrl: string, newRoomCode: string) => void;
+  /** Called when the opponent declines the rematch. */
+  onRematchDeclined?: () => void;
+  /** Called when a rematch is starting (server has reset the game — legacy same-session). */
+  onRematchStarting?: () => void;
+  /** Called when the server closes the session — all players should return to lobby. */
+  onSessionClosed?: () => void;
 }

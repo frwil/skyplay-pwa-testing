@@ -30,7 +30,33 @@ export interface ControlMessage {
   type: "pause" | "resume" | "stop";
 }
 
-export type ClientMessage = InitMessage | JoinMessage | InputMessage | PingMessage | ControlMessage;
+/** P1 requests a rematch — server relays to P2. */
+export interface RematchRequestMessage {
+  type: "rematch_request";
+}
+
+/** P2 accepts the rematch and provides new session info. */
+export interface RematchAcceptMessage {
+  type: "rematch_accept";
+  newSessionId: string;
+  newWsUrl: string;
+  newRoomCode: string;
+}
+
+/** P2 declines the rematch. */
+export interface RematchDeclineMessage {
+  type: "rematch_decline";
+}
+
+export type ClientMessage =
+  | InitMessage
+  | JoinMessage
+  | InputMessage
+  | PingMessage
+  | ControlMessage
+  | RematchRequestMessage
+  | RematchAcceptMessage
+  | RematchDeclineMessage;
 
 export interface StatusMessage {
   type: "status";
@@ -59,7 +85,71 @@ export interface PlayerEventMessage {
   player: number;
 }
 
-export type ServerMessage = StatusMessage | ReadyMessage | ErrorMessage | PongMessage | PlayerEventMessage;
+/** A round/character was KO'd — sent when a health bar drops to 0. */
+export interface RoundResultMessage {
+  type: "round_result";
+  /** Player whose character was KO'd (the loser of this round). */
+  loser: number;
+  /** Player who scored the KO (the winner of this round). */
+  winner: number;
+  /** Total KOs scored against P1 so far. */
+  p1Losses: number;
+  /** Total KOs scored against P2 so far. */
+  p2Losses: number;
+}
+
+/** Waiting message sent to P2 when they join before P1. */
+export interface WaitingMessage {
+  type: "waiting";
+  message: string;
+}
+
+/** Match is over — one player has accumulated enough losses. */
+export interface MatchEndMessage {
+  type: "match_end";
+  winner: number;
+  loser: number;
+  /** Final score: { p1Losses, p2Losses }. */
+  p1Losses: number;
+  p2Losses: number;
+}
+
+/** Rematch requested by opponent — show accept/decline UI. */
+export interface RematchRequestedMessage {
+  type: "rematch_requested";
+}
+
+/** Rematch was accepted — new session info follows. */
+export interface RematchAcceptedMessage {
+  type: "rematch_accepted";
+  newSessionId: string;
+  newWsUrl: string;
+  newRoomCode: string;
+}
+
+/** Rematch was declined — return to lobby. */
+export interface RematchDeclinedMessage {
+  type: "rematch_declined";
+}
+
+/** Session is closed — all players should return to lobby and reload. */
+export interface SessionClosedMessage {
+  type: "session_closed";
+}
+
+export type ServerMessage =
+  | StatusMessage
+  | ReadyMessage
+  | ErrorMessage
+  | PongMessage
+  | PlayerEventMessage
+  | RoundResultMessage
+  | WaitingMessage
+  | MatchEndMessage
+  | RematchRequestedMessage
+  | RematchAcceptedMessage
+  | RematchDeclinedMessage
+  | SessionClosedMessage;
 
 /** Binary frame header: 0x01 + width(u16) + height(u16) + frameId(u32) + nalLength(u16) + H.264 NAL data */
 export const FRAME_MAGIC = 0x01;

@@ -2,7 +2,9 @@
   "name": "skyplay-testing",
   "version": "0.1.0",
   "private": true,
-  "workspaces": ["apps/desktop"],
+  "workspaces": [
+    "apps/desktop"
+  ],
   "scripts": {
     "dev": "next dev",
     "build": "next build --webpack",
@@ -13,6 +15,7 @@
     "@ducanh2912/next-pwa": "^10.2.9",
     "@libsql/client": "^0.17.3",
     "bcryptjs": "^3.0.3",
+    "dotenv": "^17.4.2",
     "jose": "^6.2.3",
     "jsnes": "^2.1.0",
     "lucide-react": "^1.17.0",

@@ -277,6 +277,57 @@ async function initializeSchema(): Promise<void> {
     );
   `);
 
+  // ——— Duel System (Cloud Gaming Matchmaking) ———
+  await getClient().execute(`
+    CREATE TABLE IF NOT EXISTS duel_lobby (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL REFERENCES users(id),
+      system TEXT NOT NULL DEFAULT 'neogeo',
+      rom TEXT NOT NULL DEFAULT 'kof98.zip',
+      status TEXT NOT NULL DEFAULT 'waiting',
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(user_id)
+    );
+  `);
+
+  await getClient().execute(`
+    CREATE TABLE IF NOT EXISTS duel_challenges (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      challenger_id INTEGER NOT NULL REFERENCES users(id),
+      target_id INTEGER NOT NULL REFERENCES users(id),
+      system TEXT NOT NULL DEFAULT 'neogeo',
+      rom TEXT NOT NULL DEFAULT 'kof98.zip',
+      status TEXT NOT NULL DEFAULT 'pending',
+      session_id TEXT,
+      room_code TEXT,
+      ws_url TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+
+  await getClient().execute(`
+    CREATE TABLE IF NOT EXISTS duel_results (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      challenge_id INTEGER REFERENCES duel_challenges(id),
+      winner_id INTEGER NOT NULL REFERENCES users(id),
+      loser_id INTEGER NOT NULL REFERENCES users(id),
+      p1_losses INTEGER NOT NULL DEFAULT 0,
+      p2_losses INTEGER NOT NULL DEFAULT 0,
+      system TEXT NOT NULL DEFAULT 'neogeo',
+      rom TEXT NOT NULL DEFAULT 'kof98.zip',
+      session_id TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+
+  // Duel indexes
+  try { await getClient().execute("CREATE INDEX IF NOT EXISTS idx_duel_lobby_user ON duel_lobby(user_id)"); } catch {}
+  try { await getClient().execute("CREATE INDEX IF NOT EXISTS idx_duel_lobby_status ON duel_lobby(status)"); } catch {}
+  try { await getClient().execute("CREATE INDEX IF NOT EXISTS idx_duel_challenges_target ON duel_challenges(target_id, status)"); } catch {}
+  try { await getClient().execute("CREATE INDEX IF NOT EXISTS idx_duel_challenges_challenger ON duel_challenges(challenger_id, status)"); } catch {}
+  try { await getClient().execute("CREATE INDEX IF NOT EXISTS idx_duel_results_winner ON duel_results(winner_id)"); } catch {}
+  try { await getClient().execute("CREATE INDEX IF NOT EXISTS idx_duel_results_loser ON duel_results(loser_id)"); } catch {}
+
   // Netplay indexes
   try { await getClient().execute("CREATE INDEX IF NOT EXISTS idx_challenge_participants_challenge ON challenge_participants(challenge_id)"); } catch {}
   try { await getClient().execute("CREATE INDEX IF NOT EXISTS idx_challenge_participants_user ON challenge_participants(user_id)"); } catch {}
@@ -400,4 +451,41 @@ export async function ensureDb(): Promise<void> {
     await seedData();
     initialized = true;
   }
+}
+
+/**
+ * Ensure a user exists with the given ID. Used in local dev mode
+ * where arbitrary user IDs are passed by the frontend without a real sign-up.
+ *
+ * Strategy:
+ * 1. User exists by our ID → no-op
+ * 2. Username exists with a DIFFERENT ID → rename old user to free the
+ *    username (keeping their ID for existing FK references), then create
+ *    a fresh row with our desired ID.
+ * 3. Neither exists → create fresh row
+ */
+export async function ensureUser(userId: number, username: string): Promise<void> {
+  const client = getClient();
+
+  // Already exists with the correct ID?
+  const byId = await client.execute({ sql: "SELECT id FROM users WHERE id = ?", args: [userId] });
+  if (byId.rows.length > 0) return;
+
+  // Username taken by a different ID? Rename that old user to free the username.
+  const byName = await client.execute({ sql: "SELECT id FROM users WHERE username = ? AND id != ?", args: [username, userId] });
+  if (byName.rows.length > 0) {
+    const oldId = byName.rows[0].id as number;
+    // Keep the old ID (FKs in other tables still point to it) but rename
+    // so we can claim the desired username for our new ID.
+    await client.execute({
+      sql: "UPDATE users SET username = ?, email = ? WHERE id = ?",
+      args: [`${username}-${oldId}`, `${username}-${oldId}@local.dev`, oldId],
+    });
+  }
+
+  // Now create the fresh row with our desired ID + username
+  await client.execute({
+    sql: "INSERT OR IGNORE INTO users (id, username, email, role) VALUES (?, ?, ?, 'user')",
+    args: [userId, username, `${username}@local.dev`],
+  });
 }
