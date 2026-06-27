@@ -45,11 +45,6 @@ export function useKeyboard(
     const mapping = keyMap[e.code];
     if (!mapping) return;
 
-    // Debug: log P2 keyboard inputs
-    if (mapping.player === 2) {
-      console.log(`[KB] P2 key: ${e.code} → button ${mapping.button}`);
-    }
-
     e.preventDefault();
     e.stopPropagation();
 
@@ -57,6 +52,10 @@ export function useKeyboard(
     if (heldKeysRef.current.has(key)) return; // ignore repeat
 
     heldKeysRef.current.add(key);
+    // 🔍 DEBUG P2
+    if (mapping.player === 2) {
+      console.log(`[KB] P2 key DOWN: ${e.code} → btn=${mapping.button}`);
+    }
     buttonDownRef.current(mapping.player, mapping.button);
 
     // Update bitmask
@@ -75,6 +74,10 @@ export function useKeyboard(
 
     const key = `${mapping.player}:${mapping.button}`;
     heldKeysRef.current.delete(key);
+    // 🔍 DEBUG P2
+    if (mapping.player === 2) {
+      console.log(`[KB] P2 key UP: ${e.code} → btn=${mapping.button}`);
+    }
     buttonUpRef.current(mapping.player, mapping.button);
 
     // Update bitmask

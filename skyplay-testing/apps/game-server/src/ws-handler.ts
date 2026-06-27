@@ -52,6 +52,16 @@ export function handleConnection(ws: WebSocket, sessionId: string): void {
   });
 }
 
+// 🔍 DEBUG: throttle logging to avoid spam
+const msgCounts = new Map<string, number>();
+function logMsg(label: string, extra?: string): void {
+  const count = (msgCounts.get(label) || 0) + 1;
+  msgCounts.set(label, count);
+  if (count <= 5 || count % 50 === 0) {
+    console.log(`[ws] 📩 ${label} (#${count})${extra ? " " + extra : ""}`);
+  }
+}
+
 function handleMessage(ws: WebSocket, msg: ClientMessage, sessionId: string): void {
   // Reset idle timer on ANY message from ANY connection
   const info = getPlayerInfo(ws);
@@ -62,27 +72,33 @@ function handleMessage(ws: WebSocket, msg: ClientMessage, sessionId: string): vo
 
   switch (msg.type) {
     case "init":
+      logMsg("init", `system=${(msg as { system?: string }).system || "?"}`);
       handleInit(ws, msg, sessionId);
       break;
 
     case "join":
+      logMsg("join");
       handleJoin(ws, msg, sessionId);
       break;
 
     case "input":
+      logMsg("input", `P${msg.player} btn=${msg.button} ${msg.pressed ? "dn" : "up"}`);
       handleInput(ws, msg);
       break;
 
     case "pause":
     case "resume":
+      logMsg("control", msg.type);
       handleControl(msg.type, sessionId);
       break;
 
     case "stop":
+      logMsg("stop");
       stopSession(sessionId);
       break;
 
     case "ping":
+      // Too frequent to log
       handlePing(ws, msg.t);
       break;
 
@@ -254,14 +270,24 @@ function handleInput(
   ws: WebSocket,
   msg: { player: number; button: number; pressed: boolean },
 ): void {
+  // 🔍 DEBUG: Log every input message
+  console.log(`[ws] 🎮 INPUT P${msg.player} btn=${msg.button} ${msg.pressed ? "DOWN" : "UP"}`);
+
   // Route input to the correct session's runner
   const info = getPlayerInfo(ws);
-  if (!info) return;
+  if (!info) {
+    console.warn(`[ws] ⚠️ INPUT dropped: no player info for WebSocket`);
+    return;
+  }
 
   const runner = sessionRunners.get(info.sessionId);
-  if (!runner) return;
+  if (!runner) {
+    console.warn(`[ws] ⚠️ INPUT dropped: no runner for session ${info.sessionId}`);
+    return;
+  }
 
   // Pass the declared player number (from client) to injectInput
+  console.log(`[ws] ✅ Routing P${msg.player} input to session ${info.sessionId} runner`);
   runner.injectInput(msg.player, msg.button, msg.pressed);
 }
 

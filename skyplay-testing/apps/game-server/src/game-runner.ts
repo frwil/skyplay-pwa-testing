@@ -1,5 +1,8 @@
-import { spawn, type ChildProcess } from "child_process";
+import { spawn, spawnSync, type ChildProcess } from "child_process";
 import { EventEmitter } from "events";
+import { writeFileSync, unlinkSync } from "fs";
+import { tmpdir } from "os";
+import { join } from "path";
 import { SYSTEM_CORES, SYSTEM_RESOLUTIONS, UPSCALE, XDOTOOL_KEY_MAP, XDOTOOL_KEY_MAP_P2, getButtonToRetroarch, buildRetroarchKeyConfig } from "./config.js";
 
 export interface GameRunnerEvents {
@@ -38,6 +41,8 @@ export class GameRunner extends EventEmitter {
   private videoBuffer = Buffer.alloc(0);
   private audioBuffer = Buffer.alloc(0);
   private codecConfigSent = false;
+  private retroarchWindowId: string | null = null;
+  private configPath: string | null = null;
 
   constructor(system: string, rom: string, sessionId: string) {
     super();
@@ -215,12 +220,21 @@ export class GameRunner extends EventEmitter {
     return new Promise((resolve, reject) => {
       const retroarchBin = process.env.RETROARCH_BIN || "retroarch";
 
+      // Write config to a temp file instead of stdin.
+      // stdin piping with --appendconfig is unreliable — RetroArch may
+      // read stdin before the config is fully written. A temp file is
+      // guaranteed to be available when RetroArch processes --appendconfig.
+      const config = this.buildRetroarchConfig(w, h);
+      this.configPath = join(tmpdir(), `retroarch-${this.sessionId}.cfg`);
+      writeFileSync(this.configPath, config, "utf-8");
+      console.log(`[game-runner] Config written to ${this.configPath} (${config.length} bytes)`);
+
       const args = [
         "-L", corePath,
         romPath,
         "--set-shader", "",
         "-v",
-        "--appendconfig", "/dev/stdin",
+        "--appendconfig", this.configPath!,
       ];
 
       this.retroarch = spawn(retroarchBin, args, {
@@ -233,12 +247,8 @@ export class GameRunner extends EventEmitter {
           LIBGL_ALWAYS_SOFTWARE: "1",
           PULSE_SINK: "game_sink",
         },
-        stdio: ["pipe", "ignore", "pipe"],
+        stdio: ["ignore", "ignore", "pipe"],
       });
-
-      const config = this.buildRetroarchConfig(w, h);
-      this.retroarch.stdin?.write(config);
-      this.retroarch.stdin?.end();
 
       this.retroarch.stderr?.on("data", (data: Buffer) => {
         const text = data.toString();
@@ -254,7 +264,35 @@ export class GameRunner extends EventEmitter {
         this.emit("exit", code);
       });
 
-      setTimeout(() => resolve(), 2000);
+      setTimeout(() => {
+        // Find RetroArch window for focused xdotool input
+        this.findRetroarchWindow();
+        resolve();
+      }, 2000);
+    });
+  }
+
+  /** Find the RetroArch X11 window ID for targeted xdotool input. */
+  private findRetroarchWindow(): void {
+    const proc = spawn("xdotool", ["search", "--onlyvisible", "--class", "retroarch"], {
+      env: { ...process.env, DISPLAY: this.display },
+      stdio: "pipe",
+    });
+    let output = "";
+    proc.stdout?.on("data", (d: Buffer) => { output += d.toString(); });
+    proc.on("close", (code) => {
+      const wid = output.trim().split("\n")[0]?.trim();
+      if (wid && /^\d+$/.test(wid)) {
+        this.retroarchWindowId = wid;
+        console.log(`[game-runner] 🪟 RetroArch window ID: ${wid}`);
+        // Also focus it
+        spawn("xdotool", ["windowactivate", "--sync", wid], {
+          env: { ...process.env, DISPLAY: this.display },
+          stdio: "ignore",
+        });
+      } else {
+        console.warn(`[game-runner] ⚠️ Could not find RetroArch window (code ${code}, output: "${output.trim()}")`);
+      }
     });
   }
 
@@ -438,26 +476,62 @@ export class GameRunner extends EventEmitter {
 
   /** Inject a keyboard input into RetroArch via xdotool. */
   injectInput(player: number, button: number, pressed: boolean): void {
-    if (!this.running) return;
+    // 🔍 DEBUG: Log every injectInput call
+    console.log(`[game-runner] 🕹️  injectInput P${player} btn=${button} ${pressed ? "DOWN" : "UP"} running=${this.running} system=${this.system}`);
+
+    if (!this.running) {
+      console.warn(`[game-runner] ⚠️  injectInput DROPPED: not running`);
+      return;
+    }
 
     const buttonToRetroarch = getButtonToRetroarch(this.system);
     const retroarchName = buttonToRetroarch[button];
-    if (!retroarchName) return;
+    if (!retroarchName) {
+      console.warn(`[game-runner] ⚠️  injectInput DROPPED: no retroarch name for btn=${button}`);
+      return;
+    }
 
     const keyMap = player === 1 ? XDOTOOL_KEY_MAP : XDOTOOL_KEY_MAP_P2;
     const xdoKey = keyMap[retroarchName];
-    if (!xdoKey) return;
+    if (!xdoKey) {
+      console.warn(`[game-runner] ⚠️  injectInput DROPPED: no xdotool key for retroarch="${retroarchName}" (P${player})`);
+      return;
+    }
 
     const action = pressed ? "keydown" : "keyup";
 
+    // Activate RetroArch window if we have it (ensures it has focus in Xvfb)
+    // We do NOT use --window because that forces XSendEvent which SDL2 ignores.
+    // XTEST (default, without --window) is the reliable path.
+    // Use spawnSync to avoid race condition with the keydown below.
+    if (this.retroarchWindowId) {
+      const r = spawnSync("xdotool", ["windowactivate", "--sync", this.retroarchWindowId], {
+        env: { ...process.env, DISPLAY: this.display },
+        stdio: "ignore",
+        timeout: 200,
+      });
+      if (r.status !== 0) {
+        console.warn(`[game-runner] ⚠️  windowactivate failed (exit=${r.status})`);
+      }
+    }
+
+    console.log(`[game-runner] 🚀 SPAWN: xdotool ${action} ${xdoKey} (P${player} btn=${button} ra=${retroarchName}) DISPLAY=${this.display} win=${this.retroarchWindowId || "none"}`);
+
     const proc = spawn("xdotool", [action, xdoKey], {
       env: { ...process.env, DISPLAY: this.display },
-      stdio: "ignore",
+      stdio: ["ignore", "ignore", "pipe"],
     });
 
+    let stderr = "";
+    proc.stderr?.on("data", (d: Buffer) => { stderr += d.toString(); });
+
     proc.on("error", (err) => {
-      if (this.frameId < 3) {
-        console.warn(`[game-runner] xdotool error (P${player}):`, err.message);
+      console.error(`[game-runner] ❌ xdotool SPAWN error (P${player} btn=${button} key=${xdoKey}):`, err.message);
+    });
+
+    proc.on("close", (code) => {
+      if (code !== 0 || stderr) {
+        console.warn(`[game-runner] ⚠️  xdotool exit=${code} stderr="${stderr.trim()}" (P${player} btn=${button} key=${xdoKey})`);
       }
     });
   }
@@ -484,6 +558,11 @@ export class GameRunner extends EventEmitter {
     this.ffmpegVideo?.kill("SIGTERM");
     this.retroarch?.kill("SIGTERM");
     this.xvfb?.kill("SIGTERM");
+
+    // Clean up temp config file
+    if (this.configPath) {
+      try { unlinkSync(this.configPath); } catch { /* ok */ }
+    }
 
     setTimeout(() => {
       this.ffmpegAudio?.kill("SIGKILL");
@@ -520,6 +599,7 @@ export class GameRunner extends EventEmitter {
       // Input
       `input_driver = "sdl2"`,
       `input_joypad_driver = "null"`,
+      `input_player2_joypad_index = "1"`,
       // Performance
       `fastforward_ratio = "1.0"`,
       `rewind_enable = "false"`,
@@ -534,6 +614,9 @@ export class GameRunner extends EventEmitter {
 
     // Keyboard mappings for both players
     const keyConfig = buildRetroarchKeyConfig();
+    // 🔍 DEBUG: Log P2 bindings
+    const p2Bindings = Object.entries(keyConfig).filter(([k]) => k.startsWith("input_player2_"));
+    console.log(`[game-runner] 🎮 P2 RetroArch bindings:`, Object.fromEntries(p2Bindings));
     for (const [key, value] of Object.entries(keyConfig)) {
       lines.push(`${key} = "${value}"`);
     }
