@@ -122,6 +122,12 @@ export async function GET(req: NextRequest) {
 
     const db = await getDb();
 
+    // Update own heartbeat FIRST (before cleanup, so we don't delete ourselves)
+    await db.execute({
+      sql: "UPDATE duel_lobby SET last_heartbeat = CURRENT_TIMESTAMP WHERE user_id = ?",
+      args: [user.userId],
+    });
+
     // Clean stale lobby entries (no heartbeat for > 30s = disconnected)
     const staleClean = await db.execute({
       sql: `DELETE FROM duel_lobby
@@ -132,12 +138,6 @@ export async function GET(req: NextRequest) {
     if (staleClean.rowsAffected > 0) {
       console.log(`[duel/lobby] Cleaned ${staleClean.rowsAffected} stale lobby entr${staleClean.rowsAffected > 1 ? 'ies' : 'y'}`);
     }
-
-    // Update own heartbeat to prove we're still here
-    await db.execute({
-      sql: "UPDATE duel_lobby SET last_heartbeat = CURRENT_TIMESTAMP WHERE user_id = ?",
-      args: [user.userId],
-    });
 
     const rs = await db.execute({
       sql: `SELECT dl.user_id, dl.system, dl.rom, dl.status, dl.created_at
