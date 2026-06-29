@@ -7,7 +7,12 @@ import { getAuthFromRequest } from "@/lib/auth";
  * In local dev (no NORTHFLANK_API_KEY), reads devUserId/devUsername from body or query.
  */
 async function getUserId(req: NextRequest, body?: Record<string, unknown>): Promise<{ userId: number; username: string } | null> {
-  const isLocalDev = !process.env.NORTHFLANK_API_KEY;
+  // Try JWT first (works in all environments — production AND local dev)
+  const auth = await getAuthFromRequest(req);
+  if (auth) return { userId: auth.userId, username: "" };
+
+  // Fallback: dev mode only when NOT on Vercel AND no Northflank key
+  const isLocalDev = !process.env.NORTHFLANK_API_KEY && !process.env.VERCEL;
   if (isLocalDev) {
     const devUserId = (body?.devUserId as number) || parseInt(req.nextUrl.searchParams.get("devUserId") || "0", 10);
     const devUsername = (body?.devUsername as string) || req.nextUrl.searchParams.get("devUsername") || "dev";
@@ -16,9 +21,7 @@ async function getUserId(req: NextRequest, body?: Record<string, unknown>): Prom
     return { userId: Math.abs(hashCode(name)), username: name };
   }
 
-  const auth = await getAuthFromRequest(req);
-  if (!auth) return null;
-  return { userId: auth.userId, username: "" };
+  return null; // Not authenticated
 }
 
 function hashCode(s: string): number {
@@ -60,7 +63,7 @@ export async function POST(req: NextRequest) {
     }
 
     // Join: UPSERT
-    const isLocalDev = !process.env.NORTHFLANK_API_KEY;
+    const isLocalDev = !process.env.NORTHFLANK_API_KEY && !process.env.VERCEL;
     if (isLocalDev) {
       await ensureUser(user.userId, user.username);
     }

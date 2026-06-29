@@ -3,15 +3,19 @@ import { getDb } from "@/lib/db";
 import { getAuthFromRequest } from "@/lib/auth";
 
 async function getUserId(req: NextRequest, body?: Record<string, unknown>): Promise<{ userId: number } | null> {
-  const isLocalDev = !process.env.NORTHFLANK_API_KEY;
+  // Try JWT first (works in all environments — production AND local dev)
+  const auth = await getAuthFromRequest(req);
+  if (auth) return { userId: auth.userId };
+
+  // Fallback: dev mode only when NOT on Vercel AND no Northflank key
+  const isLocalDev = !process.env.NORTHFLANK_API_KEY && !process.env.VERCEL;
   if (isLocalDev) {
     const devUserId = (body?.devUserId as number) || parseInt(req.nextUrl.searchParams.get("devUserId") || "0", 10);
     if (devUserId) return { userId: devUserId };
-    return { userId: 0 }; // fallback
+    return { userId: 0 }; // fallback for local dev
   }
-  const auth = await getAuthFromRequest(req);
-  if (!auth) return null;
-  return { userId: auth.userId };
+
+  return null; // Not authenticated
 }
 
 /**
