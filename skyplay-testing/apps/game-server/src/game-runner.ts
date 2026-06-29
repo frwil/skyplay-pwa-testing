@@ -307,7 +307,7 @@ export class GameRunner extends EventEmitter {
           console.log("[game-runner] ▶️  Auto-continue: pressing START...");
           this.ensureFocus();
           this.injectInput(1, 5, true);
-          this.injectInput(2, 5, true);
+          setTimeout(() => { this.injectInput(2, 5, true); }, 100);
           setTimeout(() => {
             this.injectInput(1, 5, false);
             this.injectInput(2, 5, false);
@@ -791,24 +791,24 @@ export class GameRunner extends EventEmitter {
 
     const action = pressed ? "keydown" : "keyup";
 
-    // Activate RetroArch window (non-blocking — no --sync).
-    // We focus once per sequence start via ensureFocus(), not on every input.
-    if (this.retroarchWindowId) {
-      spawn("xdotool", ["windowactivate", this.retroarchWindowId], {
-        env: { ...process.env, DISPLAY: this.display },
-        stdio: "ignore",
-      });
-    }
-
     console.log(`[game-runner] 🕹️  xdotool ${action} ${xdoKey} (P${player} btn=${button})`);
 
     const proc = spawn("xdotool", [action, xdoKey], {
       env: { ...process.env, DISPLAY: this.display },
-      stdio: "ignore",
+      stdio: ["ignore", "ignore", "pipe"],
     });
+
+    let stderr = "";
+    proc.stderr?.on("data", (d: Buffer) => { stderr += d.toString(); });
 
     proc.on("error", (err) => {
       console.error(`[game-runner] ❌ xdotool error (P${player} btn=${button} key=${xdoKey}):`, err.message);
+    });
+
+    proc.on("close", (code) => {
+      if (code !== 0 || stderr) {
+        console.warn(`[game-runner] ⚠️  xdotool exit=${code} stderr="${stderr.trim()}" (P${player} btn=${button} key=${xdoKey})`);
+      }
     });
   }
 

@@ -291,7 +291,7 @@ runner.on("frame", (nalUnit: Buffer, width: number, height: number) => {
       console.log(`[ws] ▶️  Starting game for P1+P2 in session ${msg.sessionId}`);
       runner.ensureFocus();
       runner.injectInput(1, 5, true);
-      runner.injectInput(2, 5, true);
+      setTimeout(() => { runner.injectInput(2, 5, true); }, 100);
       setTimeout(() => {
         runner.injectInput(1, 5, false);
         runner.injectInput(2, 5, false);
