@@ -269,27 +269,28 @@ runner.on("frame", (nalUnit: Buffer, width: number, height: number) => {
     sendToSession(session, { type: "ready", width, height });
 
     // ── Auto coin + start for both players (skip title screen) ──
-    // Insert 2 coins via P1 at 15s after launch
+    // Insert 2 coins via P1 at 15s after launch (sequential, no overlap)
     setTimeout(() => {
       if (session.status !== "running") return;
-      console.log(`[ws] 🪙 Inserting coin 1/2 via P1 for session ${msg.sessionId}`);
-      runner.injectInput(1, 4, true);  // SELECT = coin
+      console.log(`[ws] 🪙 Inserting coins via P1 for session ${msg.sessionId}`);
+      runner.ensureFocus();
+      // Coin 1: DOWN → UP
+      runner.injectInput(1, 4, true);
+      setTimeout(() => { runner.injectInput(1, 4, false); }, 200);
+      // Coin 2: DOWN → UP
+      setTimeout(() => { runner.injectInput(1, 4, true); }, 400);
       setTimeout(() => {
         runner.injectInput(1, 4, false);
-        console.log(`[ws] 🪙 Inserting coin 2/2 via P1 for session ${msg.sessionId}`);
-        runner.injectInput(1, 4, true);
-        setTimeout(() => {
-          runner.injectInput(1, 4, false);
-          console.log(`[ws] ✅ 2 coins inserted for session ${msg.sessionId}`);
-        }, 150);
-      }, 150);
+        console.log(`[ws] ✅ 2 coins inserted for session ${msg.sessionId}`);
+      }, 600);
     }, 15000);
 
     // Start game for both players 5s after coins (20s total)
     setTimeout(() => {
       if (session.status !== "running") return;
       console.log(`[ws] ▶️  Starting game for P1+P2 in session ${msg.sessionId}`);
-      runner.injectInput(1, 5, true);  // START
+      runner.ensureFocus();
+      runner.injectInput(1, 5, true);
       runner.injectInput(2, 5, true);
       setTimeout(() => {
         runner.injectInput(1, 5, false);
@@ -302,7 +303,7 @@ runner.on("frame", (nalUnit: Buffer, width: number, height: number) => {
             runner.startMemoryWatcher();
           }
         }, 5000);
-      }, 150);
+      }, 300);
     }, 20000);
 
     let lastFrameCount = 0;

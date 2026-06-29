@@ -1,4 +1,4 @@
-import { spawn, spawnSync, type ChildProcess } from "child_process";
+import { spawn, type ChildProcess } from "child_process";
 import { EventEmitter } from "events";
 import { writeFileSync, unlinkSync } from "fs";
 import { tmpdir } from "os";
@@ -291,19 +291,21 @@ export class GameRunner extends EventEmitter {
         this.previousP1Health = -1;
         this.previousP2Health = -1;
 
-        // Insert 2 coins via P1
+        // Insert 2 coins via P1 (sequential — no overlapping calls)
         console.log("[game-runner] 🪙 Auto-continue: inserting coins...");
+        this.ensureFocus();
+        // Coin 1: DOWN → UP
         this.injectInput(1, 4, true);
-        setTimeout(() => { this.injectInput(1, 4, false); }, 150);
-        setTimeout(() => {
-          this.injectInput(1, 4, true);
-          setTimeout(() => { this.injectInput(1, 4, false); }, 150);
-        }, 300);
+        setTimeout(() => { this.injectInput(1, 4, false); }, 200);
+        // Coin 2: DOWN → UP (400ms after coin 1)
+        setTimeout(() => { this.injectInput(1, 4, true); }, 400);
+        setTimeout(() => { this.injectInput(1, 4, false); }, 600);
 
-        // Start for both players after coins
+        // Start for both players after coins (5s total)
         setTimeout(() => {
           if (!this.running) return;
           console.log("[game-runner] ▶️  Auto-continue: pressing START...");
+          this.ensureFocus();
           this.injectInput(1, 5, true);
           this.injectInput(2, 5, true);
           setTimeout(() => {
@@ -311,7 +313,7 @@ export class GameRunner extends EventEmitter {
             this.injectInput(2, 5, false);
             // Restart health monitoring
             this.startMemoryWatcher();
-          }, 200);
+          }, 300);
         }, 5000);
       }, 8000);
     }
@@ -777,63 +779,45 @@ export class GameRunner extends EventEmitter {
 
   /** Inject a keyboard input into RetroArch via xdotool. */
   injectInput(player: number, button: number, pressed: boolean): void {
-    // 🔍 DEBUG: Log every injectInput call
-    console.log(`[game-runner] 🕹️  injectInput P${player} btn=${button} ${pressed ? "DOWN" : "UP"} running=${this.running} system=${this.system}`);
-
-    if (!this.running) {
-      console.warn(`[game-runner] ⚠️  injectInput DROPPED: not running`);
-      return;
-    }
+    if (!this.running) return;
 
     const buttonToRetroarch = getButtonToRetroarch(this.system);
     const retroarchName = buttonToRetroarch[button];
-    if (!retroarchName) {
-      console.warn(`[game-runner] ⚠️  injectInput DROPPED: no retroarch name for btn=${button}`);
-      return;
-    }
+    if (!retroarchName) return;
 
     const keyMap = player === 1 ? XDOTOOL_KEY_MAP : XDOTOOL_KEY_MAP_P2;
     const xdoKey = keyMap[retroarchName];
-    if (!xdoKey) {
-      console.warn(`[game-runner] ⚠️  injectInput DROPPED: no xdotool key for retroarch="${retroarchName}" (P${player})`);
-      return;
-    }
+    if (!xdoKey) return;
 
     const action = pressed ? "keydown" : "keyup";
 
-    // Activate RetroArch window if we have it (ensures it has focus in Xvfb)
-    // We do NOT use --window because that forces XSendEvent which SDL2 ignores.
-    // XTEST (default, without --window) is the reliable path.
-    // Use spawnSync to avoid race condition with the keydown below.
+    // Activate RetroArch window (non-blocking — no --sync).
+    // We focus once per sequence start via ensureFocus(), not on every input.
     if (this.retroarchWindowId) {
-      const r = spawnSync("xdotool", ["windowactivate", "--sync", this.retroarchWindowId], {
+      spawn("xdotool", ["windowactivate", this.retroarchWindowId], {
         env: { ...process.env, DISPLAY: this.display },
         stdio: "ignore",
-        timeout: 200,
       });
-      if (r.status !== 0) {
-        console.warn(`[game-runner] ⚠️  windowactivate failed (exit=${r.status})`);
-      }
     }
 
-    console.log(`[game-runner] 🚀 SPAWN: xdotool ${action} ${xdoKey} (P${player} btn=${button} ra=${retroarchName}) DISPLAY=${this.display} win=${this.retroarchWindowId || "none"}`);
+    console.log(`[game-runner] 🕹️  xdotool ${action} ${xdoKey} (P${player} btn=${button})`);
 
     const proc = spawn("xdotool", [action, xdoKey], {
       env: { ...process.env, DISPLAY: this.display },
-      stdio: ["ignore", "ignore", "pipe"],
+      stdio: "ignore",
     });
-
-    let stderr = "";
-    proc.stderr?.on("data", (d: Buffer) => { stderr += d.toString(); });
 
     proc.on("error", (err) => {
-      console.error(`[game-runner] ❌ xdotool SPAWN error (P${player} btn=${button} key=${xdoKey}):`, err.message);
+      console.error(`[game-runner] ❌ xdotool error (P${player} btn=${button} key=${xdoKey}):`, err.message);
     });
+  }
 
-    proc.on("close", (code) => {
-      if (code !== 0 || stderr) {
-        console.warn(`[game-runner] ⚠️  xdotool exit=${code} stderr="${stderr.trim()}" (P${player} btn=${button} key=${xdoKey})`);
-      }
+  /** Focus the RetroArch window (call once before a key sequence, not per-input). */
+  ensureFocus(): void {
+    if (!this.retroarchWindowId) return;
+    spawn("xdotool", ["windowactivate", "--sync", this.retroarchWindowId], {
+      env: { ...process.env, DISPLAY: this.display },
+      stdio: "ignore",
     });
   }
 
