@@ -3,11 +3,13 @@ import { getDb, ensureUser } from "@/lib/db";
 import { getAuthFromRequest } from "@/lib/auth";
 
 async function getUserId(req: NextRequest, body?: Record<string, unknown>): Promise<{ userId: number; username: string } | null> {
+  // devUserId/devUsername params work in all environments (for testing with ?name=)
+  const devUserId = (body?.devUserId as number) || parseInt(req.nextUrl.searchParams.get("devUserId") || "0", 10);
+  const devUsername = (body?.devUsername as string) || req.nextUrl.searchParams.get("devUsername") || "";
+  if (devUserId && devUsername) return { userId: devUserId, username: devUsername };
+
   const isLocalDev = !process.env.NORTHFLANK_API_KEY;
   if (isLocalDev) {
-    const devUserId = (body?.devUserId as number) || parseInt(req.nextUrl.searchParams.get("devUserId") || "0", 10);
-    const devUsername = (body?.devUsername as string) || req.nextUrl.searchParams.get("devUsername") || "dev";
-    if (devUserId) return { userId: devUserId, username: devUsername };
     return { userId: Math.abs(hash(devUsername || "anon")), username: devUsername || "anonymous" };
   }
   const auth = await getAuthFromRequest(req);

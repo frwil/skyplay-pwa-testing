@@ -44,8 +44,10 @@ export default function DuelPage() {
         }
       } catch { /* not authenticated */ }
 
-      // Auth failed — in local dev, generate a dev identity
-      if (isLocalhost) {
+      // Auth failed — fallback: use ?name= param or dev identity
+      const params = typeof window !== "undefined" ? new URLSearchParams(window.location.search) : null;
+      const nameParam = params?.get("name");
+      if (isLocalhost || nameParam) {
         setIsDevMode(true);
         const ident = getDevIdentity();
         setCurrentUserId(ident.userId);
