@@ -19,7 +19,7 @@ export async function POST(request: NextRequest) {
     const rs = await db.execute({
       sql: `SELECT id, username, role, password_hash
             FROM users
-            WHERE username = ? AND role IN ('admin', 'superadmin')`,
+            WHERE username = ? AND role IN ('admin', 'superadmin', 'user')`,
       args: [username.trim()],
     });
 
