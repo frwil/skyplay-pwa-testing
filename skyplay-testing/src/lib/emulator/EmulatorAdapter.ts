@@ -285,42 +285,6 @@ const BASE_MENU_BUTTONS_P2: KeyMapping = {
   NumpadAdd:   { player: 2, button: 2 }, // P2 SELECT
 };
 
-/** P2 keyboard mappings for cloud gaming (right side of keyboard).
- *  These match the server's XDOTOOL_KEY_MAP_P2 in apps/game-server/src/config.ts
- *  and use non-overlapping keys from P1 (see plan for key layout). */
-const CLOUD_P2_DPAD_NEOGEO: KeyMapping = {
-  // Neo Geo P2 D-Pad: T G F H (proper WASD-like cluster on the right side)
-  // Physical layout:   T(↑), G(↓), F(←), H(→)
-  KeyT: { player: 2, button: 6 },  // UP
-  KeyG: { player: 2, button: 7 },  // DOWN
-  KeyF: { player: 2, button: 8 },  // LEFT
-  KeyH: { player: 2, button: 9 },  // RIGHT
-};
-
-const CLOUD_P2_FACE: KeyMapping = {
-  // P2 face buttons: I K O L (Neo Geo: A=0,B=1,C=2,D=3 / PS1: CROSS=0,CIRCLE=1,SQUARE=2,TRIANGLE=3)
-  KeyI: { player: 2, button: 0 },  // A / CROSS
-  KeyK: { player: 2, button: 1 },  // B / CIRCLE
-  KeyO: { player: 2, button: 2 },  // C / SQUARE
-  KeyL: { player: 2, button: 3 },  // D / TRIANGLE
-};
-
-const CLOUD_P2_SHOULDERS: KeyMapping = {
-  // P2 shoulders: U J Y P (L1=4,R1=5,L2=6,R2=7 — matches PS1 layout)
-  // Note: shares indices with BASE_D_PAD entries; spread order determines precedence
-  KeyU: { player: 2, button: 4 },  // L1
-  KeyJ: { player: 2, button: 5 },  // R1
-  KeyY: { player: 2, button: 6 },  // L2
-  KeyP: { player: 2, button: 7 },  // R2 (was H, now used for D-pad RIGHT)
-};
-
-const CLOUD_P2_MENU: KeyMapping = {
-  // P2 menu: N (START), M (SELECT)
-  // Neo Geo: SELECT=4, START=5 / PS1: SELECT=8, START=9
-  // These indices are system-specific — overridden per system below
-  KeyN: { player: 2, button: 5 },  // START (Neo Geo default)
-  KeyM: { player: 2, button: 4 },  // SELECT (Neo Geo default)
-};
 
 /**
  * Per-system keyboard mappings.
@@ -399,12 +363,7 @@ export const SYSTEM_KEY_MAPS: Record<SystemType, KeyMapping> = {
     Space:      { player: 1, button: 5 },  // Space → START (alt)
     ShiftRight: { player: 1, button: 4 },  // Shift Right → SELECT
     Tab:        { player: 1, button: 4 },  // Tab → SELECT (alt)
-    // P2 cloud gaming (right-side keys)
-    ...CLOUD_P2_DPAD_NEOGEO,
-    ...CLOUD_P2_FACE,
-    // P2 menu (Neo Geo: SELECT=4, START=5)
-    KeyN:        { player: 2, button: 5 },  // P2 START
-    KeyM:        { player: 2, button: 4 },  // P2 SELECT
+    // P2 uses same keys as P1 (each player on own device; CloudAdapter handles routing)
     NumpadEnter: { player: 2, button: 5 },
     NumpadAdd:   { player: 2, button: 4 },
   },
@@ -428,17 +387,7 @@ export const SYSTEM_KEY_MAPS: Record<SystemType, KeyMapping> = {
     Space:      { player: 1, button: 9 },  // Space → START (alt)
     ShiftRight: { player: 1, button: 8 },  // Shift Right → SELECT
     Tab:        { player: 1, button: 8 },  // Tab → SELECT (alt)
-    // P2 cloud gaming (right-side keys)
-    // PS1 P2 D-Pad: T G F H (PS1 D-Pad: UP=10, DOWN=11, LEFT=12, RIGHT=13)
-    KeyT:  { player: 2, button: 10 },  // P2 UP
-    KeyG:  { player: 2, button: 11 },  // P2 DOWN
-    KeyF:  { player: 2, button: 12 },  // P2 LEFT
-    KeyH:  { player: 2, button: 13 },  // P2 RIGHT
-    ...CLOUD_P2_FACE,
-    ...CLOUD_P2_SHOULDERS,
-    // P2 menu (PS1: SELECT=8, START=9)
-    KeyN:        { player: 2, button: 9 },  // P2 START
-    KeyM:        { player: 2, button: 8 },  // P2 SELECT
+    // P2 uses same keys as P1 (each player on own device; CloudAdapter handles routing)
     NumpadEnter: { player: 2, button: 9 },
     NumpadAdd:   { player: 2, button: 8 },
   },
