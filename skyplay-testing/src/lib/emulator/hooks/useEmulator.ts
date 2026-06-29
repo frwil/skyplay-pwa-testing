@@ -90,6 +90,7 @@ export function useEmulator(system: SystemType = "nes") {
   const [romList, setRomList] = useState<RomEntry[]>([]);
   const [duelRoundResult, setDuelRoundResult] = useState<DuelRoundResult | null>(null);
   const [duelMatchResult, setDuelMatchResult] = useState<DuelMatchResult | null>(null);
+  const [duelMatchHistory, setDuelMatchHistory] = useState<DuelMatchResult[]>([]);
   const [duelSessionClosed, setDuelSessionClosed] = useState(false);
   const [rematchRequested, setRematchRequested] = useState(false); // opponent wants rematch
   const [rematchDeclined, setRematchDeclined] = useState(false); // opponent declined
@@ -102,8 +103,10 @@ export function useEmulator(system: SystemType = "nes") {
     },
     onMatchEnd: (winner: number, loser: number, p1Losses: number, p2Losses: number) => {
       console.log(`[useEmulator] 🏁 Match over! P${winner} wins 2-${Math.max(p1Losses, p2Losses)}. P1=${p1Losses} P2=${p2Losses}`);
-      setDuelMatchResult({ winner, loser, p1Losses, p2Losses });
-      setStatus("paused");
+      const result = { winner, loser, p1Losses, p2Losses };
+      setDuelMatchResult(result);
+      setDuelMatchHistory((prev) => [...prev, result]);
+      // Keep status as "running" — game auto-continues
     },
     onRematchStarting: () => {
       console.log("[useEmulator] 🔄 Rematch starting — resetting duel state");
@@ -814,9 +817,16 @@ export function useEmulator(system: SystemType = "nes") {
     isCloud,
     duelRoundResult,
     duelMatchResult,
+    duelMatchHistory,
     duelSessionClosed,
     rematchRequested,
     rematchDeclined,
+    stopDuel: useCallback(() => {
+      const adapter = adapterRef.current;
+      if (adapter instanceof CloudAdapter) {
+        adapter.stopDuel();
+      }
+    }, []),
     requestRematch: useCallback(() => {
       const adapter = adapterRef.current;
       if (adapter instanceof CloudAdapter) {

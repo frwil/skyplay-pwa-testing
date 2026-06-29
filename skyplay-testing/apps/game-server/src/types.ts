@@ -48,6 +48,11 @@ export interface RematchDeclineMessage {
   type: "rematch_decline";
 }
 
+/** A player wants to stop the duel and close the session. */
+export interface StopDuelMessage {
+  type: "stop_duel";
+}
+
 export type ClientMessage =
   | InitMessage
   | JoinMessage
@@ -56,7 +61,8 @@ export type ClientMessage =
   | ControlMessage
   | RematchRequestMessage
   | RematchAcceptMessage
-  | RematchDeclineMessage;
+  | RematchDeclineMessage
+  | StopDuelMessage;
 
 export interface StatusMessage {
   type: "status";

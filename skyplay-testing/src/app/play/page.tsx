@@ -466,6 +466,12 @@ export default function PlayPage() {
 
             <LanguageSwitcher />
             <a
+              href="/login"
+              className="text-xs text-white/40 hover:text-white transition font-medium"
+            >
+              Connexion
+            </a>
+            <a
               href="/"
               className="text-xs text-white/40 hover:text-white transition font-medium flex items-center gap-1"
             >

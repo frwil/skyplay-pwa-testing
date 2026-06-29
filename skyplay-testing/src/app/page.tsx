@@ -151,6 +151,12 @@ export default async function HomePage() {
               ⚔️ Duel
             </a>
             <a
+              href="/login"
+              className="text-xs text-white/40 hover:text-white transition font-medium"
+            >
+              Connexion
+            </a>
+            <a
               href="/admin"
               className="text-xs text-white/40 hover:text-white transition font-medium"
             >

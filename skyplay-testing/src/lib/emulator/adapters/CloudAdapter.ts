@@ -671,6 +671,11 @@ export class CloudAdapter implements EmulatorAdapter {
     this.ws?.send(JSON.stringify({ type: "rematch_decline" }));
   }
 
+  /** Stop the duel entirely — closes the session. */
+  stopDuel(): void {
+    this.ws?.send(JSON.stringify({ type: "stop_duel" }));
+  }
+
   /** Reconnect to a new session (used for rematch transition). */
   async reconnectToNewSession(wsUrl: string, sessionId: string, roomCode: string): Promise<void> {
     console.log(`[Cloud:${this.systemType}] 🔄 Reconnecting to new session ${sessionId}`);

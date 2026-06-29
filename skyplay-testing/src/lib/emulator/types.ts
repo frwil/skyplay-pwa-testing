@@ -120,8 +120,12 @@ export interface EmulatorState {
   isCloud: boolean;
   /** Latest duel round result (null until first KO detected). */
   duelRoundResult: DuelRoundResult | null;
-  /** Final duel match result (null until match is over). */
+  /** Latest duel match result (updated on every match end — continuous play). */
   duelMatchResult: DuelMatchResult | null;
+  /** Cumulative match history for the current session (scoreboard). */
+  duelMatchHistory: DuelMatchResult[];
+  /** Stop the duel and close the session. */
+  stopDuel: () => void;
   /** Request a rematch from the opponent. */
   requestRematch: () => void;
   /** Accept a rematch with new session info (P2 side). */

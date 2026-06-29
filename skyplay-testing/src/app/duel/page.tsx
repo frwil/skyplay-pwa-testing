@@ -117,132 +117,71 @@ export default function DuelPage() {
     setTimeout(() => window.location.reload(), 500);
   }, [emu.exit, lobby.clearChallenge, lobby.joinLobby]);
 
-  // ── Save result + return to lobby ───────────────────────────────
-  const handleSaveAndExit = useCallback(async () => {
-    const result = emu.duelMatchResult;
-    const session = lobby.duelSession;
-    if (!result || !session) return;
+  // ── Toast & auto-save ──────────────────────────────────────────
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
 
-    // Save to DB
-    try {
-      await fetch("/api/duel/result", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          challengeId: session.challengeId,
-          winnerId: result.winner === 1 ? session.player1Id : session.player2Id,
-          loserId: result.loser === 1 ? session.player1Id : session.player2Id,
-          p1Losses: result.p1Losses,
-          p2Losses: result.p2Losses,
-          sessionId: session.sessionId,
-          ...(isDevMode ? { devUserId: currentUserId, devUsername: currentUsername } : {}),
-        }),
-      });
-    } catch (e) {
-      console.error("[Duel] Failed to save result:", e);
-    }
-
-    handleExit();
-  }, [emu.duelMatchResult, lobby.duelSession, handleExit, isDevMode, currentUserId, currentUsername]);
-
-  // ── Rematch ─────────────────────────────────────────────────────
-  const [rematchLoading, setRematchLoading] = useState(false);
-
-  const handleRematch = useCallback(async () => {
-    const result = emu.duelMatchResult;
-    const session = lobby.duelSession;
-    if (!result || !session) return;
-
-    setRematchLoading(true);
-    // Save to DB first
-    try {
-      await fetch("/api/duel/result", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          challengeId: session.challengeId,
-          winnerId: result.winner === 1 ? session.player1Id : session.player2Id,
-          loserId: result.loser === 1 ? session.player1Id : session.player2Id,
-          p1Losses: result.p1Losses,
-          p2Losses: result.p2Losses,
-          sessionId: session.sessionId,
-          ...(isDevMode ? { devUserId: currentUserId, devUsername: currentUsername } : {}),
-        }),
-      });
-    } catch (e) {
-      console.error("[Duel] Failed to save result:", e);
-    }
-
-    // Request rematch via WebSocket → opponent gets rematch_requested
-    emu.requestRematch();
-  }, [emu.duelMatchResult, lobby.duelSession, emu.requestRematch, isDevMode, currentUserId, currentUsername]);
-
-  // ── P2: Accept rematch ──────────────────────────────────────────
-  const handleAcceptRematch = useCallback(async () => {
-    const result = emu.duelMatchResult;
-    const session = lobby.duelSession;
-    if (!result || !session) return;
-
-    setRematchLoading(true);
-    // Save result to DB
-    try {
-      await fetch("/api/duel/result", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          challengeId: session.challengeId,
-          winnerId: result.winner === 1 ? session.player1Id : session.player2Id,
-          loserId: result.loser === 1 ? session.player1Id : session.player2Id,
-          p1Losses: result.p1Losses,
-          p2Losses: result.p2Losses,
-          sessionId: session.sessionId,
-          ...(isDevMode ? { devUserId: currentUserId, devUsername: currentUsername } : {}),
-        }),
-      });
-    } catch (e) {
-      console.error("[Duel] Failed to save result:", e);
-    }
-
-    // Call rematch API → creates new challenge + session
-    try {
-      const res = await fetch("/api/duel/rematch", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          challengeId: session.challengeId,
-          winnerId: result.winner === 1 ? session.player1Id : session.player2Id,
-          loserId: result.loser === 1 ? session.player1Id : session.player2Id,
-          p1Losses: result.p1Losses,
-          p2Losses: result.p2Losses,
-          player1Id: session.player1Id,
-          player2Id: session.player2Id,
-          sessionId: session.sessionId,
-          ...(isDevMode ? { devUserId: currentUserId, devUsername: currentUsername } : {}),
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Rematch failed");
-
-      // Send new session info to P1 via WebSocket
-      const { sessionId: newSessionId, wsUrl: newWsUrl, roomCode: newRoomCode } = data.session;
-      emu.acceptRematch(newSessionId, newWsUrl, newRoomCode);
-    } catch (e) {
-      console.error("[Duel] Rematch API failed:", e);
-      setRematchLoading(false);
-    }
-  }, [emu.duelMatchResult, lobby.duelSession, emu.acceptRematch, isDevMode, currentUserId, currentUsername]);
-
-  // ── P2: Decline rematch ─────────────────────────────────────────
-  const handleDeclineRematch = useCallback(() => {
-    emu.declineRematch();
-    handleExit();
-  }, [emu.declineRematch, handleExit]);
-
-  // ── P1: Handle rematch declined by opponent ────────────────────
+  // Auto-save on each match end + show toast
   useEffect(() => {
-    if (!emu.rematchDeclined) return;
+    if (!emu.duelMatchResult || emu.duelMatchHistory.length === 0) return;
+    const result = emu.duelMatchResult;
+    const session = lobby.duelSession;
+    if (!session) return;
+
+    // Count wins for scoreboard
+    const p1Wins = emu.duelMatchHistory.filter((r) => r.winner === 1).length;
+    const p2Wins = emu.duelMatchHistory.filter((r) => r.winner === 2).length;
+
+    // Show toast
+    const winnerLabel = result.winner === (session.player1Id === currentUserId ? 1 : 2) ? "Vous" : "Adversaire";
+    setToastMessage(`🏆 ${winnerLabel} gagne ce match ! Score: ${p1Wins} - ${p2Wins}`);
+    const timer = setTimeout(() => setToastMessage(null), 4000);
+
+    // Save result to DB
+    fetch("/api/duel/result", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        challengeId: session.challengeId,
+        winnerId: result.winner === 1 ? session.player1Id : session.player2Id,
+        loserId: result.loser === 1 ? session.player1Id : session.player2Id,
+        p1Losses: result.p1Losses,
+        p2Losses: result.p2Losses,
+        sessionId: session.sessionId,
+        markCompleted: false,
+        ...(isDevMode ? { devUserId: currentUserId, devUsername: currentUsername } : {}),
+      }),
+    }).catch((e) => console.error("[Duel] Failed to save result:", e));
+
+    return () => clearTimeout(timer);
+  }, [emu.duelMatchHistory.length]);
+
+  // ── Stop duel ────────────────────────────────────────────────────
+  const handleStopDuel = useCallback(async () => {
+    const session = lobby.duelSession;
+    if (session) {
+      // Mark challenge as completed
+      try {
+        await fetch("/api/duel/result", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            challengeId: session.challengeId,
+            winnerId: 0, // Not a real result, just marking completed
+            loserId: 0,
+            p1Losses: 0,
+            p2Losses: 0,
+            sessionId: session.sessionId,
+            markCompleted: true,
+            ...(isDevMode ? { devUserId: currentUserId, devUsername: currentUsername } : {}),
+          }),
+        });
+      } catch (e) {
+        console.error("[Duel] Failed to mark challenge completed:", e);
+      }
+    }
+    emu.stopDuel();
     handleExit();
-  }, [emu.rematchDeclined, handleExit]);
+  }, [lobby.duelSession, emu.stopDuel, handleExit, isDevMode, currentUserId, currentUsername]);
 
   // ── Session closed by server → save + reload ──────────────────
   useEffect(() => {
@@ -380,6 +319,9 @@ export default function DuelPage() {
           </div>
 
           <div className="flex items-center gap-4">
+            <a href="/login" className="text-xs text-white/40 hover:text-white transition font-medium">
+              Connexion
+            </a>
             <a href="/play" className="text-xs text-white/40 hover:text-white transition font-medium flex items-center gap-1">
               <ArrowLeft className="w-3 h-3" />
               Back to Play
@@ -667,191 +609,92 @@ export default function DuelPage() {
           )}
         </div>
 
-        {/* ── Match Result Overlay ─────────────────────────────── */}
-        {gameActive && emu.duelMatchResult && !emu.rematchRequested && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm">
+        {/* ── Toast Notification ─────────────────────────────────── */}
+        {toastMessage && (
+          <div className="fixed top-20 left-1/2 -translate-x-1/2 z-50 pointer-events-none">
             <div
-              className="rounded-3xl border p-8 text-center max-w-md mx-4 animate-in zoom-in-95"
+              className="rounded-xl px-5 py-3 text-sm font-bold animate-in fade-in zoom-in-95"
               style={{
                 backgroundColor: "rgba(13,27,46,0.95)",
-                borderColor: emu.duelMatchResult.winner ===
-                  (lobby.duelSession?.player1Id === currentUserId ? 1 : 2)
-                  ? "rgba(74,222,128,0.4)"
-                  : "rgba(253,46,95,0.4)",
-                boxShadow: emu.duelMatchResult.winner ===
-                  (lobby.duelSession?.player1Id === currentUserId ? 1 : 2)
-                  ? "0 0 60px rgba(74,222,128,0.3)"
-                  : "0 0 60px rgba(253,46,95,0.3)",
+                border: "1px solid rgba(241,91,181,0.4)",
+                boxShadow: "0 0 30px rgba(241,91,181,0.3)",
+                color: "white",
               }}
             >
-              {/* Trophy / Skull icon */}
-              <div className="text-6xl mb-4">
-                {emu.duelMatchResult.winner ===
-                  (lobby.duelSession?.player1Id === currentUserId ? 1 : 2)
-                  ? "🏆"
-                  : "💀"}
-              </div>
-
-              <h2 className="text-2xl font-black text-white mb-2">
-                {emu.duelMatchResult.winner ===
-                  (lobby.duelSession?.player1Id === currentUserId ? 1 : 2)
-                  ? "Victoire !"
-                  : "Défaite..."}
-              </h2>
-
-              <p className="text-sm text-white/40 mb-6">
-                {emu.duelMatchResult.winner ===
-                  (lobby.duelSession?.player1Id === currentUserId ? 1 : 2)
-                  ? "Vous avez gagné le duel !"
-                  : "Vous avez perdu le duel."}
-              </p>
-
-              {/* Score */}
-              <div className="flex items-center justify-center gap-4 mb-6">
-                <div className="text-center">
-                  <div className="text-xs text-white/30 mb-1">P1</div>
-                  <div
-                    className="text-3xl font-black"
-                    style={{
-                      color: emu.duelMatchResult.winner === 1 ? "#4ade80" : "#fd2e5f",
-                    }}
-                  >
-                    {emu.duelMatchResult.p1Losses >= 2 ? "💀" : "👑"}
-                  </div>
-                </div>
-                <div className="text-2xl font-black text-white/20">vs</div>
-                <div className="text-center">
-                  <div className="text-xs text-white/30 mb-1">P2</div>
-                  <div
-                    className="text-3xl font-black"
-                    style={{
-                      color: emu.duelMatchResult.winner === 2 ? "#4ade80" : "#fd2e5f",
-                    }}
-                  >
-                    {emu.duelMatchResult.p2Losses >= 2 ? "💀" : "👑"}
-                  </div>
-                </div>
-              </div>
-
-              <p className="text-xs text-white/20 mb-6">
-                Score final : P1 {emu.duelMatchResult.p1Losses} - P2 {emu.duelMatchResult.p2Losses}
-              </p>
-
-              <div className="flex flex-col gap-3">
-                <button
-                  onClick={handleRematch}
-                  disabled={rematchLoading}
-                  className="px-6 py-3 rounded-xl text-sm font-bold transition-all hover:scale-105 disabled:opacity-40 disabled:cursor-not-allowed"
-                  style={{
-                    backgroundColor: "rgba(241,91,181,0.15)",
-                    border: "1px solid rgba(241,91,181,0.35)",
-                    color: "#f15bb5",
-                  }}
-                >
-                  ⚔️ Prendre sa revanche
-                </button>
-                <button
-                  onClick={handleSaveAndExit}
-                  disabled={rematchLoading}
-                  className="px-6 py-3 rounded-xl text-sm font-bold transition-all hover:scale-105 disabled:opacity-40 disabled:cursor-not-allowed"
-                  style={{
-                    backgroundColor: "rgba(255,255,255,0.08)",
-                    border: "1px solid rgba(255,255,255,0.15)",
-                    color: "white",
-                  }}
-                >
-                  Retour au Lobby
-                </button>
-              </div>
+              {toastMessage}
             </div>
           </div>
         )}
 
-        {/* ── Rematch Requested Overlay (P2 sees accept/decline) ── */}
-        {emu.rematchRequested && emu.duelMatchResult && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm">
-            <div
-              className="rounded-3xl border p-8 text-center max-w-md mx-4"
-              style={{
-                backgroundColor: "rgba(13,27,46,0.95)",
-                borderColor: "rgba(241,91,181,0.4)",
-                boxShadow: "0 0 60px rgba(241,91,181,0.3)",
-              }}
-            >
-              <div className="text-5xl mb-4">⚔️</div>
-              <h2 className="text-xl font-black text-white mb-2">Revanche demandée !</h2>
-              <p className="text-sm text-white/40 mb-6">
-                Votre adversaire veut prendre sa revanche.
-              </p>
-              <div className="flex flex-col gap-3">
-                <button
-                  onClick={handleAcceptRematch}
-                  disabled={rematchLoading}
-                  className="px-6 py-3 rounded-xl text-sm font-bold transition-all hover:scale-105 disabled:opacity-40 disabled:cursor-not-allowed"
-                  style={{
-                    backgroundColor: "rgba(74,222,128,0.15)",
-                    border: "1px solid rgba(74,222,128,0.35)",
-                    color: "#4ade80",
-                  }}
-                >
-                  {rematchLoading ? (
-                    <span className="flex items-center justify-center gap-2">
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                      Création de la session...
+        {/* ── Scoreboard (overlaid on canvas) ────────────────────── */}
+        {gameActive && emu.duelMatchHistory.length > 0 && (() => {
+          const p1Wins = emu.duelMatchHistory.filter((r) => r.winner === 1).length;
+          const p2Wins = emu.duelMatchHistory.filter((r) => r.winner === 2).length;
+          const lastMatch = emu.duelMatchHistory[emu.duelMatchHistory.length - 1];
+          const isP1 = lobby.duelSession?.player1Id === currentUserId;
+
+          return (
+            <div className="absolute top-12 left-1/2 -translate-x-1/2 z-25">
+              <div
+                className="rounded-xl px-4 py-2 flex items-center gap-3 text-xs font-bold whitespace-nowrap"
+                style={{
+                  backgroundColor: "rgba(0,0,0,0.75)",
+                  backdropFilter: "blur(8px)",
+                  border: "1px solid rgba(255,255,255,0.12)",
+                }}
+              >
+                <span>
+                  🏆{" "}
+                  <span style={{ color: isP1 ? "#4ade80" : "#f15bb5" }}>
+                    {isP1 ? "Vous" : "P1"}
+                  </span>{" "}
+                  <span style={{ color: "#4ade80" }}>{p1Wins}</span>
+                </span>
+                <span className="text-white/30 font-black">-</span>
+                <span>
+                  <span style={{ color: "#f15bb5" }}>{p2Wins}</span>{" "}
+                  <span style={{ color: isP1 ? "#f15bb5" : "#4ade80" }}>
+                    {isP1 ? "P2" : "Vous"}
+                  </span>
+                </span>
+                {lastMatch && (
+                  <>
+                    <span className="text-white/10">|</span>
+                    <span className="text-white/35">
+                      Dernier: {lastMatch.winner === 1 ? "P1" : "P2"}
+                      {" ("}{lastMatch.p1Losses}-{lastMatch.p2Losses}{")"}
                     </span>
-                  ) : (
-                    "✅ Accepter"
-                  )}
-                </button>
+                  </>
+                )}
                 <button
-                  onClick={handleDeclineRematch}
-                  disabled={rematchLoading}
-                  className="px-6 py-3 rounded-xl text-sm font-bold transition-all hover:scale-105 disabled:opacity-40 disabled:cursor-not-allowed"
+                  onClick={handleStopDuel}
+                  className="pointer-events-auto ml-1 px-3 py-1 rounded-lg text-[10px] font-bold transition-all hover:scale-105"
                   style={{
-                    backgroundColor: "rgba(253,46,95,0.1)",
-                    border: "1px solid rgba(253,46,95,0.25)",
-                    color: "rgba(253,46,95,0.8)",
+                    backgroundColor: "rgba(253,46,95,0.2)",
+                    border: "1px solid rgba(253,46,95,0.4)",
+                    color: "#fd2e5f",
                   }}
                 >
-                  ❌ Refuser
+                  Stop
                 </button>
               </div>
             </div>
-          </div>
-        )}
+          );
+        })()}
 
-        {/* ── Waiting for Rematch Response (P1 sees this) ── */}
-        {rematchLoading && !emu.rematchRequested && emu.duelMatchResult && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm pointer-events-none">
-            <div
-              className="rounded-3xl border p-8 text-center max-w-md mx-4"
-              style={{
-                backgroundColor: "rgba(13,27,46,0.95)",
-                borderColor: "rgba(241,91,181,0.3)",
-              }}
-            >
-              <Loader2 className="w-10 h-10 mx-auto mb-4 animate-spin" style={{ color: "#f15bb5" }} />
-              <h2 className="text-lg font-black text-white mb-2">En attente...</h2>
-              <p className="text-sm text-white/40">
-                En attente de la réponse de l&apos;adversaire...
-              </p>
-            </div>
-          </div>
-        )}
-
-        {/* ── Exit Button ────────────────────────────────────────── */}
+        {/* ── Stop Button ────────────────────────────────────────── */}
         {gameActive && (
           <div className="flex justify-center mt-4">
             <button
-              onClick={handleExit}
-              className="px-5 py-2 rounded-xl text-xs font-bold transition-colors"
+              onClick={handleStopDuel}
+              className="px-5 py-2 rounded-xl text-xs font-bold transition-all hover:scale-105"
               style={{
-                backgroundColor: "rgba(253,46,95,0.08)",
-                border: "1px solid rgba(253,46,95,0.2)",
-                color: "rgba(253,46,95,0.7)",
+                backgroundColor: "rgba(253,46,95,0.15)",
+                border: "1px solid rgba(253,46,95,0.35)",
+                color: "#fd2e5f",
               }}
             >
-              Leave Game
+              ⏹ Stop Duel
             </button>
           </div>
         )}

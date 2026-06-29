@@ -276,7 +276,44 @@ export class GameRunner extends EventEmitter {
       const loser = winner === 1 ? 2 : 1;
       console.log(`[game-runner] 🧠 MATCH OVER! Winner: P${winner} Score: P1=${this.p1Losses} P2=${this.p2Losses}`);
       this.emit("matchEnd", { winner, loser, p1Losses: this.p1Losses, p2Losses: this.p2Losses });
-      this.stopHealthWatcher();
+
+      // Auto-continue: reset state after 8s, insert coins + start
+      setTimeout(() => {
+        if (!this.running) return;
+        console.log("[game-runner] 🔄 Auto-continue: resetting for new match...");
+        this.p1Losses = 0;
+        this.p2Losses = 0;
+        this.matchEnded = false;
+        this.koDetected = false;
+        this.koCooldownFrames = 0;
+        this.healthStableFrames = 0;
+        this.healthDetectionArmed = false;
+        this.previousP1Health = -1;
+        this.previousP2Health = -1;
+
+        // Insert 2 coins via P1
+        console.log("[game-runner] 🪙 Auto-continue: inserting coins...");
+        this.injectInput(1, 4, true);
+        setTimeout(() => { this.injectInput(1, 4, false); }, 150);
+        setTimeout(() => {
+          this.injectInput(1, 4, true);
+          setTimeout(() => { this.injectInput(1, 4, false); }, 150);
+        }, 300);
+
+        // Start for both players after coins
+        setTimeout(() => {
+          if (!this.running) return;
+          console.log("[game-runner] ▶️  Auto-continue: pressing START...");
+          this.injectInput(1, 5, true);
+          this.injectInput(2, 5, true);
+          setTimeout(() => {
+            this.injectInput(1, 5, false);
+            this.injectInput(2, 5, false);
+            // Restart health monitoring
+            this.startMemoryWatcher();
+          }, 200);
+        }, 5000);
+      }, 8000);
     }
 
     // Update previous values
@@ -309,7 +346,12 @@ export class GameRunner extends EventEmitter {
 
   /** Start the round detection polling (kept for API compatibility, actual detection is ffmpeg-driven). */
   startMemoryWatcher(): void {
-    if (this.healthPollEnabled || this.matchEnded) return;
+    if (this.matchEnded) return;
+    // If already polling, clear old timer before restarting
+    if (this.healthPollTimer) {
+      clearInterval(this.healthPollTimer);
+      this.healthPollTimer = null;
+    }
     this.healthPollEnabled = true;
     console.log("[game-runner] 🧠 Round detection activated (screenshot-based)");
 

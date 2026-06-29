@@ -112,6 +112,11 @@ function handleMessage(ws: WebSocket, msg: ClientMessage, sessionId: string): vo
       handleRematchDecline(sessionId);
       break;
 
+    case "stop_duel":
+      logMsg("stop_duel");
+      stopSession(sessionId);
+      break;
+
     case "ping":
       // Too frequent to log
       handlePing(ws, msg.t);
@@ -253,11 +258,7 @@ runner.on("frame", (nalUnit: Buffer, width: number, height: number) => {
       p1Losses: data.p1Losses,
       p2Losses: data.p2Losses,
     });
-    // Auto-stop the game session after 30s to free resources
-    setTimeout(() => {
-      console.log(`[ws] ⏰ Auto-stopping session ${msg.sessionId} after match end`);
-      stopSession(msg.sessionId);
-    }, 30000);
+    // Game continues indefinitely — no auto-stop. Players use "stop_duel" to end.
   });
 
   // Start the game

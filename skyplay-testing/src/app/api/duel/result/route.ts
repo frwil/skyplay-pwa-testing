@@ -55,27 +55,22 @@ export async function POST(req: NextRequest) {
     const system = (chRs.rows[0]?.system as string) || "neogeo";
     const rom = (chRs.rows[0]?.rom as string) || "kof98.zip";
 
-    // Check if result already saved (idempotent — both players may save on session close)
-    const existingRs = await db.execute({
-      sql: "SELECT id FROM duel_results WHERE challenge_id = ? LIMIT 1",
-      args: [challengeId],
+    // Always insert — multiple results per challenge for continuous play
+    await db.execute({
+      sql: `INSERT INTO duel_results (challenge_id, winner_id, loser_id, p1_losses, p2_losses, system, rom, session_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      args: [challengeId, winnerId, loserId, p1Losses, p2Losses, system, rom, sessionId || null],
     });
-    if (existingRs.rows.length > 0) {
-      console.log(`[duel/result] Result already saved for challenge #${challengeId}, skipping insert`);
-    } else {
-      // Save result
+    console.log(`[duel/result] Saved result: challenge=${challengeId} winner=${winnerId} (P1=${p1Losses}-P2=${p2Losses})`);
+
+    // Mark challenge as completed only when the session is explicitly stopped
+    // (not on every match — continuous play means N matches per challenge)
+    if (body.markCompleted) {
       await db.execute({
-        sql: `INSERT INTO duel_results (challenge_id, winner_id, loser_id, p1_losses, p2_losses, system, rom, session_id)
-              VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-        args: [challengeId, winnerId, loserId, p1Losses, p2Losses, system, rom, sessionId || null],
+        sql: "UPDATE duel_challenges SET status = 'completed' WHERE id = ?",
+        args: [challengeId],
       });
     }
-
-    // Mark challenge as completed
-    await db.execute({
-      sql: "UPDATE duel_challenges SET status = 'completed' WHERE id = ?",
-      args: [challengeId],
-    });
 
     // Reset both players' lobby status to waiting
     await db.execute({
