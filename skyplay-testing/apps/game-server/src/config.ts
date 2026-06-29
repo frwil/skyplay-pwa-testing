@@ -91,11 +91,11 @@ export const XDOTOOL_KEY_MAP_P2: Record<string, string> = {
   l: "u",       // P2 L → U key
   r: "j",       // P2 R → J key
   l2: "y",      // P2 L2 → Y key
-  r2: "h",      // P2 R2 → H key
+  r2: "p",      // P2 R2 → P key (was H, now reused for D-pad RIGHT)
   up: "t",      // P2 Up → T key
   down: "g",    // P2 Down → G key
   left: "f",    // P2 Left → F key
-  right: "r",   // P2 Right → R key
+  right: "h",   // P2 Right → H key (WASD-like cluster: T/G/F/H)
   start: "n",   // P2 Start → N key
   select: "m",  // P2 Select → M key
 };
@@ -127,7 +127,7 @@ function xdotoolToRetroarchKey(xdo: string): string | null {
   const map: Record<string, string> = {
     x: "x", z: "z", c: "c", v: "v", a: "a", s: "s",
     i: "i", k: "k", o: "o", l: "l", u: "u", j: "j",
-    y: "y", h: "h", t: "t", g: "g", f: "f", r: "r",
+    y: "y", h: "h", t: "t", g: "g", f: "f", r: "r", p: "p",
     n: "n", m: "m",
     Up: "up", Down: "down", Left: "left", Right: "right",
     Return: "enter", Shift_R: "rshift",

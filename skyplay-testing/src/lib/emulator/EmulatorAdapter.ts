@@ -289,11 +289,12 @@ const BASE_MENU_BUTTONS_P2: KeyMapping = {
  *  These match the server's XDOTOOL_KEY_MAP_P2 in apps/game-server/src/config.ts
  *  and use non-overlapping keys from P1 (see plan for key layout). */
 const CLOUD_P2_DPAD_NEOGEO: KeyMapping = {
-  // Neo Geo P2 D-Pad: T G F R (Neo Geo button indices: UP=6, DOWN=7, LEFT=8, RIGHT=9)
+  // Neo Geo P2 D-Pad: T G F H (proper WASD-like cluster on the right side)
+  // Physical layout:   T(↑), G(↓), F(←), H(→)
   KeyT: { player: 2, button: 6 },  // UP
   KeyG: { player: 2, button: 7 },  // DOWN
   KeyF: { player: 2, button: 8 },  // LEFT
-  KeyR: { player: 2, button: 9 },  // RIGHT
+  KeyH: { player: 2, button: 9 },  // RIGHT
 };
 
 const CLOUD_P2_FACE: KeyMapping = {
@@ -305,12 +306,12 @@ const CLOUD_P2_FACE: KeyMapping = {
 };
 
 const CLOUD_P2_SHOULDERS: KeyMapping = {
-  // P2 shoulders: U J Y H (L1=4,R1=5,L2=6,R2=7 — matches PS1 layout)
+  // P2 shoulders: U J Y P (L1=4,R1=5,L2=6,R2=7 — matches PS1 layout)
   // Note: shares indices with BASE_D_PAD entries; spread order determines precedence
   KeyU: { player: 2, button: 4 },  // L1
   KeyJ: { player: 2, button: 5 },  // R1
   KeyY: { player: 2, button: 6 },  // L2
-  KeyH: { player: 2, button: 7 },  // R2
+  KeyP: { player: 2, button: 7 },  // R2 (was H, now used for D-pad RIGHT)
 };
 
 const CLOUD_P2_MENU: KeyMapping = {
@@ -428,11 +429,11 @@ export const SYSTEM_KEY_MAPS: Record<SystemType, KeyMapping> = {
     ShiftRight: { player: 1, button: 8 },  // Shift Right → SELECT
     Tab:        { player: 1, button: 8 },  // Tab → SELECT (alt)
     // P2 cloud gaming (right-side keys)
-    // PS1 P2 D-Pad: T G F R (PS1 D-Pad: UP=10, DOWN=11, LEFT=12, RIGHT=13)
+    // PS1 P2 D-Pad: T G F H (PS1 D-Pad: UP=10, DOWN=11, LEFT=12, RIGHT=13)
     KeyT:  { player: 2, button: 10 },  // P2 UP
     KeyG:  { player: 2, button: 11 },  // P2 DOWN
     KeyF:  { player: 2, button: 12 },  // P2 LEFT
-    KeyR:  { player: 2, button: 13 },  // P2 RIGHT
+    KeyH:  { player: 2, button: 13 },  // P2 RIGHT
     ...CLOUD_P2_FACE,
     ...CLOUD_P2_SHOULDERS,
     // P2 menu (PS1: SELECT=8, START=9)
