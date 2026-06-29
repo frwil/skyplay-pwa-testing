@@ -42,7 +42,10 @@ export function useKeyboard(
 
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
     if (!enabledRef.current) return;
-    const mapping = keyMap[e.code];
+    // Use e.key for single-char keys (layout-aware: AZERTY/QWERTY compatible).
+    // Fall back to e.code for special keys (ArrowUp, Enter, ShiftRight, etc.).
+    const eKey = e.key.length === 1 ? e.key.toLowerCase() : null;
+    const mapping = (eKey && keyMap[eKey]) ?? keyMap[e.code];
     if (!mapping) return;
 
     e.preventDefault();
@@ -66,7 +69,8 @@ export function useKeyboard(
 
   const handleKeyUp = useCallback((e: KeyboardEvent) => {
     if (!enabledRef.current) return;
-    const mapping = keyMap[e.code];
+    const eKey = e.key.length === 1 ? e.key.toLowerCase() : null;
+    const mapping = (eKey && keyMap[eKey]) ?? keyMap[e.code];
     if (!mapping) return;
 
     e.preventDefault();
