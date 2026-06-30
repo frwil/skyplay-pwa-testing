@@ -44,7 +44,8 @@ export class GameRunner extends EventEmitter {
   private videoBuffer = Buffer.alloc(0);
   private audioBuffer = Buffer.alloc(0);
   private codecConfigSent = false;
-  private audioPacketsSkipped = 0; // Skip OpusHead + OpusTags from FFmpeg muxer
+  private audioPacketsSkipped = 0; // Skip OpusHead + OpusTags Ogg pages
+  private ongoingOpusPacket: Buffer[] = []; // Cross-page Opus packet assembly
   private retroarchWindowId: string | null = null;
   private configPath: string | null = null;
 
@@ -834,27 +835,43 @@ export class GameRunner extends EventEmitter {
       }
 
       // ── Extract raw Opus packets from Ogg segments ──
+      // header_type bit 0 (0x01) = continuation of packet from previous page
+      const headerType = this.audioBuffer[5];
+      if (!(headerType & 0x01)) {
+        // No continuation — flush any stale partial packet (shouldn't happen)
+        if (this.ongoingOpusPacket.length > 0) {
+          console.warn("[game-runner] Flushing stale partial Opus packet (missing continuation flag)");
+          const stale = Buffer.concat(this.ongoingOpusPacket);
+          if (stale.length > 0) this.emit("audio", stale);
+          this.ongoingOpusPacket = [];
+        }
+      }
+
       let cursor = 27;
-      const packetParts: Buffer[] = [];
 
       for (let i = 0; i < numSegments; i++) {
         const segLen = this.audioBuffer[cursor];
         cursor++;
 
         if (segLen > 0) {
-          packetParts.push(this.audioBuffer.subarray(cursor, cursor + segLen));
+          this.ongoingOpusPacket.push(
+            Buffer.from(this.audioBuffer.subarray(cursor, cursor + segLen))
+          );
         }
         cursor += segLen;
 
         // A segment shorter than 255 marks the end of an Opus packet.
-        // 255 means the packet continues into the next segment(s).
+        // 255 means the packet continues into the next segment (or next page).
         if (segLen < 255) {
-          if (packetParts.length > 0) {
-            const opusPacket = packetParts.length === 1
-              ? packetParts[0]
-              : Buffer.concat(packetParts);
-            this.emit("audio", opusPacket);
-            packetParts.length = 0;
+          if (this.ongoingOpusPacket.length > 0) {
+            const opusPacket = this.ongoingOpusPacket.length === 1
+              ? this.ongoingOpusPacket[0]
+              : Buffer.concat(this.ongoingOpusPacket);
+            // Validate TOC byte before emitting
+            if (opusPacket.length > 0 && ((opusPacket[0] >> 3) & 0x1f) <= 15) {
+              this.emit("audio", opusPacket);
+            }
+            this.ongoingOpusPacket = [];
           }
         }
       }

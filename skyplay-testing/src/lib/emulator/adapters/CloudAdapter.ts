@@ -299,7 +299,6 @@ export class CloudAdapter implements EmulatorAdapter {
 
   private async initAudioDecoder(config: { codec: string; sampleRate: number; channels: number }): Promise<void> {
     try {
-      // Toujours utiliser 48000Hz pour l'AudioContext Opus
       if (!this.audioCtx) {
         this.audioCtx = new AudioContext({ sampleRate: 48000 });
       }
@@ -311,12 +310,10 @@ export class CloudAdapter implements EmulatorAdapter {
             return;
           }
           try {
-            // Vérifier que les données audio sont valides
             if (data.numberOfFrames === 0 || data.numberOfChannels === 0) {
               data.close();
               return;
             }
-            
             const buf = this.audioCtx.createBuffer(
               data.numberOfChannels,
               data.numberOfFrames,
@@ -340,41 +337,55 @@ export class CloudAdapter implements EmulatorAdapter {
           }
         },
         error: (err) => {
-          console.error(`[Cloud:${this.systemType}] AudioDecoder error:`, err);
+          console.error(`[Cloud:${this.systemType}] AudioDecoder error:`, err, "— will re-init");
           this.audioDecoderReady = false;
           try { this.audioDecoder?.close(); } catch { /* ok */ }
           this.audioDecoder = null;
+          // Discard stale pending chunks — they belong to the dead decoder
+          this.pendingAudioChunks = [];
+          // Attempt re-initialization
+          this.initAudioDecoder(config);
         },
       };
 
-      const support = await AudioDecoder.isConfigSupported({
+      // Build OpusHead description BEFORE calling isConfigSupported
+      // so the browser sees the exact description we'll use.
+      const opusHead = this.buildOpusHead(config.channels, 48000);
+
+      const requestedConfig: AudioDecoderConfig = {
         codec: config.codec,
-        sampleRate: config.sampleRate,
+        sampleRate: 48000,
         numberOfChannels: config.channels,
-      });
+        description: opusHead as BufferSource,
+      };
+
+      const support = await AudioDecoder.isConfigSupported(requestedConfig);
 
       if (!support.supported) {
-        console.warn(`[Cloud:${this.systemType}] Opus codec not supported`);
+        console.warn(`[Cloud:${this.systemType}] AudioDecoder config NOT supported:`,
+          JSON.stringify({ codec: config.codec, sampleRate: 48000, channels: config.channels }));
         return;
       }
 
+      // ⚠️ Use the config returned by the browser — it may have normalized
+      // the codec string or other fields. Passing our own config to
+      // configure() after isConfigSupported() is a known footgun.
       this.audioDecoder = new AudioDecoder(init);
-      const opusHead = this.buildOpusHead(config.channels, 48000); // Forcer 48000
-      this.audioDecoder.configure({
-        codec: config.codec,
-        sampleRate: 48000, // Forcer 48000 Hz (standard Opus)
-        numberOfChannels: config.channels,
-        description: opusHead,
-      });
+      this.audioDecoder.configure(support.config!);
       this.audioDecoderReady = true;
 
+      console.log(`[Cloud:${this.systemType}] AudioDecoder ready:`,
+        `codec=${support.config?.codec ?? config.codec}`,
+        `${support.config?.numberOfChannels ?? config.channels}ch`,
+        `${support.config?.sampleRate ?? 48000}Hz`);
+
+      // Flush pending chunks
       if (this.audioDecoder.state === "configured") {
         for (const chunk of this.pendingAudioChunks) {
           try { this.audioDecoder.decode(chunk); } catch { break; }
         }
       }
       this.pendingAudioChunks = [];
-      console.log(`[Cloud:${this.systemType}] AudioDecoder ready: Opus 48000Hz ${config.channels}ch`);
     } catch (err) {
       console.error(`[Cloud:${this.systemType}] Failed to init AudioDecoder:`, err);
     }
@@ -562,6 +573,18 @@ export class CloudAdapter implements EmulatorAdapter {
 
       const opusData = new Uint8Array(data, AUDIO_HEADER_SIZE, opusLength);
       this.audioFrameCount++;
+
+      // Validate Opus TOC byte — must be present and have a valid config field
+      // TOC byte structure: [config(5 bits)|s(1 bit)|c(2 bits)]
+      // config=0 (SILK NB) through config=15 (CELT WB) are all valid
+      if (opusData.length < 1) return;
+      const toc = opusData[0];
+      const tocConfig = (toc >> 3) & 0x1f;
+      if (tocConfig > 15) {
+        console.warn(`[Cloud:${this.systemType}] Bad Opus TOC: config=${tocConfig} — dropping`);
+        return;
+      }
+
       const chunk = new EncodedAudioChunk({
         type: "key",
         timestamp: this.audioFrameCount * 20000,
@@ -571,7 +594,16 @@ export class CloudAdapter implements EmulatorAdapter {
 
       if (this.audioDecoderReady && this.audioDecoder && this.audioDecoder.state === "configured") {
         if (this.audioDecoder.decodeQueueSize < MAX_DECODE_QUEUE) {
-          this.audioDecoder.decode(chunk);
+          try {
+            this.audioDecoder.decode(chunk);
+          } catch (err) {
+            console.error(`[Cloud:${this.systemType}] Decode threw:`, err);
+            // Reset decoder on synchronous decode failure
+            this.audioDecoderReady = false;
+            try { this.audioDecoder?.close(); } catch { /* ok */ }
+            this.audioDecoder = null;
+            this.pendingAudioChunks = [];
+          }
         }
       } else {
         this.pendingAudioChunks.push(chunk);
