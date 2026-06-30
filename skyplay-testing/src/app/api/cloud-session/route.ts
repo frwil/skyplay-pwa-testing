@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { jwtVerify } from "jose";
-import { roomCodeToSession, generateRoomCode } from "./room-codes";
+import { setRoomCode, generateRoomCode } from "./room-codes";
 
 /**
  * POST /api/cloud-session
@@ -77,7 +77,7 @@ export async function POST(req: NextRequest) {
 
     // ── Room code for P2 join ──
     const roomCode = generateRoomCode();
-    roomCodeToSession.set(roomCode, sessionId);
+    await setRoomCode(roomCode, sessionId);
 
     return NextResponse.json({ sessionId, wsUrl, roomCode });
   } catch (err) {

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb, ensureUser } from "@/lib/db";
 import { getAuthFromRequest } from "@/lib/auth";
-import { roomCodeToSession, generateRoomCode } from "@/app/api/cloud-session/room-codes";
+import { setRoomCode, generateRoomCode } from "@/app/api/cloud-session/room-codes";
 
 async function getUserId(req: NextRequest, body?: Record<string, unknown>): Promise<{ userId: number; username: string } | null> {
   // Try JWT first (works in all environments — production AND local dev)
@@ -108,7 +108,7 @@ export async function POST(req: NextRequest) {
     }
 
     const roomCode = generateRoomCode();
-    roomCodeToSession.set(roomCode, sessionId);
+    await setRoomCode(roomCode, sessionId);
 
     console.log("[respond] accept: challengeId=%d sessionId=%s roomCode=%s wsUrl=%s", challengeId, sessionId, roomCode, wsUrl);
     try { await db.execute({ sql: `UPDATE duel_challenges SET status = 'accepted', session_id = ?, room_code = ?, ws_url = ? WHERE id = ?`, args: [sessionId, roomCode, wsUrl, challengeId] }); }

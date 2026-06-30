@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb, ensureUser } from "@/lib/db";
 import { getAuthFromRequest } from "@/lib/auth";
-import { roomCodeToSession, generateRoomCode } from "@/app/api/cloud-session/room-codes";
+import { setRoomCode, generateRoomCode } from "@/app/api/cloud-session/room-codes";
 
 async function getUserId(req: NextRequest, body?: Record<string, unknown>): Promise<{ userId: number; username: string } | null> {
   // Try JWT first (works in all environments — production AND local dev)
@@ -99,7 +99,7 @@ export async function POST(req: NextRequest) {
     }
 
     const roomCode = generateRoomCode();
-    roomCodeToSession.set(roomCode, sessionId);
+    await setRoomCode(roomCode, sessionId);
 
     // Update challenge with session info
     await db.execute({

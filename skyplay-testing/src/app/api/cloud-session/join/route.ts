@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { roomCodeToSession } from "../room-codes";
+import { getSessionByRoomCode } from "../room-codes";
 
 /**
  * POST /api/cloud-session/join
@@ -19,7 +19,7 @@ export async function POST(req: NextRequest) {
     }
 
     const cleanCode = roomCode.toUpperCase().trim();
-    const sessionId = roomCodeToSession.get(cleanCode);
+    const sessionId = await getSessionByRoomCode(cleanCode);
 
     if (!sessionId) {
       return NextResponse.json({ error: "Room not found or session expired" }, { status: 404 });
