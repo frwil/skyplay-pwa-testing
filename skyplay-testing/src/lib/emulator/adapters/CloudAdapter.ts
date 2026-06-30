@@ -5,7 +5,7 @@ import { SYSTEM_CONFIGS } from "../EmulatorAdapter";
 const FRAME_HEADER_SIZE = 13; // magic(1) + width(u16) + height(u16) + frameId(u32) + nalLength(u32)
 const AUDIO_HEADER_SIZE = 5;
 const CODEC_CFG_HEADER_SIZE = 3;
-const MAX_DECODE_QUEUE = 3; // Réduit pour éviter la latence
+const MAX_DECODE_QUEUE = 16; // Assez large pour 60fps sans bloquer le décodeur
 
 export class CloudAdapter implements EmulatorAdapter {
   readonly systemType: SystemType;
@@ -241,11 +241,10 @@ export class CloudAdapter implements EmulatorAdapter {
           frame.close();
         },
         error: (err) => {
-          console.error(`[Cloud:${this.systemType}] VideoDecoder error:`, err);
-          this.videoDecoderReady = false;
+          // VideoDecoder errors are often transient (corrupted frame, etc.)
+          // Don't destroy the decoder — just wait for the next keyframe
+          console.warn(`[Cloud:${this.systemType}] VideoDecoder error (non-fatal):`, err);
           this.videoNeedsKeyframe = true;
-          try { this.videoDecoder?.close(); } catch { /* ok */ }
-          this.videoDecoder = null;
         },
       };
 
@@ -261,11 +260,8 @@ export class CloudAdapter implements EmulatorAdapter {
       }
 
       this.videoDecoder = new VideoDecoder(init);
-      this.videoDecoder.configure({
-        codec: config.codec,
-        codedWidth: config.width,
-        codedHeight: config.height,
-      });
+      // Use the config returned by the browser (may normalize codec string)
+      this.videoDecoder.configure(support.config!);
       this.videoDecoderReady = true;
       this.videoNeedsKeyframe = true;
 
