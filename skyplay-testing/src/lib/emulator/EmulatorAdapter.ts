@@ -254,22 +254,26 @@ export function detectSystem(ext: string): SystemType | null {
 
 export type KeyMapping = Record<string, { player: 1 | 2; button: number }>;
 
+// Keys are mapped by e.code (physical key position) so WASD/ZQSD work
+// identically on QWERTY and AZERTY layouts. Special keys (ArrowUp, Enter,
+// ShiftRight, etc.) keep their e.key names since those are layout-independent.
+
 const BASE_D_PAD: KeyMapping = {
   ArrowUp:    { player: 1, button: 4 },
   ArrowDown:  { player: 1, button: 5 },
   ArrowLeft:  { player: 1, button: 6 },
   ArrowRight: { player: 1, button: 7 },
-  w:          { player: 1, button: 4 },
-  s:          { player: 1, button: 5 },
-  a:          { player: 1, button: 6 },
-  d:          { player: 1, button: 7 },
+  KeyW:       { player: 1, button: 4 }, // W/QWERTY or Z/AZERTY → UP
+  KeyS:       { player: 1, button: 5 }, // DOWN (both layouts)
+  KeyA:       { player: 1, button: 6 }, // A/QWERTY or Q/AZERTY → LEFT
+  KeyD:       { player: 1, button: 7 }, // RIGHT (both layouts)
 };
 
 const BASE_FACE_BUTTONS_NES_LIKE: KeyMapping = {
-  x:  { player: 1, button: 0 }, // A
-  z:  { player: 1, button: 1 }, // B
-  q:  { player: 1, button: 0 }, // A (alternate)
-  e:  { player: 1, button: 1 }, // B (alternate)
+  KeyZ: { player: 1, button: 0 }, // A — first key (Z/QWERTY or W/AZERTY)
+  KeyX: { player: 1, button: 1 }, // B — second key (both layouts)
+  KeyE: { player: 1, button: 0 }, // A alternate (E key)
+  KeyQ: { player: 1, button: 1 }, // B alternate (Q on QWERTY, A on AZERTY)
 };
 
 const BASE_MENU_BUTTONS: KeyMapping = {
@@ -289,6 +293,10 @@ const BASE_MENU_BUTTONS_P2: KeyMapping = {
 /**
  * Per-system keyboard mappings.
  *
+ * Keys are mapped by e.code (physical key position) so the same physical
+ * keys work regardless of keyboard layout (QWERTY, AZERTY, etc.).
+ * Special keys use their e.key name (ArrowUp, Enter, ShiftRight, etc.).
+ *
  * Button indices are emulator-specific and MUST match
  * what each core expects (see SYSTEM_CONFIGS for reference).
  *
@@ -307,14 +315,14 @@ export const SYSTEM_KEY_MAPS: Record<SystemType, KeyMapping> = {
   snes: {
     ...BASE_D_PAD,
     // SNES: A=8, B=0, X=9, Y=1, L=10, R=11
-    x:  { player: 1, button: 8 },  // X key → A
-    z:  { player: 1, button: 0 },  // Z key → B
-    c:  { player: 1, button: 9 },  // C key → X
-    v:  { player: 1, button: 1 },  // V key → Y
-    a:  { player: 1, button: 10 }, // A key → L
-    s:  { player: 1, button: 11 }, // S key → R
-    q:  { player: 1, button: 8 },  // Q key → A (alternate)
-    e:  { player: 1, button: 1 },  // E key → Y (alternate)
+    KeyZ: { player: 1, button: 8 },  // Z key → A
+    KeyX: { player: 1, button: 0 },  // X key → B
+    KeyC: { player: 1, button: 9 },  // C key → X
+    KeyV: { player: 1, button: 1 },  // V key → Y
+    KeyA: { player: 1, button: 10 }, // A key → L
+    KeyS: { player: 1, button: 11 }, // S key → R
+    KeyE: { player: 1, button: 8 },  // E key → A (alternate)
+    KeyQ: { player: 1, button: 1 },  // Q key → Y (alternate)
     ...BASE_MENU_BUTTONS,
     ...BASE_MENU_BUTTONS_P2,
   },
@@ -333,31 +341,31 @@ export const SYSTEM_KEY_MAPS: Record<SystemType, KeyMapping> = {
   gba: {
     ...BASE_D_PAD,
     // GBA: B=0, A=1, L=8, R=9
-    x:  { player: 1, button: 1 },  // X key → A
-    z:  { player: 1, button: 0 },  // Z key → B
-    a:  { player: 1, button: 8 },  // A key → L
-    s:  { player: 1, button: 9 },  // S key → R
-    q:  { player: 1, button: 1 },  // Q key → A (alternate)
-    e:  { player: 1, button: 0 },  // E key → B (alternate)
+    KeyZ: { player: 1, button: 1 },  // Z key → A
+    KeyX: { player: 1, button: 0 },  // X key → B
+    KeyA: { player: 1, button: 8 },  // A key → L
+    KeyS: { player: 1, button: 9 },  // S key → R
+    KeyE: { player: 1, button: 1 },  // E key → A (alternate)
+    KeyQ: { player: 1, button: 0 },  // Q key → B (alternate)
     ...BASE_MENU_BUTTONS,
     ...BASE_MENU_BUTTONS_P2,
   },
   neogeo: {
     // Neo Geo: A=0, B=1, C=2, D=3, SELECT=4, START=5, UP=6, DOWN=7, LEFT=8, RIGHT=9
-    // D-Pad
+    // D-Pad by physical position (WASD / ZQSD)
     ArrowUp:    { player: 1, button: 6 },
     ArrowDown:  { player: 1, button: 7 },
     ArrowLeft:  { player: 1, button: 8 },
     ArrowRight: { player: 1, button: 9 },
-    w:       { player: 1, button: 6 },
-    s:       { player: 1, button: 7 },
-    a:       { player: 1, button: 8 },
-    d:       { player: 1, button: 9 },
-    // Face buttons
-    x:  { player: 1, button: 0 },  // X → A
-    z:  { player: 1, button: 1 },  // Z → B
-    c:  { player: 1, button: 2 },  // C → C
-    v:  { player: 1, button: 3 },  // V → D
+    KeyW:       { player: 1, button: 6 }, // W/QWERTY or Z/AZERTY → UP
+    KeyS:       { player: 1, button: 7 }, // DOWN
+    KeyA:       { player: 1, button: 8 }, // A/QWERTY or Q/AZERTY → LEFT
+    KeyD:       { player: 1, button: 9 }, // RIGHT
+    // Face buttons by physical position (Z/X/C/V cluster, left-to-right)
+    KeyZ: { player: 1, button: 0 }, // Z/QWERTY or W/AZERTY → A (punch)
+    KeyX: { player: 1, button: 1 }, // X → B (kick)
+    KeyC: { player: 1, button: 2 }, // C → C (strong punch)
+    KeyV: { player: 1, button: 3 }, // V → D (strong kick)
     // Menu (Neo Geo: SELECT=4, START=5)
     Enter:      { player: 1, button: 5 },  // Enter → START
     Space:      { player: 1, button: 5 },  // Space → START (alt)
@@ -368,21 +376,22 @@ export const SYSTEM_KEY_MAPS: Record<SystemType, KeyMapping> = {
     NumpadAdd:   { player: 2, button: 4 },
   },
   ps1: {
-    // PS1 D-Pad (UP=10, DOWN=11, LEFT=12, RIGHT=13 — overrides BASE_D_PAD defaults of 4-7)
+    // PS1: uses Arrow keys for D-Pad (WASD reserved for shoulder buttons)
+    // D-Pad (UP=10, DOWN=11, LEFT=12, RIGHT=13)
     ArrowUp:    { player: 1, button: 10 },
     ArrowDown:  { player: 1, button: 11 },
     ArrowLeft:  { player: 1, button: 12 },
     ArrowRight: { player: 1, button: 13 },
     // PS1: CROSS=0, CIRCLE=1, SQUARE=2, TRIANGLE=3, L1=4, R1=5, L2=6, R2=7, SELECT=8, START=9
-    x:  { player: 1, button: 0 },  // X key → Cross
-    z:  { player: 1, button: 1 },  // Z key → Circle
-    c:  { player: 1, button: 2 },  // C key → Square
-    v:  { player: 1, button: 3 },  // V key → Triangle
-    a:  { player: 1, button: 4 },  // A key → L1
-    s:  { player: 1, button: 5 },  // S key → R1
-    q:  { player: 1, button: 6 },  // Q key → L2
-    w:  { player: 1, button: 7 },  // W key → R2
-    // Menu (PS1: SELECT=8, START=9 — overrides BASE_MENU_BUTTONS defaults)
+    KeyZ: { player: 1, button: 0 },  // Z → Cross
+    KeyX: { player: 1, button: 1 },  // X → Circle
+    KeyC: { player: 1, button: 2 },  // C → Square
+    KeyV: { player: 1, button: 3 },  // V → Triangle
+    KeyA: { player: 1, button: 4 },  // A/Q → L1
+    KeyS: { player: 1, button: 5 },  // S → R1
+    KeyQ: { player: 1, button: 6 },  // Q → L2
+    KeyW: { player: 1, button: 7 },  // W → R2
+    // Menu (PS1: SELECT=8, START=9)
     Enter:      { player: 1, button: 9 },  // Enter → START
     Space:      { player: 1, button: 9 },  // Space → START (alt)
     ShiftRight: { player: 1, button: 8 },  // Shift Right → SELECT

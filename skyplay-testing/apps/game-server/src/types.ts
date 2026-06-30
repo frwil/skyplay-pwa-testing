@@ -157,7 +157,7 @@ export type ServerMessage =
   | RematchDeclinedMessage
   | SessionClosedMessage;
 
-/** Binary frame header: 0x01 + width(u16) + height(u16) + frameId(u32) + nalLength(u16) + H.264 NAL data */
+/** Binary frame header: 0x01 + width(u16) + height(u16) + frameId(u32) + nalLength(u32) + H.264 NAL data */
 export const FRAME_MAGIC = 0x01;
 
 /** Binary audio header: 0x02 + opusLength(u32) + Opus data */
@@ -171,5 +171,5 @@ export interface FrameHeader {
   width: number;    // uint16 LE
   height: number;   // uint16 LE
   frameId: number;  // uint32 LE
-  nalLength: number; // uint16 LE — H.264 NAL unit length
+  nalLength: number; // uint32 LE — H.264 NAL unit length
 }

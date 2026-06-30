@@ -7,11 +7,14 @@ import type { SystemType } from "../types";
 /**
  * Keyboard input hook for emulator.
  *
- * Listens for keydown/keyup events, maps physical keys to
- * emulator-specific button indices (via SYSTEM_KEY_MAPS),
- * and calls the provided buttonDown/buttonUp callbacks.
- * Also tracks the current input bitmask for the game loop
- * to read synchronously.
+ * Listens for keydown/keyup events, maps physical key position (e.code) to
+ * emulator-specific button indices (via SYSTEM_KEY_MAPS), and calls the
+ * provided buttonDown/buttonUp callbacks. Also tracks the current input
+ * bitmask for the game loop to read synchronously.
+ *
+ * Uses e.code (physical position) as primary lookup so WASD/ZQSD work
+ * identically on QWERTY and AZERTY layouts. Falls back to e.key for
+ * layout-specific overrides.
  *
  * @param buttonDown - Callback when a button is pressed
  * @param buttonUp   - Callback when a button is released
@@ -42,10 +45,10 @@ export function useKeyboard(
 
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
     if (!enabledRef.current) return;
-    // Use e.key for single-char keys (layout-aware: AZERTY/QWERTY compatible).
-    // Fall back to e.code for special keys (ArrowUp, Enter, ShiftRight, etc.).
-    const eKey = e.key.length === 1 ? e.key.toLowerCase() : null;
-    const mapping = (eKey && keyMap[eKey]) ?? keyMap[e.code];
+    // Use e.code (physical key position) first so WASD/ZQSD works on both
+    // QWERTY and AZERTY. Fall back to e.key for layout-specific overrides
+    // and special keys (ArrowUp, Enter, ShiftRight, etc.).
+    const mapping = keyMap[e.code] ?? keyMap[e.key.toLowerCase()];
     if (!mapping) return;
 
     e.preventDefault();
@@ -55,10 +58,9 @@ export function useKeyboard(
     if (heldKeysRef.current.has(key)) return; // ignore repeat
 
     heldKeysRef.current.add(key);
-    // 🔍 DEBUG P2
-    if (mapping.player === 2) {
-      console.log(`[KB] P2 key DOWN: ${e.code} → btn=${mapping.button}`);
-    }
+    // 🔍 DEBUG: log all player inputs
+    const playerLabel = mapping.player === 1 ? "P1" : "P2";
+    console.log(`[KB] ${playerLabel} key DOWN: code="${e.code}" key="${e.key}" → btn=${mapping.button}`);
     buttonDownRef.current(mapping.player, mapping.button);
 
     // Update bitmask
@@ -69,8 +71,7 @@ export function useKeyboard(
 
   const handleKeyUp = useCallback((e: KeyboardEvent) => {
     if (!enabledRef.current) return;
-    const eKey = e.key.length === 1 ? e.key.toLowerCase() : null;
-    const mapping = (eKey && keyMap[eKey]) ?? keyMap[e.code];
+    const mapping = keyMap[e.code] ?? keyMap[e.key.toLowerCase()];
     if (!mapping) return;
 
     e.preventDefault();
@@ -78,10 +79,9 @@ export function useKeyboard(
 
     const key = `${mapping.player}:${mapping.button}`;
     heldKeysRef.current.delete(key);
-    // 🔍 DEBUG P2
-    if (mapping.player === 2) {
-      console.log(`[KB] P2 key UP: ${e.code} → btn=${mapping.button}`);
-    }
+    // 🔍 DEBUG: log all player inputs
+    const playerLabel = mapping.player === 1 ? "P1" : "P2";
+    console.log(`[KB] ${playerLabel} key UP: code="${e.code}" key="${e.key}" → btn=${mapping.button}`);
     buttonUpRef.current(mapping.player, mapping.button);
 
     // Update bitmask

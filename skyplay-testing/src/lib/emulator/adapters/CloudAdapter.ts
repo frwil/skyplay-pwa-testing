@@ -2,7 +2,7 @@ import type { EmulatorAdapter } from "../EmulatorAdapter";
 import type { EmulatorStatus, RomEntry, SystemType } from "../types";
 import { SYSTEM_CONFIGS } from "../EmulatorAdapter";
 
-const FRAME_HEADER_SIZE = 11;
+const FRAME_HEADER_SIZE = 13; // magic(1) + width(u16) + height(u16) + frameId(u32) + nalLength(u32)
 const AUDIO_HEADER_SIZE = 5;
 const CODEC_CFG_HEADER_SIZE = 3;
 const MAX_DECODE_QUEUE = 3; // Réduit pour éviter la latence
@@ -503,9 +503,9 @@ export class CloudAdapter implements EmulatorAdapter {
       const width = view.getUint16(1, true);
       const height = view.getUint16(3, true);
       const frameId = view.getUint32(5, true);
-      const nalLength = view.getUint16(9, true);
+      const nalLength = view.getUint32(9, true);
 
-      if (nalLength === 0 || 11 + nalLength > data.byteLength) return;
+      if (nalLength === 0 || FRAME_HEADER_SIZE + nalLength > data.byteLength) return;
 
       this.lastFrameId = frameId;
       const nalData = new Uint8Array(data, FRAME_HEADER_SIZE, nalLength);
@@ -717,9 +717,8 @@ export class CloudAdapter implements EmulatorAdapter {
 
   buttonDown(_player: 1 | 2, button: number): void {
     // 🔍 DEBUG: log all cloud inputs
-    if (this._player === 2) {
-      console.log(`[CloudAdapter] P2 btn=${button} DOWN ws=${this.ws?.readyState}`);
-    }
+    const playerLabel = this._player === 1 ? "P1" : "P2";
+    console.log(`[CloudAdapter] ${playerLabel} btn=${button} DOWN ws=${this.ws?.readyState}`);
     // For cloud gaming, each player uses their own machine — force the player
     // number to this._player (1=host, 2=guest) instead of trusting the keymap.
     // This lets P2 use the same intuitive keys as P1 (arrows, X/Z/C/V, etc.)
@@ -728,9 +727,8 @@ export class CloudAdapter implements EmulatorAdapter {
   }
 
   buttonUp(_player: 1 | 2, button: number): void {
-    if (this._player === 2) {
-      console.log(`[CloudAdapter] P2 btn=${button} UP ws=${this.ws?.readyState}`);
-    }
+    const playerLabel = this._player === 1 ? "P1" : "P2";
+    console.log(`[CloudAdapter] ${playerLabel} btn=${button} UP ws=${this.ws?.readyState}`);
     this.ws?.send(JSON.stringify({ type: "input", player: this._player, button, pressed: false }));
   }
 

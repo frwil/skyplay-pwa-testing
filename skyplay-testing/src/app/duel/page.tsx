@@ -706,29 +706,29 @@ export default function DuelPage() {
               title="Player 1 Controls"
               accent="#00c8ff"
               controls={[
-                { label: "Move", keys: "↑ ↓ ← →" },
-                { label: "A (Punch)", keys: "X" },
-                { label: "B (Kick)", keys: "Z" },
+                { label: "Move", keys: "W A S D" },
+                { label: "A (Punch)", keys: "Z" },
+                { label: "B (Kick)", keys: "X" },
                 { label: "C (Strong Punch)", keys: "C" },
                 { label: "D (Strong Kick)", keys: "V" },
                 { label: "Coin", keys: "Space" },
                 { label: "Start", keys: "Enter" },
               ]}
-              note="Host uses these keys on their machine."
+              note="QWERTY: WASD + Z/X/C/V. AZERTY: ZQSD + W/X/C/V (same physical keys)."
             />
             <ControlsCard
               title="Player 2 Controls"
               accent="#f15bb5"
               controls={[
-                { label: "Move", keys: "↑ ↓ ← →" },
-                { label: "A (Punch)", keys: "X" },
-                { label: "B (Kick)", keys: "Z" },
+                { label: "Move", keys: "W A S D" },
+                { label: "A (Punch)", keys: "Z" },
+                { label: "B (Kick)", keys: "X" },
                 { label: "C (Strong Punch)", keys: "C" },
                 { label: "D (Strong Kick)", keys: "V" },
                 { label: "Coin", keys: "Space" },
                 { label: "Start", keys: "Enter" },
               ]}
-              note="Guest uses the SAME keys on their machine. CloudAdapter routes inputs to correct player."
+              note="Guest uses the SAME physical keys. CloudAdapter routes inputs to correct player."
             />
           </div>
         )}

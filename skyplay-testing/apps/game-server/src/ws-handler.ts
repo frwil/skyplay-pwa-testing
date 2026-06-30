@@ -172,31 +172,26 @@ function handleInit(
   sessionRunners.set(msg.sessionId, runner);
 
   // ── Video frame (H.264 NAL unit) ──
-runner.on("frame", (nalUnit: Buffer, width: number, height: number) => {
-  session.frameCount++;
-  if (!nalUnit || nalUnit.length === 0) return;
+  // Header: magic(1) + width(u16) + height(u16) + frameId(u32) + nalLength(u32) = 13 bytes
+  runner.on("frame", (nalUnit: Buffer, width: number, height: number) => {
+    session.frameCount++;
+    if (!nalUnit || nalUnit.length === 0) return;
 
-  // Vérifier si la trame est trop grande pour le format 16 bits
-  if (nalUnit.length > 65535) {
-    console.warn(`[ws] Trame NAL trop volumineuse pour ${sessionId}: ${nalUnit.length} octets (max 65535), ignorée`);
-    return; // Ignorer cette trame
-  }
+    const header = Buffer.alloc(13);
+    header.writeUInt8(FRAME_MAGIC, 0);
+    header.writeUInt16LE(width, 1);
+    header.writeUInt16LE(height, 3);
+    header.writeUInt32LE(session.frameCount, 5);
+    header.writeUInt32LE(nalUnit.length, 9); // 32-bit NAL length — handles large keyframes
 
-  const header = Buffer.alloc(11);
-  header.writeUInt8(FRAME_MAGIC, 0);
-  header.writeUInt16LE(width, 1);
-  header.writeUInt16LE(height, 3);
-  header.writeUInt32LE(session.frameCount, 5);
-  header.writeUInt16LE(nalUnit.length, 9); // Maintenant sécurisé car on a vérifié avant
+    try {
+      sendBinaryToSession(session, Buffer.concat([header, nalUnit]));
+    } catch {
+      // WebSocket may be closed
+    }
+  });
 
-  try {
-    sendBinaryToSession(session, Buffer.concat([header, nalUnit]));
-  } catch {
-    // WebSocket peut être fermé
-  }
-});
-
-  // ── Audio frame (Opus packet) ──
+  // ── Audio frame (raw Opus packet — already extracted from Ogg by GameRunner) ──
   runner.on("audio", (opusData: Buffer) => {
     if (!opusData || opusData.length === 0) return;
 

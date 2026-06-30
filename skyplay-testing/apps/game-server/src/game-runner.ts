@@ -756,25 +756,118 @@ export class GameRunner extends EventEmitter {
   }
 
   /**
-   * Parse Opus packets from FFmpeg output.
-   * FFmpeg `-f opus` muxer writes OpusHead + OpusTags as the first 2 packets.
-   * We skip those because the client already configures its AudioDecoder
-   * with its own OpusHead. Subsequent packets are raw Opus audio data.
+   * Parse raw Opus packets from FFmpeg's Ogg container output.
+   *
+   * FFmpeg `-f opus` writes Ogg pages to stdout, NOT raw Opus packets.
+   * Each Ogg page has a header (27+ bytes) followed by segment data.
+   * Opus packets are framed inside Ogg segments:
+   *  - segment length 255 = packet continues in next segment
+   *  - segment length < 255 = end of current packet
+   *
+   * We skip the first two Ogg pages (OpusHead + OpusTags) because the
+   * browser's AudioDecoder is configured with its own OpusHead.
+   *
+   * Ogg page structure:
+   *   0-3:   "OggS" magic
+   *   4:     version (0)
+   *   5:     header_type flags
+   *   6-13:  granule_position (int64 LE)
+   *   14-17: serial number (uint32 LE)
+   *   18-21: page sequence (uint32 LE)
+   *   22-25: checksum (uint32)
+   *   26:    page_segments count (N)
+   *   27:    segment_table (N bytes)
+   *   27+N:  segment data (sum of segment_table bytes)
    */
   private handleAudioChunk(chunk: Buffer): void {
     if (chunk.length === 0) return;
 
-    // Skip OpusHead (ID header) and OpusTags (comment header) from the muxer.
-    // The client builds its own OpusHead — feeding duplicates causes
-    // "EncodingError: Decoding error" in the browser's AudioDecoder.
-    if (this.audioPacketsSkipped < 2) {
-      this.audioPacketsSkipped++;
-      const label = this.audioPacketsSkipped === 1 ? "OpusHead" : "OpusTags";
-      console.log(`[game-runner] Skipping ${label} header (${chunk.length} bytes)`);
-      return;
+    // Accumulate data — FFmpeg stdout may deliver partial pages
+    this.audioBuffer = Buffer.concat([this.audioBuffer, chunk]);
+
+    // Parse complete Ogg pages from the buffer
+    while (this.audioBuffer.length >= 27) {
+      // Locate next Ogg page marker
+      const oggsIdx = this.audioBuffer.indexOf("OggS");
+      if (oggsIdx === -1) {
+        if (this.audioBuffer.length > 65536) {
+          console.warn("[game-runner] No OggS in 64KB audio buffer — resetting");
+          this.audioBuffer = Buffer.alloc(0);
+        }
+        break;
+      }
+
+      if (oggsIdx > 0) {
+        console.warn(`[game-runner] Discarding ${oggsIdx}B before OggS`);
+        this.audioBuffer = this.audioBuffer.subarray(oggsIdx);
+      }
+
+      // Parse Ogg page header (27 bytes fixed)
+      const version = this.audioBuffer[4];
+      if (version !== 0) {
+        console.warn(`[game-runner] Bad Ogg version ${version} — skipping byte`);
+        this.audioBuffer = this.audioBuffer.subarray(1);
+        continue;
+      }
+
+      const numSegments = this.audioBuffer[26];
+      const headerSize = 27 + numSegments;
+
+      if (this.audioBuffer.length < headerSize) break; // segment table incomplete
+
+      // Sum segment sizes to get total page size
+      let dataSize = 0;
+      for (let i = 0; i < numSegments; i++) {
+        dataSize += this.audioBuffer[27 + i];
+      }
+
+      const totalPageSize = headerSize + dataSize;
+      if (this.audioBuffer.length < totalPageSize) break; // page data incomplete
+
+      // ── Skip OpusHead + OpusTags (first 2 Ogg pages) ──
+      if (this.audioPacketsSkipped < 2) {
+        this.audioPacketsSkipped++;
+        const label = this.audioPacketsSkipped === 1 ? "OpusHead" : "OpusTags";
+        console.log(`[game-runner] Skipping Ogg ${label} page (${totalPageSize}B, ${numSegments} segs)`);
+        this.audioBuffer = this.audioBuffer.subarray(totalPageSize);
+        continue;
+      }
+
+      // ── Extract raw Opus packets from Ogg segments ──
+      let cursor = 27;
+      const packetParts: Buffer[] = [];
+
+      for (let i = 0; i < numSegments; i++) {
+        const segLen = this.audioBuffer[cursor];
+        cursor++;
+
+        if (segLen > 0) {
+          packetParts.push(this.audioBuffer.subarray(cursor, cursor + segLen));
+        }
+        cursor += segLen;
+
+        // A segment shorter than 255 marks the end of an Opus packet.
+        // 255 means the packet continues into the next segment(s).
+        if (segLen < 255) {
+          if (packetParts.length > 0) {
+            const opusPacket = packetParts.length === 1
+              ? packetParts[0]
+              : Buffer.concat(packetParts);
+            this.emit("audio", opusPacket);
+            packetParts.length = 0;
+          }
+        }
+      }
+
+      // Advance past the consumed page
+      this.audioBuffer = this.audioBuffer.subarray(totalPageSize);
     }
 
-    this.emit("audio", chunk);
+    // Safety: prevent unbounded buffer growth
+    if (this.audioBuffer.length > 65536) {
+      console.warn("[game-runner] Audio buffer exceeded 64KB — resetting");
+      this.audioBuffer = Buffer.alloc(0);
+    }
   }
 
   /** Inject a keyboard input into RetroArch via xdotool. */
