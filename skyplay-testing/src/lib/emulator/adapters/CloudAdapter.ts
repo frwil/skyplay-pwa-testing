@@ -41,6 +41,8 @@ export class CloudAdapter implements EmulatorAdapter {
   private pendingAudioChunks: EncodedAudioChunk[] = [];
   private audioCtx: AudioContext | null = null;
   private audioFrameCount = 0;
+  // Ogg page parser state (server sends complete Ogg pages, client extracts raw Opus)
+  private oggPacketParts: Uint8Array[] = [];
 
   constructor(systemType: SystemType, callbacks: CloudCallbacks) {
     this.systemType = systemType;
@@ -566,49 +568,76 @@ export class CloudAdapter implements EmulatorAdapter {
       }
 
     } else if (magic === 0x02) {
+      // Server now sends complete Ogg pages (after skipping OpusHead + OpusTags).
+      // We parse the Ogg page and extract raw Opus packets for AudioDecoder.
       if (data.byteLength < AUDIO_HEADER_SIZE) return;
 
-      const opusLength = view.getUint32(1, true);
-      if (opusLength === 0 || 5 + opusLength > data.byteLength) return;
+      const oggPageLen = view.getUint32(1, true);
+      if (oggPageLen === 0 || AUDIO_HEADER_SIZE + oggPageLen > data.byteLength) return;
 
-      const opusData = new Uint8Array(data, AUDIO_HEADER_SIZE, opusLength);
-      this.audioFrameCount++;
+      const oggPage = new Uint8Array(data, AUDIO_HEADER_SIZE, oggPageLen);
+      if (oggPage.length < 27) return; // Min Ogg header size
 
-      // Validate Opus TOC byte — must be present and have a valid config field
-      // TOC byte structure: [config(5 bits)|s(1 bit)|c(2 bits)]
-      // config=0 (SILK NB) through config=15 (CELT WB) are all valid
-      if (opusData.length < 1) return;
-      const toc = opusData[0];
-      const tocConfig = (toc >> 3) & 0x1f;
-      if (tocConfig > 15) {
-        console.warn(`[Cloud:${this.systemType}] Bad Opus TOC: config=${tocConfig} — dropping`);
+      // Verify OggS magic
+      if (oggPage[0] !== 0x4F || oggPage[1] !== 0x67 || oggPage[2] !== 0x67 || oggPage[3] !== 0x53) {
+        console.warn(`[Cloud:${this.systemType}] Bad Ogg magic: ${Array.from(oggPage.slice(0, 4)).map(b => b.toString(16)).join(" ")}`);
         return;
       }
 
-      const chunk = new EncodedAudioChunk({
-        type: "key",
-        timestamp: this.audioFrameCount * 20000,
-        duration: 20000,
-        data: opusData,
-      });
+      const numSegments = oggPage[26];
+      const headerSize = 27 + numSegments;
+      if (oggPage.length < headerSize) return;
 
-      if (this.audioDecoderReady && this.audioDecoder && this.audioDecoder.state === "configured") {
-        if (this.audioDecoder.decodeQueueSize < MAX_DECODE_QUEUE) {
-          try {
-            this.audioDecoder.decode(chunk);
-          } catch (err) {
-            console.error(`[Cloud:${this.systemType}] Decode threw:`, err);
-            // Reset decoder on synchronous decode failure
-            this.audioDecoderReady = false;
-            try { this.audioDecoder?.close(); } catch { /* ok */ }
-            this.audioDecoder = null;
-            this.pendingAudioChunks = [];
-          }
+      // Calculate total segment data size
+      let dataSize = 0;
+      for (let i = 0; i < numSegments; i++) dataSize += oggPage[27 + i];
+      if (oggPage.length < headerSize + dataSize) return;
+
+      // Extract Opus packets from Ogg segments
+      const headerType = oggPage[5];
+      if (!(headerType & 0x01) && this.oggPacketParts.length > 0) {
+        // Previous page ended mid-packet but no continuation flag → flush stale
+        console.warn(`[Cloud:${this.systemType}] Flushing stale partial Opus packet`);
+        this.oggPacketParts = [];
+      }
+
+      let cursor = 27;
+      for (let i = 0; i < numSegments; i++) {
+        const segLen = oggPage[cursor];
+        cursor++;
+        if (segLen > 0) {
+          this.oggPacketParts.push(oggPage.slice(cursor, cursor + segLen));
         }
-      } else {
-        this.pendingAudioChunks.push(chunk);
-        if (this.pendingAudioChunks.length > 600) {
-          this.pendingAudioChunks.shift();
+        cursor += segLen;
+
+        // segLen < 255 = end of Opus packet; segLen === 255 = continues
+        if (segLen < 255 && this.oggPacketParts.length > 0) {
+          const rawOpus = this.oggPacketParts.length === 1
+            ? this.oggPacketParts[0]
+            : this.concatUint8Arrays(this.oggPacketParts);
+
+          // Validate TOC byte
+          if (rawOpus.length > 0 && ((rawOpus[0] >> 3) & 0x1f) <= 15) {
+            this.audioFrameCount++;
+            const chunk = new EncodedAudioChunk({
+              type: "key",
+              timestamp: this.audioFrameCount * 20000,
+              duration: 20000,
+              data: rawOpus,
+            });
+
+            if (this.audioDecoderReady && this.audioDecoder && this.audioDecoder.state === "configured") {
+              if (this.audioDecoder.decodeQueueSize < MAX_DECODE_QUEUE) {
+                try { this.audioDecoder.decode(chunk); } catch { /* retry next tick */ }
+              }
+            } else {
+              this.pendingAudioChunks.push(chunk);
+              if (this.pendingAudioChunks.length > 600) this.pendingAudioChunks.shift();
+            }
+          } else if (rawOpus.length > 0) {
+            console.warn(`[Cloud:${this.systemType}] Bad TOC after Ogg parse: ${rawOpus[0].toString(16)}`);
+          }
+          this.oggPacketParts = [];
         }
       }
 
@@ -647,6 +676,18 @@ export class CloudAdapter implements EmulatorAdapter {
       return nalData[3] & 0x1f;
     }
     return 0;
+  }
+
+  private concatUint8Arrays(arrays: Uint8Array[]): Uint8Array {
+    let totalLen = 0;
+    for (const a of arrays) totalLen += a.length;
+    const out = new Uint8Array(totalLen);
+    let offset = 0;
+    for (const a of arrays) {
+      out.set(a, offset);
+      offset += a.length;
+    }
+    return out;
   }
 
   private buildOpusHead(channels: number, sampleRate: number): ArrayBuffer {

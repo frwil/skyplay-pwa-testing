@@ -44,8 +44,7 @@ export class GameRunner extends EventEmitter {
   private videoBuffer = Buffer.alloc(0);
   private audioBuffer = Buffer.alloc(0);
   private codecConfigSent = false;
-  private audioPacketsSkipped = 0; // Skip OpusHead + OpusTags Ogg pages
-  private ongoingOpusPacket: Buffer[] = []; // Cross-page Opus packet assembly
+  private audioPacketsSkipped = 0; // Pages skipped (OpusHead + OpusTags)
   private retroarchWindowId: string | null = null;
   private configPath: string | null = null;
 
@@ -757,16 +756,11 @@ export class GameRunner extends EventEmitter {
   }
 
   /**
-   * Parse raw Opus packets from FFmpeg's Ogg container output.
+   * Forward Ogg pages from FFmpeg to the client.
    *
-   * FFmpeg `-f opus` writes Ogg pages to stdout, NOT raw Opus packets.
-   * Each Ogg page has a header (27+ bytes) followed by segment data.
-   * Opus packets are framed inside Ogg segments:
-   *  - segment length 255 = packet continues in next segment
-   *  - segment length < 255 = end of current packet
-   *
-   * We skip the first two Ogg pages (OpusHead + OpusTags) because the
-   * browser's AudioDecoder is configured with its own OpusHead.
+   * FFmpeg `-f opus` outputs Ogg pages (OpusHead + OpusTags + audio pages).
+   * We skip the first 2 pages (OpusHead + OpusTags) and forward complete
+   * Ogg pages to the client, which parses them in JavaScript.
    *
    * Ogg page structure:
    *   0-3:   "OggS" magic
@@ -783,12 +777,9 @@ export class GameRunner extends EventEmitter {
   private handleAudioChunk(chunk: Buffer): void {
     if (chunk.length === 0) return;
 
-    // Accumulate data — FFmpeg stdout may deliver partial pages
     this.audioBuffer = Buffer.concat([this.audioBuffer, chunk]);
 
-    // Parse complete Ogg pages from the buffer
     while (this.audioBuffer.length >= 27) {
-      // Locate next Ogg page marker
       const oggsIdx = this.audioBuffer.indexOf("OggS");
       if (oggsIdx === -1) {
         if (this.audioBuffer.length > 65536) {
@@ -797,92 +788,41 @@ export class GameRunner extends EventEmitter {
         }
         break;
       }
-
       if (oggsIdx > 0) {
-        console.warn(`[game-runner] Discarding ${oggsIdx}B before OggS`);
         this.audioBuffer = this.audioBuffer.subarray(oggsIdx);
       }
 
-      // Parse Ogg page header (27 bytes fixed)
-      const version = this.audioBuffer[4];
-      if (version !== 0) {
-        console.warn(`[game-runner] Bad Ogg version ${version} — skipping byte`);
+      if (this.audioBuffer[4] !== 0) {
         this.audioBuffer = this.audioBuffer.subarray(1);
         continue;
       }
 
       const numSegments = this.audioBuffer[26];
       const headerSize = 27 + numSegments;
+      if (this.audioBuffer.length < headerSize) break;
 
-      if (this.audioBuffer.length < headerSize) break; // segment table incomplete
-
-      // Sum segment sizes to get total page size
       let dataSize = 0;
-      for (let i = 0; i < numSegments; i++) {
-        dataSize += this.audioBuffer[27 + i];
-      }
-
+      for (let i = 0; i < numSegments; i++) dataSize += this.audioBuffer[27 + i];
       const totalPageSize = headerSize + dataSize;
-      if (this.audioBuffer.length < totalPageSize) break; // page data incomplete
+      if (this.audioBuffer.length < totalPageSize) break;
 
-      // ── Skip OpusHead + OpusTags (first 2 Ogg pages) ──
+      // Skip OpusHead + OpusTags (first 2 pages)
       if (this.audioPacketsSkipped < 2) {
         this.audioPacketsSkipped++;
         const label = this.audioPacketsSkipped === 1 ? "OpusHead" : "OpusTags";
-        console.log(`[game-runner] Skipping Ogg ${label} page (${totalPageSize}B, ${numSegments} segs)`);
+        console.log(`[game-runner] Skip Ogg ${label} (${totalPageSize}B, ${numSegments}s)`);
         this.audioBuffer = this.audioBuffer.subarray(totalPageSize);
         continue;
       }
 
-      // ── Extract raw Opus packets from Ogg segments ──
-      // header_type bit 0 (0x01) = continuation of packet from previous page
-      const headerType = this.audioBuffer[5];
-      if (!(headerType & 0x01)) {
-        // No continuation — flush any stale partial packet (shouldn't happen)
-        if (this.ongoingOpusPacket.length > 0) {
-          console.warn("[game-runner] Flushing stale partial Opus packet (missing continuation flag)");
-          const stale = Buffer.concat(this.ongoingOpusPacket);
-          if (stale.length > 0) this.emit("audio", stale);
-          this.ongoingOpusPacket = [];
-        }
-      }
-
-      let cursor = 27;
-
-      for (let i = 0; i < numSegments; i++) {
-        const segLen = this.audioBuffer[cursor];
-        cursor++;
-
-        if (segLen > 0) {
-          this.ongoingOpusPacket.push(
-            Buffer.from(this.audioBuffer.subarray(cursor, cursor + segLen))
-          );
-        }
-        cursor += segLen;
-
-        // A segment shorter than 255 marks the end of an Opus packet.
-        // 255 means the packet continues into the next segment (or next page).
-        if (segLen < 255) {
-          if (this.ongoingOpusPacket.length > 0) {
-            const opusPacket = this.ongoingOpusPacket.length === 1
-              ? this.ongoingOpusPacket[0]
-              : Buffer.concat(this.ongoingOpusPacket);
-            // Validate TOC byte before emitting
-            if (opusPacket.length > 0 && ((opusPacket[0] >> 3) & 0x1f) <= 15) {
-              this.emit("audio", opusPacket);
-            }
-            this.ongoingOpusPacket = [];
-          }
-        }
-      }
-
-      // Advance past the consumed page
+      // Forward the COMPLETE Ogg page (header + data) to client for JS-side parsing
+      const oggPage = Buffer.from(this.audioBuffer.subarray(0, totalPageSize));
+      this.emit("audio", oggPage);
       this.audioBuffer = this.audioBuffer.subarray(totalPageSize);
     }
 
-    // Safety: prevent unbounded buffer growth
     if (this.audioBuffer.length > 65536) {
-      console.warn("[game-runner] Audio buffer exceeded 64KB — resetting");
+      console.warn("[game-runner] Audio buffer >64KB — resetting");
       this.audioBuffer = Buffer.alloc(0);
     }
   }
