@@ -45,6 +45,7 @@ export class GameRunner extends EventEmitter {
   private audioBuffer = Buffer.alloc(0);
   private codecConfigSent = false;
   private audioPacketsSkipped = 0; // Pages skipped (OpusHead + OpusTags)
+  private ongoingOpusParts: Buffer[] = []; // Cross-segment Opus packet assembly
   private retroarchWindowId: string | null = null;
   private configPath: string | null = null;
 
@@ -756,23 +757,12 @@ export class GameRunner extends EventEmitter {
   }
 
   /**
-   * Forward Ogg pages from FFmpeg to the client.
+   * Parse Ogg pages from FFmpeg and emit raw Opus packets.
    *
    * FFmpeg `-f opus` outputs Ogg pages (OpusHead + OpusTags + audio pages).
-   * We skip the first 2 pages (OpusHead + OpusTags) and forward complete
-   * Ogg pages to the client, which parses them in JavaScript.
-   *
-   * Ogg page structure:
-   *   0-3:   "OggS" magic
-   *   4:     version (0)
-   *   5:     header_type flags
-   *   6-13:  granule_position (int64 LE)
-   *   14-17: serial number (uint32 LE)
-   *   18-21: page sequence (uint32 LE)
-   *   22-25: checksum (uint32)
-   *   26:    page_segments count (N)
-   *   27:    segment_table (N bytes)
-   *   27+N:  segment data (sum of segment_table bytes)
+   * We skip the first 2 pages (OpusHead + OpusTags), then extract raw
+   * Opus packets from the Ogg segment structure and emit them individually.
+   * The client receives raw Opus — no Ogg parsing needed in JavaScript.
    */
   private handleAudioChunk(chunk: Buffer): void {
     if (chunk.length === 0) return;
@@ -801,6 +791,7 @@ export class GameRunner extends EventEmitter {
       const headerSize = 27 + numSegments;
       if (this.audioBuffer.length < headerSize) break;
 
+      // Calculate total segment data size
       let dataSize = 0;
       for (let i = 0; i < numSegments; i++) dataSize += this.audioBuffer[27 + i];
       const totalPageSize = headerSize + dataSize;
@@ -815,9 +806,35 @@ export class GameRunner extends EventEmitter {
         continue;
       }
 
-      // Forward the COMPLETE Ogg page (header + data) to client for JS-side parsing
-      const oggPage = Buffer.from(this.audioBuffer.subarray(0, totalPageSize));
-      this.emit("audio", oggPage);
+      // Check continuation flag from this page
+      const headerType = this.audioBuffer[5];
+      if (!(headerType & 0x01) && this.ongoingOpusParts.length > 0) {
+        // Previous page ended mid-packet but this page lacks continuation flag
+        console.warn("[game-runner] Flushing stale partial Opus packet (no continuation)");
+        this.ongoingOpusParts = [];
+      }
+
+      // Extract raw Opus packets from this page's segments
+      let dataCursor = headerSize;
+      for (let i = 0; i < numSegments; i++) {
+        const segLen = this.audioBuffer[27 + i];
+        if (segLen > 0) {
+          this.ongoingOpusParts.push(
+            Buffer.from(this.audioBuffer.subarray(dataCursor, dataCursor + segLen)),
+          );
+        }
+        dataCursor += segLen;
+
+        // segLen < 255 = end of Opus packet
+        if (segLen < 255 && this.ongoingOpusParts.length > 0) {
+          const rawOpus = this.ongoingOpusParts.length === 1
+            ? this.ongoingOpusParts[0]
+            : Buffer.concat(this.ongoingOpusParts);
+          this.emit("audio", rawOpus);
+          this.ongoingOpusParts = [];
+        }
+      }
+
       this.audioBuffer = this.audioBuffer.subarray(totalPageSize);
     }
 
