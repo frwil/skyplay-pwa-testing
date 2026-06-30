@@ -339,14 +339,9 @@ export class CloudAdapter implements EmulatorAdapter {
           }
         },
         error: (err) => {
-          console.error(`[Cloud:${this.systemType}] AudioDecoder error:`, err, "— will re-init");
-          this.audioDecoderReady = false;
-          try { this.audioDecoder?.close(); } catch { /* ok */ }
-          this.audioDecoder = null;
-          // Discard stale pending chunks — they belong to the dead decoder
-          this.pendingAudioChunks = [];
-          // Attempt re-initialization
-          this.initAudioDecoder(config);
+          // AudioDecoder errors are often transient — don't destroy
+          // the decoder on every single one. Just log and continue.
+          console.warn(`[Cloud:${this.systemType}] AudioDecoder error (non-fatal):`, err);
         },
       };
 
