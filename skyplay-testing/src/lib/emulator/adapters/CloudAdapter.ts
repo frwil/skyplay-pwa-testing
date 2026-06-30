@@ -579,35 +579,40 @@ export class CloudAdapter implements EmulatorAdapter {
       const headerSize = 27 + numSegments;
       if (oggPage.length < headerSize) return;
 
-      // Calculate total segment data size
-      let dataSize = 0;
-      for (let i = 0; i < numSegments; i++) dataSize += oggPage[27 + i];
-      if (oggPage.length < headerSize + dataSize) return;
+      // Step 1: Read segment table (contiguous at bytes 27..27+N-1)
+      const segLengths: number[] = [];
+      let totalData = 0;
+      for (let i = 0; i < numSegments; i++) {
+        const len = oggPage[27 + i];
+        segLengths.push(len);
+        totalData += len;
+      }
+      if (oggPage.length < headerSize + totalData) return;
 
-      // Extract Opus packets from Ogg segments
+      // Step 2: Check continuation from previous page
       const headerType = oggPage[5];
       if (!(headerType & 0x01) && this.oggPacketParts.length > 0) {
-        // Previous page ended mid-packet but no continuation flag → flush stale
+        // Previous page ended mid-packet but this page has no continuation flag
         console.warn(`[Cloud:${this.systemType}] Flushing stale partial Opus packet`);
         this.oggPacketParts = [];
       }
 
-      let cursor = 27;
+      // Step 3: Extract segment data and assemble Opus packets
+      let dataCursor = headerSize; // data starts right after segment table
       for (let i = 0; i < numSegments; i++) {
-        const segLen = oggPage[cursor];
-        cursor++;
+        const segLen = segLengths[i];
         if (segLen > 0) {
-          this.oggPacketParts.push(oggPage.slice(cursor, cursor + segLen));
+          this.oggPacketParts.push(oggPage.slice(dataCursor, dataCursor + segLen));
         }
-        cursor += segLen;
+        dataCursor += segLen;
 
-        // segLen < 255 = end of Opus packet; segLen === 255 = continues
+        // segLen < 255 = end of an Opus packet; segLen === 255 = packet continues in next segment
         if (segLen < 255 && this.oggPacketParts.length > 0) {
           const rawOpus = this.oggPacketParts.length === 1
             ? this.oggPacketParts[0]
             : this.concatUint8Arrays(this.oggPacketParts);
 
-          // Validate TOC byte
+          // Validate TOC byte (config field is bits 3-7 of byte 0, valid 0-15)
           if (rawOpus.length > 0 && ((rawOpus[0] >> 3) & 0x1f) <= 15) {
             this.audioFrameCount++;
             const chunk = new EncodedAudioChunk({
