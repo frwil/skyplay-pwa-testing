@@ -1,8 +1,10 @@
 "use client";
 
-import { Swords, Clock, Loader2 } from "lucide-react";
+import { useState } from "react";
+import { Swords, Clock, Loader2, Radio } from "lucide-react";
 import type { DuelPlayer } from "@/lib/emulator/hooks/useDuelLobby";
 import { useTranslation } from "@/lib/i18n/TranslationContext";
+import { getStreamKey, setStreamKey } from "@/lib/emulator/streamKey";
 import PlayerBadge from "@/components/PlayerBadge";
 
 interface DuelLobbyProps {
@@ -107,6 +109,7 @@ export default function DuelLobby({
       )}
 
       {/* In lobby — players list */}
+      {inLobby && <StreamKeyField />}
       {inLobby && players.length === 0 && (
         <div className="text-center py-8">
           <Loader2
@@ -134,6 +137,68 @@ export default function DuelLobby({
               onChallenge={() => onChallenge(player.userId)}
             />
           ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Plan A (MVP) — paste-key field for a live RTMP broadcast. Self-contained: it reads/writes the
+ * module-level stream-key registry (src/lib/emulator/streamKey) that CloudAdapter consults when
+ * building the WS init message. Fully inert unless a host pastes a URL AND the game-server has
+ * STREAMING_ENABLED=1 (after a Docker rebuild).
+ */
+function StreamKeyField() {
+  const { t } = useTranslation();
+  const [open, setOpen] = useState<boolean>(() => !!getStreamKey());
+  const [value, setValue] = useState<string>(() => getStreamKey() ?? "");
+  const active = !!getStreamKey();
+
+  return (
+    <div
+      className="mb-4 rounded-xl border p-3"
+      style={{ backgroundColor: "rgba(255,255,255,0.02)", borderColor: "rgba(255,255,255,0.08)" }}
+    >
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className="flex w-full items-center justify-between text-left"
+      >
+        <span className="flex items-center gap-2 text-xs font-bold text-white/70">
+          <Radio className="w-3.5 h-3.5" style={{ color: active ? "#ef4444" : "rgba(255,255,255,0.4)" }} />
+          {t.duel.streamTitle}
+        </span>
+        {active && (
+          <span className="text-[10px] font-bold" style={{ color: "#ef4444" }}>● {t.duel.streamActive}</span>
+        )}
+      </button>
+      {open && (
+        <div className="mt-3 flex flex-col gap-2">
+          <p className="text-[10px] text-white/30">{t.duel.streamHint}</p>
+          <div className="flex gap-2">
+            <input
+              type="text"
+              value={value}
+              onChange={(e) => setValue(e.target.value)}
+              placeholder={t.duel.streamPlaceholder}
+              className="flex-1 rounded-lg px-2.5 py-1.5 text-xs text-white outline-none"
+              style={{ backgroundColor: "rgba(0,0,0,0.3)", border: "1px solid rgba(255,255,255,0.1)" }}
+            />
+            <button
+              onClick={() => setStreamKey(value)}
+              className="rounded-lg px-3 py-1.5 text-xs font-bold text-white transition"
+              style={{ backgroundColor: "rgba(239,68,68,0.15)", border: "1px solid rgba(239,68,68,0.35)", color: "#f87171" }}
+            >
+              {t.duel.streamSave}
+            </button>
+            <button
+              onClick={() => { setValue(""); setStreamKey(null); }}
+              className="rounded-lg px-3 py-1.5 text-xs font-bold transition"
+              style={{ backgroundColor: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.5)" }}
+            >
+              {t.duel.streamClear}
+            </button>
+          </div>
         </div>
       )}
     </div>

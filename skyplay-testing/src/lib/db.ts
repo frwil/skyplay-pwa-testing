@@ -1,5 +1,7 @@
 import { createClient, type Client } from "@libsql/client";
 import bcrypt from "bcryptjs";
+import { COUNTRY_CODES } from "@/lib/countries";
+import { generateIdenticon, pickFromSeed } from "@/lib/avatar";
 
 let db: Client | null = null;
 
@@ -396,6 +398,20 @@ async function initializeSchema(): Promise<void> {
   // Optional free-text note on a ledger row (admin adjustments / dispute resolutions).
   try { await getClient().execute("ALTER TABLE sky_transactions ADD COLUMN note TEXT"); } catch { /* column already exists */ }
 
+  // Plan A: duel match recordings uploaded to Vercel Blob (private). One row per session; the
+  // blob URL is served to admins through an authenticated proxy (never exposed publicly).
+  await getClient().execute(`
+    CREATE TABLE IF NOT EXISTS duel_recordings (
+      session_id TEXT PRIMARY KEY,
+      url TEXT NOT NULL,
+      pathname TEXT,
+      size INTEGER,
+      system TEXT,
+      rom TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+
   // ─── Game Statistics (round/match/session tracking) ───
   await getClient().execute(`
     CREATE TABLE IF NOT EXISTS game_sessions (
@@ -636,6 +652,33 @@ async function seedData(): Promise<void> {
         args: [uid, seed],
       });
     } catch { /* account absent or seed already applied — safe to skip */ }
+  }
+
+  // ─── Backfill random-but-stable profiles (avatar + nationality) ───
+  // Gives every player who never set a profile a generated identicon photo + a random
+  // country, so the duel Cage / overlays / stats never show a faceless, flag-less user.
+  // Idempotent & non-destructive: COALESCE only fills NULL columns — a user-set avatar or
+  // country is never overwritten. Runs per-row (safe to re-run on every boot).
+  try {
+    const missing = await client.execute(
+      "SELECT id, username FROM users WHERE country IS NULL OR avatar_base64 IS NULL",
+    );
+    for (const row of missing.rows) {
+      const uid = row.id as number;
+      const uname = (row.username as string) || String(uid);
+      const seedKey = `${uid}:${uname}`;
+      const country = pickFromSeed(seedKey, COUNTRY_CODES);
+      const avatar = generateIdenticon(seedKey);
+      await client.execute({
+        sql: "UPDATE users SET country = COALESCE(country, ?), avatar_base64 = COALESCE(avatar_base64, ?) WHERE id = ?",
+        args: [country, avatar, uid],
+      });
+    }
+    if (missing.rows.length > 0) {
+      console.log(`[db] Backfilled ${missing.rows.length} player profile(s) (avatar + country)`);
+    }
+  } catch (e) {
+    console.error("Profile backfill error (non-fatal):", e);
   }
 }
 

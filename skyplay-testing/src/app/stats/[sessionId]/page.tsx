@@ -4,6 +4,15 @@ import { useState, useEffect } from "react";
 import { useParams } from "next/navigation";
 import { charName } from "@/lib/emulator/kof98Characters";
 import { useTranslation } from "@/lib/i18n/TranslationContext";
+import PlayerBadge from "@/components/PlayerBadge";
+
+/** Minimal player identity for the nominative badges (name + avatar + flag). */
+interface PlayerProfile {
+  id?: number;
+  username: string;
+  avatar: string | null;
+  country: string | null;
+}
 
 interface SessionStats {
   session: {
@@ -19,6 +28,7 @@ interface SessionStats {
     startedAt: string;
     endedAt: string;
   };
+  players?: { p1: PlayerProfile | null; p2: PlayerProfile | null };
   matches: MatchWithRounds[];
 }
 
@@ -55,6 +65,17 @@ export default function StatsPage() {
   const [stats, setStats] = useState<SessionStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Signed-in viewer identity — used as the P1 fallback for CPU sessions (no duel row to resolve).
+  const [viewer, setViewer] = useState<PlayerProfile | null>(null);
+
+  useEffect(() => {
+    fetch("/api/auth/me", { credentials: "include" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (d?.user) setViewer({ id: d.user.id, username: d.user.username || "", avatar: d.user.avatar ?? null, country: d.user.country ?? null });
+      })
+      .catch(() => { /* not signed in — P1 stays a generic label */ });
+  }, []);
 
   useEffect(() => {
     if (!sessionId) return;
@@ -100,6 +121,14 @@ export default function StatsPage() {
     ? Math.round((session.playerWins / session.totalMatches) * 100)
     : 0;
 
+  // Nominative identities: prefer the resolved duel players; for a CPU session fall back to the
+  // signed-in viewer as P1 and a CPU label as P2, so the page never shows a bare "P1"/"P2".
+  const isCpu = session.mode !== "pvp";
+  const p1Profile: PlayerProfile | null =
+    stats.players?.p1 ?? (isCpu && viewer ? viewer : null);
+  const p2Profile: PlayerProfile | null =
+    stats.players?.p2 ?? (isCpu ? { username: t.statsPage.cpu, avatar: null, country: null } : null);
+
   return (
     <div className="min-h-screen bg-gray-950 text-white p-4 md:p-8">
       <div className="max-w-3xl mx-auto">
@@ -118,6 +147,23 @@ export default function StatsPage() {
             </div>
           </div>
         </div>
+
+        {/* Players — nominative banner (names + avatars + flags) */}
+        {(p1Profile || p2Profile) && (
+          <div className="mb-8 flex items-center justify-center gap-4 rounded-2xl border border-gray-800 bg-gray-900 p-4">
+            <div className="flex-1 flex justify-end">
+              {p1Profile
+                ? <PlayerBadge username={p1Profile.username} avatar={p1Profile.avatar} country={p1Profile.country} size={40} accent="#34d399" />
+                : <span className="text-sm font-bold text-green-300">P1</span>}
+            </div>
+            <span className="text-xs font-black text-gray-500">{t.statsPage.vs}</span>
+            <div className="flex-1 flex justify-start">
+              {p2Profile
+                ? <PlayerBadge username={p2Profile.username} avatar={p2Profile.avatar} country={p2Profile.country} size={40} accent="#f87171" />
+                : <span className="text-sm font-bold text-red-300">P2</span>}
+            </div>
+          </div>
+        )}
 
         {/* Scoreboard */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
@@ -139,7 +185,7 @@ export default function StatsPage() {
         ) : (
           <div className="space-y-4">
             {matches.map(match => (
-              <MatchCard key={match.id} match={match} />
+              <MatchCard key={match.id} match={match} p1Profile={p1Profile} p2Profile={p2Profile} />
             ))}
           </div>
         )}
@@ -157,7 +203,7 @@ function StatCard({ label, value, color = "text-white" }: { label: string; value
   );
 }
 
-function MatchCard({ match }: { match: MatchWithRounds }) {
+function MatchCard({ match, p1Profile, p2Profile }: { match: MatchWithRounds; p1Profile: PlayerProfile | null; p2Profile: PlayerProfile | null }) {
   const { t } = useTranslation();
   const playerWon = match.winner === 1;
   return (
@@ -174,7 +220,7 @@ function MatchCard({ match }: { match: MatchWithRounds }) {
         <div className="text-xs text-gray-500 mb-2">
           {t.statsPage.perfectKosInline}: {match.perfect_ko_count}
         </div>
-        <TeamsSection match={match} />
+        <TeamsSection match={match} p1Profile={p1Profile} p2Profile={p2Profile} />
         {match.rounds.length > 0 ? (
           <div className="space-y-1">
             {match.rounds.map(round => {
@@ -217,7 +263,7 @@ function MatchCard({ match }: { match: MatchWithRounds }) {
 }
 
 /** Per-player team roster, selection order (1→2→3) and gauge mode for a match. */
-function TeamsSection({ match }: { match: MatchWithRounds }) {
+function TeamsSection({ match, p1Profile, p2Profile }: { match: MatchWithRounds; p1Profile: PlayerProfile | null; p2Profile: PlayerProfile | null }) {
   const hasData =
     match.p1Team?.length || match.p2Team?.length ||
     match.p1SelectionOrder?.length || match.p2SelectionOrder?.length;
@@ -228,6 +274,8 @@ function TeamsSection({ match }: { match: MatchWithRounds }) {
       <PlayerColumn
         label="P1"
         accent="text-green-300"
+        badgeAccent="#34d399"
+        profile={p1Profile}
         team={match.p1Team}
         order={match.p1SelectionOrder}
         mode={match.p1GaugeMode}
@@ -235,6 +283,8 @@ function TeamsSection({ match }: { match: MatchWithRounds }) {
       <PlayerColumn
         label="P2"
         accent="text-red-300"
+        badgeAccent="#f87171"
+        profile={p2Profile}
         team={match.p2Team}
         order={match.p2SelectionOrder}
         mode={match.p2GaugeMode}
@@ -246,12 +296,16 @@ function TeamsSection({ match }: { match: MatchWithRounds }) {
 function PlayerColumn({
   label,
   accent,
+  badgeAccent,
+  profile,
   team,
   order,
   mode,
 }: {
   label: string;
   accent: string;
+  badgeAccent: string;
+  profile: PlayerProfile | null;
   team: number[] | null;
   order: number[] | null;
   mode: string | null;
@@ -260,7 +314,11 @@ function PlayerColumn({
   return (
     <div className="bg-gray-950/60 rounded-lg p-3 border border-gray-800">
       <div className="flex items-center justify-between mb-1.5">
-        <span className={`text-sm font-bold ${accent}`}>{label}</span>
+        {profile ? (
+          <PlayerBadge username={profile.username} avatar={profile.avatar} country={profile.country} size={24} accent={badgeAccent} className="min-w-0" />
+        ) : (
+          <span className={`text-sm font-bold ${accent}`}>{label}</span>
+        )}
         {mode && (
           <span
             className={`px-1.5 py-0.5 text-[10px] rounded font-bold ${

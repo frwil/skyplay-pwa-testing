@@ -98,6 +98,9 @@ export function useEmulator(system: SystemType = "nes") {
   // New session id emitted when a rematch is accepted — page.tsx uses it to charge the rematch
   // entry fees (WS rematch path never hits challenge/respond). Idempotent server-side per session.
   const [duelRematchSessionId, setDuelRematchSessionId] = useState<string | null>(null);
+  // Side (1|2) of the opponent who disconnected mid-match. Drives the client-side forfeit flow
+  // in page.tsx (only the server can set this via a player_disconnected message → can't be forged).
+  const [opponentAbandoned, setOpponentAbandoned] = useState<number | null>(null);
 
   // ── Duel callbacks (stable refs) ──────────────────────────────────
   const duelCallbacksRef = useRef({
@@ -127,6 +130,7 @@ export function useEmulator(system: SystemType = "nes") {
       setDuelMatchResult(null);
       setRematchRequested(false);
       setRematchDeclined(false);
+      setOpponentAbandoned(null);
       setStatus("running");
     },
     onSessionClosed: () => {
@@ -164,6 +168,15 @@ export function useEmulator(system: SystemType = "nes") {
     },
     onMatchState: (data: MatchStateData) => {
       setMatchState(data);
+    },
+    onPlayerEvent: (event: "player_joined" | "player_disconnected", player: number) => {
+      if (event === "player_disconnected") {
+        console.log(`[useEmulator] 🚪 Opponent (P${player}) disconnected mid-match — forfeit`);
+        setOpponentAbandoned(player);
+      } else if (event === "player_joined") {
+        // Reconnect within the grace window cancels a pending forfeit.
+        setOpponentAbandoned(null);
+      }
     },
   });
 
@@ -466,6 +479,7 @@ export function useEmulator(system: SystemType = "nes") {
             onRematchRequested: duelCallbacksRef.current.onRematchRequested,
             onRematchAccepted: duelCallbacksRef.current.onRematchAccepted,
             onRematchDeclined: duelCallbacksRef.current.onRematchDeclined,
+            onPlayerEvent: duelCallbacksRef.current.onPlayerEvent,
           });
         }
         return new NeoGeoEmulatorAdapter({ onStatusChange: setStatus });
@@ -481,6 +495,7 @@ export function useEmulator(system: SystemType = "nes") {
             onRematchRequested: duelCallbacksRef.current.onRematchRequested,
             onRematchAccepted: duelCallbacksRef.current.onRematchAccepted,
             onRematchDeclined: duelCallbacksRef.current.onRematchDeclined,
+            onPlayerEvent: duelCallbacksRef.current.onPlayerEvent,
         });
       default:
         return null;
@@ -744,6 +759,7 @@ export function useEmulator(system: SystemType = "nes") {
             onRematchRequested: duelCallbacksRef.current.onRematchRequested,
             onRematchAccepted: duelCallbacksRef.current.onRematchAccepted,
             onRematchDeclined: duelCallbacksRef.current.onRematchDeclined,
+            onPlayerEvent: duelCallbacksRef.current.onPlayerEvent,
       });
       adapterRef.current = adapter;
       const canvas = canvasRef.current;
@@ -768,6 +784,7 @@ export function useEmulator(system: SystemType = "nes") {
             onRematchRequested: duelCallbacksRef.current.onRematchRequested,
             onRematchAccepted: duelCallbacksRef.current.onRematchAccepted,
             onRematchDeclined: duelCallbacksRef.current.onRematchDeclined,
+            onPlayerEvent: duelCallbacksRef.current.onPlayerEvent,
       });
       adapterRef.current = adapter;
       const canvas = canvasRef.current;
@@ -848,6 +865,8 @@ export function useEmulator(system: SystemType = "nes") {
     rematchDeclined,
     matchState,
     duelRematchSessionId,
+    opponentAbandoned,
+    clearOpponentAbandoned: useCallback(() => setOpponentAbandoned(null), []),
     stopDuel: useCallback(() => {
       const adapter = adapterRef.current;
       if (adapter instanceof CloudAdapter) {

@@ -1,10 +1,11 @@
 import { spawn, type ChildProcess } from "child_process";
 import { createSocket, type Socket } from "dgram";
 import { EventEmitter } from "events";
-import { writeFileSync, unlinkSync } from "fs";
+import { writeFileSync, unlinkSync, mkdirSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { SYSTEM_CORES, SYSTEM_RESOLUTIONS, UPSCALE, XDOTOOL_KEY_MAP, XDOTOOL_KEY_MAP_P2, getButtonToRetroarch, buildRetroarchKeyConfig } from "./config.js";
+import { isRecordingEnabled, isStreamingEnabled, recordingDir, recorderFfmpegArgs, streamerFfmpegArgs, uploadRecording } from "./recording.js";
 
 export interface GameRunnerEvents {
   onFrame: (jpegData: Buffer, width: number, height: number) => void;
@@ -96,6 +97,15 @@ export class GameRunner extends EventEmitter {
   private retroarch: ChildProcess | null = null;
   private ffmpegVideo: ChildProcess | null = null;
   private parec: ChildProcess | null = null;
+  /** Plan A: separate recorder/streamer FFmpeg processes (decoupled from the WS pipeline). */
+  private recorder: ChildProcess | null = null;
+  private streamer: ChildProcess | null = null;
+  /** Local mp4 path being written by the recorder (null when recording is off). */
+  private recordingPath: string | null = null;
+  /** One-shot guard so the recorder's exit uploads exactly once. */
+  private recordingUploaded = false;
+  /** Per-session RTMP ingest URL (with embedded stream key), from the client init. Null = no stream. */
+  private rtmpUrl: string | null;
   private system: string;
   private rom: string;
   private sessionId: string;
@@ -281,12 +291,13 @@ export class GameRunner extends EventEmitter {
   /** Tag used in log messages to identify which reader produced the output (e.g. "R1.1"). */
   private readerTag = "R?.?";
 
-  constructor(system: string, rom: string, sessionId: string, mode: "cpu" | "pvp" = "cpu") {
+  constructor(system: string, rom: string, sessionId: string, mode: "cpu" | "pvp" = "cpu", rtmpUrl?: string | null) {
     super();
     this.system = system;
     this.rom = rom;
     this.sessionId = sessionId;
     this.mode = mode;
+    this.rtmpUrl = rtmpUrl ?? null;
     this.runnerId = GameRunner.nextRunnerId++;
     this.displayNum = 99;
   }
@@ -346,6 +357,11 @@ export class GameRunner extends EventEmitter {
 
     this.running = true;
     console.log(`[game-runner] All processes started for session ${this.sessionId}`);
+
+    // Plan A (env-gated, inert until enabled): record duels + optionally push a live RTMP stream.
+    // Both are independent x11grab/pulse consumers — a failure here never affects the WS feed.
+    this.startRecorder(displayW, displayH);
+    this.startStreamer(displayW, displayH);
 
     // Start health bar watcher — prefer direct memory reading, fall back to pixel capture
     // Match ROM by basename without extension (e.g., "kof98" or "kof98.zip" both match)
@@ -2112,6 +2128,69 @@ export class GameRunner extends EventEmitter {
     console.log(`[game-runner] PCM audio: ${SAMPLE_RATE}Hz s16le mono, ${CHUNK_MS}ms chunks`);
   }
 
+  /**
+   * Plan A recorder: capture the display + game audio to a fragmented mp4 on disk. PvP only,
+   * env-gated (RECORDING_ENABLED=1). On graceful stop (a "q" written to stdin) FFmpeg finalizes
+   * the file and its `exit` handler uploads it to Vercel Blob. Never throws into start().
+   */
+  private startRecorder(w: number, h: number): void {
+    if (!isRecordingEnabled() || this.mode !== "pvp") return;
+    try {
+      const dir = recordingDir();
+      mkdirSync(dir, { recursive: true });
+      this.recordingPath = join(dir, `${this.sessionId}.mp4`);
+      this.recorder = spawn("ffmpeg", recorderFfmpegArgs(this.display, w, h, this.recordingPath), {
+        stdio: ["pipe", "ignore", "pipe"],
+        env: { ...process.env, DISPLAY: this.display },
+      });
+      this.recorder.stderr?.on("data", (d: Buffer) => {
+        const text = d.toString();
+        if (text.includes("Error") || text.includes("error")) console.error(`[recorder] ${text.trim()}`);
+      });
+      this.recorder.on("error", (err) => console.error("[recorder] Process error:", err.message));
+      this.recorder.on("exit", (code) => {
+        console.log(`[recorder] Exited with code ${code}`);
+        const path = this.recordingPath;
+        if (path && !this.recordingUploaded) {
+          this.recordingUploaded = true;
+          void uploadRecording({ filePath: path, sessionId: this.sessionId, system: this.system, rom: this.rom })
+            .catch((e) => console.error("[recorder] upload failed:", e));
+        }
+      });
+      console.log(`[game-runner] 🎥 Recording to ${this.recordingPath}`);
+    } catch (err) {
+      console.warn("[game-runner] 🎥 Failed to start recorder:", err);
+      this.recorder = null;
+    }
+  }
+
+  /**
+   * Plan A streamer: push the display + game audio as FLV to an RTMP ingest URL. Requires
+   * STREAMING_ENABLED=1 AND a per-session rtmpUrl from the client init (absent by default,
+   * so this stays inert). The URL is expected to embed the stream key.
+   */
+  private startStreamer(w: number, h: number): void {
+    if (!isStreamingEnabled() || !this.rtmpUrl) return;
+    try {
+      this.streamer = spawn("ffmpeg", streamerFfmpegArgs(this.display, w, h, this.rtmpUrl), {
+        stdio: ["ignore", "ignore", "pipe"],
+        env: { ...process.env, DISPLAY: this.display },
+      });
+      this.streamer.stderr?.on("data", (d: Buffer) => {
+        const text = d.toString();
+        if (text.includes("Error") || text.includes("error") || text.includes("Failed")) {
+          console.error(`[streamer] ${text.trim()}`);
+        }
+      });
+      this.streamer.on("error", (err) => console.error("[streamer] Process error:", err.message));
+      this.streamer.on("exit", (code) => console.log(`[streamer] Exited with code ${code}`));
+      console.log(`[game-runner] 📡 Streaming live to RTMP target`);
+    } catch (err) {
+      console.warn("[game-runner] 📡 Failed to start streamer:", err);
+      this.streamer = null;
+    }
+  }
+
   private pcmChunkSize = 1920;
   private pcmBuffer = Buffer.alloc(0);
 
@@ -2575,6 +2654,13 @@ export class GameRunner extends EventEmitter {
 
     this.parec?.kill("SIGTERM");
     this.ffmpegVideo?.kill("SIGTERM");
+    // Plan A: finalize the recording gracefully — "q" on FFmpeg's stdin flushes the mp4
+    // moov/fragments before it exits, and the recorder's exit handler then uploads it.
+    if (this.recorder) {
+      try { this.recorder.stdin?.write("q"); } catch { /* fall through to SIGTERM below */ }
+      this.recorder.kill("SIGTERM");
+    }
+    this.streamer?.kill("SIGTERM");
     this.retroarch?.kill("SIGTERM");
     this.xvfb?.kill("SIGTERM");
 
@@ -2586,6 +2672,8 @@ export class GameRunner extends EventEmitter {
     setTimeout(() => {
       this.parec?.kill("SIGKILL");
       this.ffmpegVideo?.kill("SIGKILL");
+      this.recorder?.kill("SIGKILL");
+      this.streamer?.kill("SIGKILL");
       this.retroarch?.kill("SIGKILL");
       this.xvfb?.kill("SIGKILL");
       spawn("pulseaudio", ["--kill"], { stdio: "ignore" });

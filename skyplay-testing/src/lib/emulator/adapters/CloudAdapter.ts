@@ -1,6 +1,7 @@
 import type { EmulatorAdapter } from "../EmulatorAdapter";
 import type { EmulatorStatus, RomEntry, SystemType, MatchStateData } from "../types";
 import { SYSTEM_CONFIGS } from "../EmulatorAdapter";
+import { getStreamKey } from "../streamKey";
 
 const FRAME_HEADER_SIZE = 13; // magic(1) + width(u16) + height(u16) + frameId(u32) + nalLength(u32)
 const AUDIO_HEADER_SIZE = 5;
@@ -23,6 +24,9 @@ export class CloudAdapter implements EmulatorAdapter {
   private _roomCode: string | null = null;
   private _player: 1 | 2 = 1;
   private mode: "cpu" | "pvp" = "cpu";
+  /** Plan A (optional): RTMP ingest URL with embedded stream key. Sent in the init message
+   *  when set (before connectAsHost). Inert by default — no stream unless the host pastes one. */
+  private rtmpUrl: string | null = null;
   private lastFrameId: number = 0;
   private pingInterval: ReturnType<typeof setInterval> | null = null;
 
@@ -141,6 +145,13 @@ export class CloudAdapter implements EmulatorAdapter {
     this.mode = mode;
   }
 
+  /** Plan A: set (or clear) the RTMP ingest URL used for a live broadcast. Must be called
+   *  before connectAsHost so it lands in the init message. Passing null/"" disables streaming. */
+  setStreamKey(rtmpUrl: string | null): void {
+    const trimmed = rtmpUrl?.trim() || "";
+    this.rtmpUrl = trimmed.length > 0 ? trimmed : null;
+  }
+
   /** Public session ID for stats lookup. */
   get currentSessionId(): string | null {
     return this.sessionId;
@@ -176,6 +187,12 @@ export class CloudAdapter implements EmulatorAdapter {
             type: "init", sessionId: this.sessionId, token: "",
             system: this.systemType, rom: this._currentRom,
             mode: this.mode,
+            // Only include when a stream key is set (explicit setter or the paste-key registry) —
+            // omitted otherwise, so the default behaviour is unchanged.
+            ...(() => {
+              const url = this.rtmpUrl ?? getStreamKey();
+              return url ? { rtmpUrl: url } : {};
+            })(),
           };
           this.ws!.send(JSON.stringify(initMessage));
           this.startPing();

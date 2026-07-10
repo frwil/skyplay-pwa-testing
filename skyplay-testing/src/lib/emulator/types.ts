@@ -144,6 +144,10 @@ export interface EmulatorState {
   matchState: MatchStateData | null;
   /** New session id emitted when a rematch is accepted (WS path). Used to charge the rematch stake. */
   duelRematchSessionId: string | null;
+  /** Side (1|2) of the opponent who disconnected mid-match (forfeit), else null. */
+  opponentAbandoned: number | null;
+  /** Clear the abandon flag (e.g. after handling the forfeit or on reconnect). */
+  clearOpponentAbandoned: () => void;
 }
 
 /** Live in-match state for the on-canvas HUD (cloud/neogeo only). */

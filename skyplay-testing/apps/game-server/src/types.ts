@@ -8,6 +8,8 @@ export interface InitMessage {
   rom: string;
   /** "cpu" = play page (P1 vs CPU), "pvp" = duel (P1 vs P2). Defaults to "cpu". */
   mode?: "cpu" | "pvp";
+  /** Plan A (optional): RTMP ingest URL with embedded stream key for a live broadcast. */
+  rtmpUrl?: string;
 }
 
 export interface JoinMessage {

@@ -352,6 +352,7 @@ export interface Dictionary {
         resolving: string;
         resolved: string;
         alreadyResolved: string;
+        watchRecording: string;
       };
     };
   };
@@ -541,6 +542,17 @@ export interface Dictionary {
     decline: string;
     revengeDeclined: string;
     redirectingIn: (seconds: number) => string;
+    // Abandon / forfeit (opponent left the match mid-combat)
+    abandonTitle: string;
+    abandonWin: string;
+    abandonDesc: string;
+    // Live RTMP broadcast (Plan A, MVP paste key)
+    streamTitle: string;
+    streamHint: string;
+    streamPlaceholder: string;
+    streamActive: string;
+    streamSave: string;
+    streamClear: string;
     // SKY wagering economy
     balanceLabel: string;
     entryFeeNotice: (fee: number) => string;
@@ -654,5 +666,9 @@ export interface Dictionary {
     noRoundDetails: string;
     team: string;
     order: string;
+    /** Opponent label for a CPU match (P2 side). */
+    cpu: string;
+    /** "VS" separator between the two players' badges. */
+    vs: string;
   };
 }

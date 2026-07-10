@@ -168,7 +168,7 @@ function handleMessage(ws: WebSocket, msg: ClientMessage, sessionId: string): vo
 
 function handleInit(
   ws: WebSocket,
-  msg: { type: "init"; sessionId: string; token: string; system: string; rom: string; mode?: "cpu" | "pvp" },
+  msg: { type: "init"; sessionId: string; token: string; system: string; rom: string; mode?: "cpu" | "pvp"; rtmpUrl?: string },
   sessionId: string,
 ): void {
   const { system, rom } = msg;
@@ -209,7 +209,7 @@ function handleInit(
 
   // Start game runner
   const mode = session.mode;
-  const runner = new GameRunner(system, rom, msg.sessionId, mode);
+  const runner = new GameRunner(system, rom, msg.sessionId, mode, msg.rtmpUrl ?? null);
   sessionRunners.set(msg.sessionId, runner);
 
   // ── Initialize stats accumulator ──

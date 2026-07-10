@@ -64,6 +64,39 @@ export async function GET(
       rounds: rounds.filter(r => r.match_number === m.match_number),
     }));
 
+    // Resolve player identities for nominative display (real names + avatars/flags instead of a
+    // bare "P1"/"P2"). PvP duels: challenger = P1 (host/side 1), target = P2 (guest/side 2),
+    // cross-referenced by session_id. CPU sessions have no duel row → players stay null and the
+    // client shows the signed-in viewer as P1 with a CPU label for P2.
+    type Ident = { id: number; username: string; avatar: string | null; country: string | null } | null;
+    let p1: Ident = null;
+    let p2: Ident = null;
+    try {
+      const chRs = await db.execute({
+        sql: "SELECT challenger_id, target_id FROM duel_challenges WHERE session_id = ? ORDER BY id DESC LIMIT 1",
+        args: [sessionId],
+      });
+      if (chRs.rows.length > 0) {
+        const p1Id = Number(chRs.rows[0].challenger_id);
+        const p2Id = Number(chRs.rows[0].target_id);
+        const uRs = await db.execute({
+          sql: "SELECT id, username, avatar_base64, country FROM users WHERE id IN (?, ?)",
+          args: [p1Id, p2Id],
+        });
+        const byId = new Map<number, Ident>();
+        for (const r of uRs.rows) {
+          byId.set(Number(r.id), {
+            id: Number(r.id),
+            username: (r.username as string) ?? "",
+            avatar: (r.avatar_base64 as string) ?? null,
+            country: (r.country as string) ?? null,
+          });
+        }
+        p1 = byId.get(p1Id) ?? null;
+        p2 = byId.get(p2Id) ?? null;
+      }
+    } catch { /* no duel row — CPU session, players resolved client-side */ }
+
     return NextResponse.json({
       session: {
         sessionId: session.session_id,
@@ -78,6 +111,7 @@ export async function GET(
         startedAt: session.started_at,
         endedAt: session.ended_at,
       },
+      players: { p1, p2 },
       matches: matchesWithRounds,
       rounds,
     });

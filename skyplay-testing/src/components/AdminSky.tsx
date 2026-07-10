@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "@/lib/i18n/TranslationContext";
-import { Coins, Search, Loader2, RefreshCw, Scale } from "lucide-react";
+import { Coins, Search, Loader2, RefreshCw, Scale, Video } from "lucide-react";
 
 interface LedgerEntry {
   amount: number;
@@ -31,6 +31,8 @@ interface Dispute {
   system: string;
   rom: string;
   createdAt: string | null;
+  /** Plan A: admin proxy link to the match recording, present only when one was uploaded. */
+  recordingUrl?: string;
 }
 
 type DisputeAction = "refund_both" | "award_winner" | "all_to_bank" | "split";
@@ -276,6 +278,18 @@ function DisputeCard({ dispute, onResolved }: { dispute: Dispute; onResolved: ()
         <div className="min-w-0">
           <p className="text-xs font-bold text-white/85 truncate">{p1Label} <span className="text-white/30">vs</span> {p2Label}</p>
           <p className="text-[10px] text-white/30 font-mono truncate">{dispute.sessionId}</p>
+          {dispute.recordingUrl && (
+            <a
+              href={dispute.recordingUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="mt-1 inline-flex items-center gap-1 text-[11px] font-semibold transition hover:opacity-80"
+              style={{ color: "#e67e22" }}
+            >
+              <Video className="w-3 h-3" />
+              {d.watchRecording}
+            </a>
+          )}
         </div>
         <span className="text-sm font-black tabular-nums whitespace-nowrap" style={{ color: "#ffd700" }}>
           {d.pot}: {dispute.amount} SKY
