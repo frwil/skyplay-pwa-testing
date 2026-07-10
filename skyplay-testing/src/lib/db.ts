@@ -136,6 +136,10 @@ async function initializeSchema(): Promise<void> {
     );
   } catch { /* column already exists */ }
 
+  // users profile columns: avatar (compressed base64 data URL) + nationality (ISO-3166 alpha-2).
+  try { await getClient().execute("ALTER TABLE users ADD COLUMN avatar_base64 TEXT DEFAULT NULL"); } catch { /* column already exists */ }
+  try { await getClient().execute("ALTER TABLE users ADD COLUMN country TEXT DEFAULT NULL"); } catch { /* column already exists */ }
+
   // Data migration: update existing questions with correct answer types / parts
   // Idempotent — only touches rows that still have the default 'text' type or NULL parts
   try {
@@ -331,6 +335,150 @@ async function initializeSchema(): Promise<void> {
   // Duel lobby heartbeat column (added post-migration)
   try { await getClient().execute("ALTER TABLE duel_lobby ADD COLUMN last_heartbeat TIMESTAMP DEFAULT NULL"); } catch { /* column already exists */ }
 
+  // perfect_ko_count column on duel_results (added post-migration)
+  try { await getClient().execute("ALTER TABLE duel_results ADD COLUMN perfect_ko_count INTEGER NOT NULL DEFAULT 0"); } catch { /* column already exists */ }
+
+  // ─── Duel SKY economy (wagering) ───
+  // Player ledger: every movement that affects a player's spendable balance.
+  // A player's balance = computed earned SKY (approved rewards + bonus) + SUM(amount here).
+  // Funds "in transit" during a live match are NOT here — they sit in an escrow room below.
+  await getClient().execute(`
+    CREATE TABLE IF NOT EXISTS sky_transactions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      amount INTEGER NOT NULL,
+      kind TEXT NOT NULL,
+      challenge_id INTEGER,
+      session_id TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+
+  // Escrow "honeycomb": one isolated chamber per duel (keyed by session_id). Holds the
+  // collected pot while the match is live; only settled + deleted once payout + bank
+  // transfer both succeed. An orphan 'open' room = a duel to reconcile after a bug.
+  await getClient().execute(`
+    CREATE TABLE IF NOT EXISTS escrow_rooms (
+      session_id TEXT PRIMARY KEY,
+      challenge_id INTEGER,
+      player1_id INTEGER,
+      player2_id INTEGER,
+      amount INTEGER NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'open',
+      system TEXT,
+      rom TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+
+  // Bank: definitive platform revenue, traced per match (origin of funds).
+  await getClient().execute(`
+    CREATE TABLE IF NOT EXISTS platform_bank (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      challenge_id INTEGER,
+      session_id TEXT,
+      winner_id INTEGER,
+      loser_id INTEGER,
+      pot INTEGER NOT NULL,
+      payout INTEGER NOT NULL,
+      amount INTEGER NOT NULL,
+      reason TEXT NOT NULL,
+      system TEXT,
+      rom TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+
+  try { await getClient().execute("CREATE INDEX IF NOT EXISTS idx_sky_tx_user ON sky_transactions(user_id)"); } catch {}
+  try { await getClient().execute("CREATE INDEX IF NOT EXISTS idx_sky_tx_session ON sky_transactions(session_id, kind)"); } catch {}
+  try { await getClient().execute("CREATE INDEX IF NOT EXISTS idx_platform_bank_session ON platform_bank(session_id)"); } catch {}
+
+  // Optional free-text note on a ledger row (admin adjustments / dispute resolutions).
+  try { await getClient().execute("ALTER TABLE sky_transactions ADD COLUMN note TEXT"); } catch { /* column already exists */ }
+
+  // ─── Game Statistics (round/match/session tracking) ───
+  await getClient().execute(`
+    CREATE TABLE IF NOT EXISTS game_sessions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id TEXT UNIQUE NOT NULL,
+      user_id INTEGER REFERENCES users(id),
+      opponent_type TEXT NOT NULL DEFAULT 'cpu',
+      system TEXT NOT NULL DEFAULT 'neogeo',
+      rom TEXT NOT NULL DEFAULT 'kof98.zip',
+      mode TEXT NOT NULL DEFAULT 'cpu',
+      total_matches INTEGER NOT NULL DEFAULT 0,
+      player_wins INTEGER NOT NULL DEFAULT 0,
+      player_losses INTEGER NOT NULL DEFAULT 0,
+      player_perfect_kos INTEGER NOT NULL DEFAULT 0,
+      points_earned INTEGER NOT NULL DEFAULT 0,
+      started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      ended_at TIMESTAMP
+    );
+  `);
+
+  await getClient().execute(`
+    CREATE TABLE IF NOT EXISTS game_rounds (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id TEXT NOT NULL,
+      match_number INTEGER NOT NULL,
+      round_number INTEGER NOT NULL,
+      loser INTEGER NOT NULL,
+      winner INTEGER NOT NULL,
+      ko_type TEXT NOT NULL DEFAULT 'normal',
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+
+  await getClient().execute(`
+    CREATE TABLE IF NOT EXISTS game_matches (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id TEXT NOT NULL,
+      match_number INTEGER NOT NULL,
+      winner INTEGER NOT NULL,
+      loser INTEGER NOT NULL,
+      p1_losses INTEGER NOT NULL DEFAULT 0,
+      p2_losses INTEGER NOT NULL DEFAULT 0,
+      perfect_ko_count INTEGER NOT NULL DEFAULT 0,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+
+  await getClient().execute(`
+    CREATE TABLE IF NOT EXISTS game_points_config (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      system TEXT NOT NULL DEFAULT 'neogeo',
+      rom TEXT NOT NULL DEFAULT 'kof98.zip',
+      win_points INTEGER NOT NULL DEFAULT 3,
+      perfect_ko_bonus INTEGER NOT NULL DEFAULT 1,
+      UNIQUE(system, rom)
+    );
+  `);
+
+  // Seed default points config
+  try {
+    await getClient().execute(
+      "INSERT OR IGNORE INTO game_points_config (system, rom, win_points, perfect_ko_bonus) VALUES ('neogeo', 'kof98.zip', 3, 1)"
+    );
+  } catch { /* already exists */ }
+
+  // Game stats indexes
+  try { await getClient().execute("CREATE INDEX IF NOT EXISTS idx_game_sessions_id ON game_sessions(session_id)"); } catch {}
+  try { await getClient().execute("CREATE INDEX IF NOT EXISTS idx_game_rounds_session ON game_rounds(session_id)"); } catch {}
+  try { await getClient().execute("CREATE INDEX IF NOT EXISTS idx_game_matches_session ON game_matches(session_id)"); } catch {}
+
+  // Character metadata columns on game_matches (added post-hoc; libSQL throws if the column
+  // already exists, so each ALTER is guarded). Arrays are stored as JSON TEXT of character IDs.
+  for (const col of [
+    "p1_team TEXT",
+    "p2_team TEXT",
+    "p1_selection_order TEXT",
+    "p2_selection_order TEXT",
+    "p1_gauge_mode TEXT",
+    "p2_gauge_mode TEXT",
+  ]) {
+    try { await getClient().execute(`ALTER TABLE game_matches ADD COLUMN ${col}`); } catch { /* column already exists */ }
+  }
+
   // Netplay indexes
   try { await getClient().execute("CREATE INDEX IF NOT EXISTS idx_challenge_participants_challenge ON challenge_participants(challenge_id)"); } catch {}
   try { await getClient().execute("CREATE INDEX IF NOT EXISTS idx_challenge_participants_user ON challenge_participants(user_id)"); } catch {}
@@ -443,6 +591,51 @@ async function seedData(): Promise<void> {
       sql: "INSERT INTO campaigns (name, deadline) VALUES (?, ?)",
       args: ["Campagne de test #1", "2026-06-22T00:00:00Z"],
     });
+  }
+
+  // ─── Seed duel-economy SKY balances for the 3 named test accounts ───
+  // Idempotent: an account is seeded at most once (guarded by an existing 'seed' tx).
+  // Brings each to exactly 10000 SKY WITHOUT overwriting anyone else's computed value —
+  // seed = 10000 − current balance (current = computed earned SKY + any prior ledger).
+  const SEED_TARGET_BALANCE = 10000;
+  for (const uname of ["testplayer1", "testplayer2", "raimundo"]) {
+    try {
+      const u = await client.execute({
+        sql: "SELECT id FROM users WHERE LOWER(username) = LOWER(?) LIMIT 1",
+        args: [uname],
+      });
+      if (u.rows.length === 0) continue;
+      const uid = u.rows[0].id as number;
+
+      const seeded = await client.execute({
+        sql: "SELECT COUNT(*) as cnt FROM sky_transactions WHERE user_id = ? AND kind = 'seed'",
+        args: [uid],
+      });
+      if ((seeded.rows[0]?.cnt as number) > 0) continue;
+
+      // Current balance = approved rewards + (approved bonus) + existing ledger sum.
+      const balRs = await client.execute({
+        sql: `
+          SELECT
+            COALESCE((SELECT SUM(q.reward_amount) FROM submissions s
+                      JOIN questions q ON q.id = s.question_id
+                      WHERE s.user_id = u.id AND s.status = 'APPROVED'), 0)
+            + CASE WHEN u.bonus_status = 'APPROVED' THEN COALESCE(u.participation_bonus, 0) ELSE 0 END
+            + COALESCE((SELECT SUM(amount) FROM sky_transactions WHERE user_id = u.id), 0)
+            AS balance
+          FROM users u WHERE u.id = ?
+        `,
+        args: [uid],
+      });
+      const current = Number(balRs.rows[0]?.balance ?? 0);
+      const seed = SEED_TARGET_BALANCE - current;
+      if (seed === 0) continue;
+
+      await client.execute({
+        sql: "INSERT INTO sky_transactions (user_id, amount, kind) VALUES (?, ?, 'seed')",
+        args: [uid, seed],
+      });
+    } catch { /* account absent or seed already applied — safe to skip */ }
   }
 }
 

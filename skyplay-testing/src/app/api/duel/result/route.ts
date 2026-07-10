@@ -1,6 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb, ensureUser } from "@/lib/db";
 import { getAuthFromRequest } from "@/lib/auth";
+import { payoutWinner, type PlayerBalance } from "@/lib/duel/wallet";
+
+/** Serialize balances for JSON: Infinity (admin) → null, flagged by `unlimited`. */
+function serializeBalances(balances: Record<number, PlayerBalance>) {
+  const out: Record<number, { after: number | null; sessionDelta: number; unlimited: boolean }> = {};
+  for (const [id, b] of Object.entries(balances)) {
+    out[Number(id)] = { after: b.unlimited ? null : b.after, sessionDelta: b.sessionDelta, unlimited: b.unlimited };
+  }
+  return out;
+}
 
 async function getUserId(req: NextRequest, body?: Record<string, unknown>): Promise<{ userId: number; username: string } | null> {
   // Try JWT first (works in all environments — production AND local dev)
@@ -34,14 +44,17 @@ export async function POST(req: NextRequest) {
     }
 
     const challengeId = body.challengeId as number;
-    const winnerId = body.winnerId as number;
-    const loserId = body.loserId as number;
+    const winnerId = (body.winnerId as number) || 0;
+    const loserId = (body.loserId as number) || 0;
     const p1Losses = (body.p1Losses as number) ?? 0;
     const p2Losses = (body.p2Losses as number) ?? 0;
-    const sessionId = body.sessionId as string;
+    const perfectKoCount = (body.perfectKoCount as number) ?? 0;
+    const sessionId = body.sessionId as string | undefined;
+    // Draw / manual stop: winnerId or loserId is 0 (no decisive win/loss).
+    const isDraw = winnerId === 0 || loserId === 0;
 
-    if (!challengeId || !winnerId || !loserId) {
-      return NextResponse.json({ error: "challengeId, winnerId, loserId requis" }, { status: 400 });
+    if (!challengeId) {
+      return NextResponse.json({ error: "challengeId requis" }, { status: 400 });
     }
 
     const db = await getDb();
@@ -59,13 +72,27 @@ export async function POST(req: NextRequest) {
     const system = (chRs.rows[0]?.system as string) || "neogeo";
     const rom = (chRs.rows[0]?.rom as string) || "kof98.zip";
 
-    // Always insert — multiple results per challenge for continuous play
-    await db.execute({
-      sql: `INSERT INTO duel_results (challenge_id, winner_id, loser_id, p1_losses, p2_losses, system, rom, session_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      args: [challengeId, winnerId, loserId, p1Losses, p2Losses, system, rom, sessionId || null],
-    });
-    console.log(`[duel/result] Saved result: challenge=${challengeId} winner=${winnerId} (P1=${p1Losses}-P2=${p2Losses})`);
+    // Record a win/loss row only for a decisive match (real winner + loser). A draw or a
+    // manual stop (winnerId/loserId = 0) is not a win/loss row — it is still settled
+    // economically below (platform keeps the pot) but not counted in the win/loss history.
+    if (!isDraw) {
+      await db.execute({
+        sql: `INSERT INTO duel_results (challenge_id, winner_id, loser_id, p1_losses, p2_losses, system, rom, session_id, perfect_ko_count)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        args: [challengeId, winnerId, loserId, p1Losses, p2Losses, system, rom, sessionId || null, perfectKoCount],
+      });
+      console.log(`[duel/result] Saved result: challenge=${challengeId} winner=${winnerId} perfectKOs=${perfectKoCount} (P1=${p1Losses}-P2=${p2Losses})`);
+    } else {
+      console.log(`[duel/result] Draw/stop challenge=${challengeId} (P1=${p1Losses}-P2=${p2Losses}) — no win/loss row`);
+    }
+
+    // ── Settle the escrow chamber for this match ──
+    // Decisive → pay the winner 75% of the pot + bank the rest. Draw/stop → platform keeps the
+    // whole pot. Idempotent per session (the chamber is deleted on the first settlement).
+    let settlement: Awaited<ReturnType<typeof payoutWinner>> | null = null;
+    if (sessionId) {
+      settlement = await payoutWinner({ challengeId, sessionId, winnerId, loserId });
+    }
 
     // Mark challenge as completed only when the session is explicitly stopped
     // (not on every match — continuous play means N matches per challenge)
@@ -76,15 +103,34 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // Reset both players' lobby status to waiting
-    await db.execute({
-      sql: "UPDATE duel_lobby SET status = 'waiting' WHERE user_id IN (?, ?)",
-      args: [winnerId, loserId],
-    });
+    // Reset both players' lobby status to waiting (use the settled player ids — reliable even
+    // on a draw where winnerId/loserId are 0).
+    const p1 = settlement?.player1Id ?? winnerId;
+    const p2 = settlement?.player2Id ?? loserId;
+    if (p1 && p2) {
+      await db.execute({
+        sql: "UPDATE duel_lobby SET status = 'waiting' WHERE user_id IN (?, ?)",
+        args: [p1, p2],
+      });
+    }
 
     console.log(`[duel/result] Match saved. Challenge #${challengeId}`);
 
-    return NextResponse.json({ success: true });
+    return NextResponse.json({
+      success: true,
+      settlement: settlement
+        ? {
+            pot: settlement.pot,
+            payout: settlement.payout,
+            bankAmount: settlement.bankAmount,
+            reason: settlement.reason,
+            settled: settlement.settled,
+            player1Id: settlement.player1Id,
+            player2Id: settlement.player2Id,
+            balances: serializeBalances(settlement.balances),
+          }
+        : null,
+    });
   } catch (error) {
     console.error("POST /api/duel/result error:", error);
     return NextResponse.json({ error: "Erreur interne du serveur" }, { status: 500 });

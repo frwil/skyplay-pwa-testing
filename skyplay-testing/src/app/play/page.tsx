@@ -17,7 +17,7 @@ import { useChallengeNotifications } from "@/lib/emulator/netplay/hooks/useChall
 import type { NetplayEmulatorDeps } from "@/lib/emulator/netplay/NetplayManager";
 import type { InputDelayEmulatorDeps } from "@/lib/emulator/netplay/InputDelayManager";
 import { useTranslation } from "@/lib/i18n/TranslationContext";
-import { ArrowLeft, Gamepad2, User } from "lucide-react";
+import { ArrowLeft, Gamepad2, User, LogOut } from "lucide-react";
 import type { SystemType } from "@/lib/emulator/types";
 
 export default function PlayPage() {
@@ -85,6 +85,67 @@ export default function PlayPage() {
   const [selectedChallengeId, setSelectedChallengeId] = useState<number | null>(null);
 
   const netplay = useNetplay({ challengeId: selectedChallengeId, system });
+
+  // ── Post-game session summary (CPU/cloud mode) ──────────────────
+  const [sessionSummary, setSessionSummary] = useState<{
+    sessionId: string;
+    matches: typeof emu.duelMatchHistory;
+  } | null>(null);
+  const activeSessionIdRef = useRef<string | null>(null);
+  const prevStatusRef = useRef(emu.status);
+
+  // Track session ID when cloud game is running
+  useEffect(() => {
+    if (emu.status === "running" && emu.isCloud && emu.sessionId) {
+      activeSessionIdRef.current = emu.sessionId;
+    }
+  }, [emu.status, emu.isCloud, emu.sessionId]);
+
+  // Detect session end: server closed OR status transition running→idle
+  useEffect(() => {
+    const wasRunning = prevStatusRef.current === "running";
+    const isNowIdle = emu.status === "idle";
+    prevStatusRef.current = emu.status;
+
+    // Skip if netplay is active (PvP handled by duel page)
+    const isNetplayActive =
+      netplay.netplayStatus === "playing" ||
+      netplay.netplayStatus === "countdown" ||
+      netplay.netplayStatus === "connected";
+
+    if (isNetplayActive) return;
+
+    // Server closed session
+    if (emu.duelSessionClosed && activeSessionIdRef.current) {
+      const sid = activeSessionIdRef.current;
+      const matches = [...emu.duelMatchHistory];
+      if (matches.length > 0) {
+        setSessionSummary({ sessionId: sid, matches });
+      }
+      activeSessionIdRef.current = null;
+      return;
+    }
+
+    // Status transition: was running, now idle (user stopped or loaded new ROM)
+    if (wasRunning && isNowIdle && activeSessionIdRef.current) {
+      const sid = activeSessionIdRef.current;
+      const matches = [...emu.duelMatchHistory];
+      if (matches.length > 0) {
+        setSessionSummary({ sessionId: sid, matches });
+      }
+      activeSessionIdRef.current = null;
+    }
+
+    // Session ID cleared while running (new ROM loaded)
+    if (emu.status === "loading" && activeSessionIdRef.current && emu.isCloud && !emu.sessionId) {
+      const sid = activeSessionIdRef.current;
+      const matches = [...emu.duelMatchHistory];
+      if (matches.length > 0) {
+        setSessionSummary({ sessionId: sid, matches });
+      }
+      activeSessionIdRef.current = null;
+    }
+  }, [emu.status, emu.duelSessionClosed, emu.isCloud, emu.sessionId, emu.duelMatchHistory, netplay.netplayStatus]);
 
   // ── Challenge Notifications (poll for incoming challenges) ─────
 
@@ -417,6 +478,122 @@ export default function PlayPage() {
         />
       )}
 
+      {/* Session Summary Overlay (CPU/cloud mode — shown after game session ends) */}
+      {sessionSummary && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+          <div
+            className="rounded-3xl border p-8 max-w-md w-full mx-4 text-center animate-in fade-in zoom-in-95"
+            style={{
+              backgroundColor: "rgba(13,27,46,0.95)",
+              borderColor: "rgba(0,200,255,0.3)",
+              boxShadow: "0 0 60px rgba(0,200,255,0.2)",
+            }}
+          >
+            {/* Header */}
+            <div className="mb-6">
+              <div
+                className="w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4"
+                style={{
+                  backgroundColor: "rgba(0,200,255,0.1)",
+                  border: "2px solid rgba(0,200,255,0.25)",
+                }}
+              >
+                <Gamepad2 className="w-8 h-8" style={{ color: "#00c8ff" }} />
+              </div>
+              <h2 className="text-xl font-black text-white mb-1">Session terminée</h2>
+              <p className="text-xs text-white/30">
+                {sessionSummary.matches.length > 0
+                  ? `${sessionSummary.matches.length} match${sessionSummary.matches.length > 1 ? "es" : ""} joué${sessionSummary.matches.length > 1 ? "s" : ""}`
+                  : "Aucun match complété"}
+              </p>
+            </div>
+
+            {/* Match Results */}
+            {sessionSummary.matches.length > 0 && (
+              <div
+                className="rounded-xl border p-4 mb-6 text-left"
+                style={{
+                  backgroundColor: "rgba(0,0,0,0.3)",
+                  borderColor: "rgba(255,255,255,0.08)",
+                }}
+              >
+                <div className="space-y-2">
+                  {sessionSummary.matches.map((m, i) => {
+                    const isPlayerWin = m.winner === 1; // P1 is always the player in CPU mode
+                    return (
+                      <div
+                        key={i}
+                        className="flex items-center justify-between rounded-lg px-3 py-2 text-xs"
+                        style={{ backgroundColor: "rgba(255,255,255,0.03)" }}
+                      >
+                        <div className="flex items-center gap-2">
+                          <span className="text-white/40 font-bold">Match {m.matchNumber || i + 1}</span>
+                          <span
+                            className="rounded-full px-2 py-0.5 text-[9px] font-bold"
+                            style={{
+                              backgroundColor: isPlayerWin
+                                ? "rgba(74,222,128,0.12)"
+                                : "rgba(253,46,95,0.12)",
+                              color: isPlayerWin ? "#4ade80" : "#fd2e5f",
+                            }}
+                          >
+                            {isPlayerWin ? "VICTOIRE" : "DÉFAITE"}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-white/40">
+                            {m.p1Losses} - {m.p2Losses}
+                          </span>
+                          {(m.perfectKos || 0) > 0 && (
+                            <span
+                              className="rounded-full px-2 py-0.5 text-[9px] font-bold"
+                              style={{
+                                backgroundColor: "rgba(255,215,0,0.15)",
+                                color: "#ffd700",
+                              }}
+                            >
+                              ⭐ Perfect
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* Action Buttons */}
+            <div className="flex flex-col gap-3">
+              {sessionSummary.sessionId && (
+                <a
+                  href={`/stats/${sessionSummary.sessionId}`}
+                  className="block w-full px-5 py-3 rounded-xl text-sm font-bold transition-all hover:scale-105"
+                  style={{
+                    backgroundColor: "rgba(0,200,255,0.15)",
+                    border: "1px solid rgba(0,200,255,0.35)",
+                    color: "#00c8ff",
+                  }}
+                >
+                  📊 Voir les statistiques détaillées
+                </a>
+              )}
+              <button
+                onClick={() => setSessionSummary(null)}
+                className="w-full px-5 py-3 rounded-xl text-sm font-bold transition-all hover:scale-105"
+                style={{
+                  backgroundColor: "rgba(255,255,255,0.05)",
+                  border: "1px solid rgba(255,255,255,0.1)",
+                  color: "rgba(255,255,255,0.6)",
+                }}
+              >
+                Fermer
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Connection Status Bar — hidden in popup mode */}
       {!isPopup && <ConnectionStatus {...connectionStatus} />}
 
@@ -465,12 +642,27 @@ export default function PlayPage() {
             )}
 
             <LanguageSwitcher />
-            <a
-              href="/login"
-              className="text-xs text-white/40 hover:text-white transition font-medium"
-            >
-              Connexion
-            </a>
+            {authChecked && currentUserId ? (
+              <button
+                onClick={async () => {
+                  try {
+                    await fetch("/api/auth/logout", { method: "POST", credentials: "include" });
+                  } catch { /* ignore */ }
+                  window.location.reload();
+                }}
+                className="text-xs text-white/40 hover:text-white transition font-medium flex items-center gap-1"
+              >
+                <LogOut className="w-3 h-3" />
+                Déconnexion
+              </button>
+            ) : (
+              <a
+                href="/login"
+                className="text-xs text-white/40 hover:text-white transition font-medium"
+              >
+                Connexion
+              </a>
+            )}
             <a
               href="/"
               className="text-xs text-white/40 hover:text-white transition font-medium flex items-center gap-1"

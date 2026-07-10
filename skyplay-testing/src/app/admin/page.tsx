@@ -3,6 +3,8 @@
 import { useState, useEffect, useCallback } from "react";
 import AdminCard from "@/components/AdminCard";
 import AdminChallenges from "@/components/AdminChallenges";
+import AdminSky from "@/components/AdminSky";
+import PlayerBadge from "@/components/PlayerBadge";
 import GlowBackground from "@/components/GlowBackground";
 import { useTranslation } from "@/lib/i18n/TranslationContext";
 import LanguageSwitcher from "@/components/LanguageSwitcher";
@@ -18,6 +20,7 @@ import {
   Activity,
   Clock,
   Swords,
+  Coins,
 } from "lucide-react";
 
 interface Submission {
@@ -59,6 +62,8 @@ interface UserStats {
   id: number;
   username: string;
   email: string;
+  avatar_base64?: string | null;
+  country?: string | null;
   total_submissions: number;
   approved_submissions: number;
   total_rewards: number;
@@ -100,7 +105,7 @@ export default function AdminPage() {
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState<"ALL" | "PENDING" | "APPROVED" | "REJECTED">("ALL");
   const [stepFilter, setStepFilter] = useState<string>("ALL");
-  const [tab, setTab] = useState<"dashboard" | "submissions" | "campagne" | "challenges">("dashboard");
+  const [tab, setTab] = useState<"dashboard" | "submissions" | "campagne" | "challenges" | "sky">("dashboard");
 
   // Campaign state
   const [activeCampaign, setActiveCampaign] = useState<{
@@ -466,12 +471,13 @@ export default function AdminPage() {
 
       <div className="relative z-10 max-w-6xl mx-auto px-4 py-8">
         {/* Tab Navigation */}
-        <div className="flex gap-1 p-1 rounded-2xl bg-white/[0.04] border border-white/5 mb-8 max-w-md">
+        <div className="flex gap-1 p-1 rounded-2xl bg-white/[0.04] border border-white/5 mb-8 max-w-xl">
           {([
             { key: "dashboard", label: t.admin.dashboard.tabs.dashboard, icon: BarChart3 },
             { key: "submissions", label: t.admin.dashboard.tabs.submissions, icon: Activity },
             { key: "campagne", label: t.admin.dashboard.tabs.campagne, icon: Clock },
             { key: "challenges", label: t.admin.dashboard.tabs.challenges, icon: Swords },
+            { key: "sky", label: t.admin.dashboard.tabs.sky, icon: Coins },
           ] as const).map((t) => (
             <button
               key={t.key}
@@ -644,8 +650,13 @@ export default function AdminPage() {
                             </span>
                           </td>
                           <td className="px-4 py-3 font-medium text-white/80">
-
-                            {u.username}
+                            <PlayerBadge
+                              username={u.username}
+                              avatar={u.avatar_base64}
+                              country={u.country}
+                              size={26}
+                              accent="#00c8ff"
+                            />
                           </td>
                           <td className="px-4 py-3 text-white/50 text-[11px]">
 
@@ -1025,6 +1036,11 @@ export default function AdminPage() {
         {/* ═══════════ CHALLENGES TAB ═══════════ */}
         {tab === "challenges" && (
           <AdminChallenges />
+        )}
+
+        {/* ═══════════ SKY TAB ═══════════ */}
+        {tab === "sky" && (
+          <AdminSky />
         )}
       </div>
     </main>

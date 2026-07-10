@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb, ensureUser } from "@/lib/db";
 import { getAuthFromRequest } from "@/lib/auth";
+import { getBalance, ENTRY_FEE } from "@/lib/duel/wallet";
 
 async function getUserId(req: NextRequest, body?: Record<string, unknown>): Promise<{ userId: number; username: string } | null> {
   // Try JWT first (works in all environments — production AND local dev)
@@ -132,6 +133,15 @@ export async function POST(req: NextRequest) {
     if (isLocalDev) {
       await ensureUser(user.userId, user.username);
       await ensureUser(targetUserId, `Player-${targetUserId}`);
+    }
+
+    // ── Duel stake gate: the challenger must hold at least the entry fee to send a challenge ──
+    // Admins have unlimited SKY and always pass. The real debit happens on accept (both players).
+    if ((await getBalance(user.userId)) < ENTRY_FEE) {
+      return NextResponse.json(
+        { error: `SKY insuffisant : la mise d'un duel est de ${ENTRY_FEE} SKY`, code: "insufficient_sky" },
+        { status: 402 },
+      );
     }
 
     const challengerUsername = user.username || `Player-${user.userId}`;

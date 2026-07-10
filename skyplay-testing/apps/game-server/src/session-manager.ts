@@ -12,6 +12,8 @@ export interface Session {
   connections: PlayerConnection[];
   system: string;
   rom: string;
+  /** "cpu" = play page (P1 vs CPU), "pvp" = duel (P1 vs P2). */
+  mode: "cpu" | "pvp";
   videoWidth?: number;
   videoHeight?: number;
   status: "reserved" | "init" | "loading" | "running" | "paused" | "stopped";
@@ -32,12 +34,14 @@ export function createSession(
   id: string,
   system: string,
   rom: string,
+  mode: "cpu" | "pvp" = "cpu",
 ): Session {
   const session: Session = {
     id,
     connections: [],
     system,
     rom,
+    mode,
     status: "init",
     createdAt: Date.now(),
     frameCount: 0,

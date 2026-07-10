@@ -8,7 +8,9 @@ import { Gamepad2, Pause, RotateCcw, Maximize2, Minimize2, Info, Activity, Zap, 
 import GameControls from "./GameControls";
 import TouchControls from "./TouchControls";
 import AutoDetectBanner from "./AutoDetectBanner";
+import { KofMatchHUD } from "./KofMatchHUD";
 import { useAutoDetect } from "@/lib/emulator/hooks/useAutoDetect";
+import { useFullscreen } from "@/lib/emulator/hooks/useFullscreen";
 import type { DetectedResult } from "@/lib/emulator/memory-watcher";
 
 export interface NetplayInfoOverlay {
@@ -65,32 +67,11 @@ export default function EmulatorCore({
   );
 
   // ─── Fullscreen ─────────────────────────────────────────
-  const [isFullscreen, setIsFullscreen] = useState(false);
+  const { isFullscreen, toggle } = useFullscreen();
 
-  const toggleFullscreen = useCallback(async () => {
-    try {
-      if (!document.fullscreenElement) {
-        // Find the canvas container and go fullscreen
-        const el = document.getElementById("emulator-canvas-container");
-        if (el) {
-          await el.requestFullscreen();
-        }
-      } else {
-        await document.exitFullscreen();
-      }
-    } catch (err) {
-      console.warn("[EmulatorCore] Fullscreen toggle failed:", err);
-    }
-  }, []);
-
-  // Listen for fullscreen changes (including Escape key exit)
-  useEffect(() => {
-    const handler = () => {
-      setIsFullscreen(!!document.fullscreenElement);
-    };
-    document.addEventListener("fullscreenchange", handler);
-    return () => document.removeEventListener("fullscreenchange", handler);
-  }, []);
+  const toggleFullscreen = useCallback(() => {
+    void toggle(document.getElementById("emulator-canvas-container"));
+  }, [toggle]);
 
   // Keyboard shortcut: F = fullscreen, I = toggle info
   useEffect(() => {
@@ -360,6 +341,9 @@ export default function EmulatorCore({
             )}
           </div>
         )}
+
+        {/* Live in-match HUD (KOF98 cloud): teams + active char + gauge mode */}
+        {gameActive && <KofMatchHUD state={emu.matchState} />}
 
         {/* Paused overlay */}
         {emu.status === "paused" && (

@@ -1,7 +1,9 @@
 "use client";
 
-import { Swords, User, Clock, Loader2 } from "lucide-react";
+import { Swords, Clock, Loader2 } from "lucide-react";
 import type { DuelPlayer } from "@/lib/emulator/hooks/useDuelLobby";
+import { useTranslation } from "@/lib/i18n/TranslationContext";
+import PlayerBadge from "@/components/PlayerBadge";
 
 interface DuelLobbyProps {
   players: DuelPlayer[];
@@ -9,6 +11,14 @@ interface DuelLobbyProps {
   isSending: boolean;
   onChallenge: (targetUserId: number) => void;
   onJoinLobby: () => void;
+  /** Whether the local player can afford the duel stake (admins always can). */
+  canChallenge: boolean;
+  /** Entry fee (SKY) per player, shown as the stake notice. */
+  entryFee: number;
+  /** Local player's SKY balance; null when unlimited (admin) or unknown. */
+  balance: number | null;
+  /** True for admins (unlimited SKY → shown as ∞). */
+  unlimitedSky: boolean;
 }
 
 /**
@@ -21,7 +31,12 @@ export default function DuelLobby({
   isSending,
   onChallenge,
   onJoinLobby,
+  canChallenge,
+  entryFee,
+  balance,
+  unlimitedSky,
 }: DuelLobbyProps) {
+  const { t } = useTranslation();
   return (
     <div
       className="rounded-2xl border p-6"
@@ -35,22 +50,34 @@ export default function DuelLobby({
         <div>
           <h2 className="text-lg font-bold text-white flex items-center gap-2">
             <Swords className="w-5 h-5" style={{ color: "#f15bb5" }} />
-            Duel Lobby
+            {t.duel.lobbyTitle}
           </h2>
           <p className="text-xs text-white/30 mt-1">
-            Players waiting for a KOF &apos;98 duel
+            {t.duel.lobbySubtitle}
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          <span
-            className="w-2 h-2 rounded-full"
-            style={{
-              backgroundColor: inLobby ? "#4ade80" : "rgba(255,255,255,0.2)",
-            }}
-          />
-          <span className="text-xs text-white/40">
-            {inLobby ? `${players.length + 1} in lobby` : "Not joined"}
-          </span>
+        <div className="flex items-center gap-3">
+          {/* SKY balance + stake notice */}
+          <div className="flex flex-col items-end">
+            <span
+              className="rounded-full px-2.5 py-0.5 text-xs font-bold tabular-nums"
+              style={{ backgroundColor: "rgba(96,165,250,0.15)", color: "#93c5fd", border: "1px solid rgba(96,165,250,0.3)" }}
+            >
+              {unlimitedSky ? "∞" : (balance ?? "—")} SKY
+            </span>
+            <span className="text-[9px] text-white/30 mt-0.5">{t.duel.entryFeeNotice(entryFee)}</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <span
+              className="w-2 h-2 rounded-full"
+              style={{
+                backgroundColor: inLobby ? "#4ade80" : "rgba(255,255,255,0.2)",
+              }}
+            />
+            <span className="text-xs text-white/40">
+              {inLobby ? t.duel.lobbyPlayers(players.length) : t.duel.lobbyNotJoined}
+            </span>
+          </div>
         </div>
       </div>
 
@@ -62,7 +89,7 @@ export default function DuelLobby({
             style={{ color: "rgba(241,91,181,0.3)" }}
           />
           <p className="text-sm text-white/30 mb-4">
-            Join the lobby to find opponents
+            {t.duel.lobbyJoin}
           </p>
           <button
             onClick={onJoinLobby}
@@ -74,7 +101,7 @@ export default function DuelLobby({
             }}
           >
             <Swords className="w-4 h-4 inline mr-2" />
-            Join Lobby
+            {t.duel.lobbyJoinAction}
           </button>
         </div>
       )}
@@ -87,10 +114,10 @@ export default function DuelLobby({
             style={{ color: "rgba(255,255,255,0.15)" }}
           />
           <p className="text-sm text-white/25">
-            Waiting for players...
+            {t.duel.lobbyWaiting}
           </p>
           <p className="text-xs text-white/15 mt-1">
-            Open this page in another tab or share the link
+            {t.duel.lobbyWaitingHint}
           </p>
         </div>
       )}
@@ -103,6 +130,7 @@ export default function DuelLobby({
               key={player.userId}
               player={player}
               isSending={isSending}
+              canChallenge={canChallenge}
               onChallenge={() => onChallenge(player.userId)}
             />
           ))}
@@ -115,12 +143,15 @@ export default function DuelLobby({
 function DuelPlayerCard({
   player,
   isSending,
+  canChallenge,
   onChallenge,
 }: {
   player: DuelPlayer;
   isSending: boolean;
+  canChallenge: boolean;
   onChallenge: () => void;
 }) {
+  const { t } = useTranslation();
   return (
     <div
       className="rounded-xl border p-4 flex flex-col gap-3"
@@ -130,15 +161,13 @@ function DuelPlayerCard({
       }}
     >
       <div className="flex items-center gap-3">
-        <div
-          className="w-10 h-10 rounded-full flex items-center justify-center"
-          style={{
-            backgroundColor: "rgba(241,91,181,0.1)",
-            border: "1px solid rgba(241,91,181,0.2)",
-          }}
-        >
-          <User className="w-5 h-5" style={{ color: "#f15bb5" }} />
-        </div>
+        <PlayerBadge
+          username={player.username}
+          avatar={player.avatar}
+          country={player.country}
+          size={40}
+          hideName
+        />
         <div className="flex-1 min-w-0">
           <p className="text-sm font-bold text-white truncate">
             {player.username}
@@ -152,8 +181,9 @@ function DuelPlayerCard({
 
       <button
         onClick={onChallenge}
-        disabled={isSending}
-        className="w-full py-2 rounded-lg text-xs font-bold transition-all disabled:opacity-40"
+        disabled={isSending || !canChallenge}
+        title={!canChallenge ? t.duel.insufficientSky : undefined}
+        className="w-full py-2 rounded-lg text-xs font-bold transition-all disabled:opacity-40 disabled:cursor-not-allowed"
         style={{
           backgroundColor: "rgba(241,91,181,0.12)",
           border: "1px solid rgba(241,91,181,0.25)",
@@ -161,7 +191,7 @@ function DuelPlayerCard({
         }}
       >
         <Swords className="w-3 h-3 inline mr-1.5" />
-        Challenge
+        {canChallenge ? t.duel.lobbyChallenge : t.duel.insufficientSky}
       </button>
     </div>
   );

@@ -32,8 +32,8 @@ export async function POST(req: NextRequest) {
     }
 
     // ── Parse request ───────────────────────────────────────
-    const body = await req.json() as { system: string; rom: string };
-    const { system, rom } = body;
+    const body = await req.json() as { system: string; rom: string; mode?: "cpu" | "pvp" };
+    const { system, rom, mode = "cpu" } = body;
 
     if (!system || !rom) {
       return NextResponse.json({ error: "Missing system or rom" }, { status: 400 });

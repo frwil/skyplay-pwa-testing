@@ -110,6 +110,8 @@ export interface EmulatorState {
    *  - Applying delayed remote inputs on the local emulator
    */
   injectKeyEvent: (player: 1 | 2, button: number, pressed: boolean) => void;
+  /** Cloud gaming session ID (for stats lookup). null if not in cloud mode. */
+  sessionId: string | null;
   /** Cloud gaming room code (P1 creates, P2 joins). null if not in cloud mode. */
   roomCode: string | null;
   /** Join an existing cloud session as Player 2 via room code. */
@@ -128,8 +130,8 @@ export interface EmulatorState {
   stopDuel: () => void;
   /** Request a rematch from the opponent. */
   requestRematch: () => void;
-  /** Accept a rematch with new session info (P2 side). */
-  acceptRematch: (newSessionId: string, newWsUrl: string, newRoomCode: string) => void;
+  /** Accept a rematch (P2 side). Same-session — the server unlocks input. */
+  acceptRematch: () => void;
   /** Decline a rematch request (P2 side). */
   declineRematch: () => void;
   /** True when opponent requested a rematch — show accept/decline UI. */
@@ -138,6 +140,28 @@ export interface EmulatorState {
   rematchDeclined: boolean;
   /** True when the server closed the session — client should return to lobby and reload. */
   duelSessionClosed: boolean;
+  /** Live in-match state (teams, active char, gauge mode) pushed from the cloud server. null until first update. */
+  matchState: MatchStateData | null;
+  /** New session id emitted when a rematch is accepted (WS path). Used to charge the rematch stake. */
+  duelRematchSessionId: string | null;
+}
+
+/** Live in-match state for the on-canvas HUD (cloud/neogeo only). */
+export interface MatchStateData {
+  /** Team rosters as character names, in-game roster order. */
+  p1Team: string[];
+  p2Team: string[];
+  /** Currently-fighting character IDs (0x00-0x25); -1 when unknown. */
+  p1Active: number;
+  p2Active: number;
+  /** Gauge mode per player. */
+  p1Mode: "ADVANCED" | "EXTRA";
+  p2Mode: "ADVANCED" | "EXTRA";
+  /** Health percentages (0-100). */
+  p1Health: number;
+  p2Health: number;
+  /** Raw match flag: 0x40/0x48 = steady combat, 0x00 = char select. */
+  matchFlag: number;
 }
 
 /** Result of a single round in a duel. */
@@ -146,6 +170,7 @@ export interface DuelRoundResult {
   winner: number;
   p1Losses: number;
   p2Losses: number;
+  koType?: "normal" | "perfect";
 }
 
 /** Result of a full duel match (best-of-3, first to 2 losses). */
@@ -154,6 +179,21 @@ export interface DuelMatchResult {
   loser: number;
   p1Losses: number;
   p2Losses: number;
+  matchNumber?: number;
+  totalRounds?: number;
+  perfectKos?: number;
+  /** Team rosters as character IDs (0x00-0x25), slot order — for end-match stats. */
+  p1TeamIds?: number[];
+  p2TeamIds?: number[];
+  /** Character IDs in the order each player selected them. */
+  p1SelectOrder?: number[];
+  p2SelectOrder?: number[];
+  /** Gauge mode per player. */
+  p1Mode?: "ADVANCED" | "EXTRA";
+  p2Mode?: "ADVANCED" | "EXTRA";
+  /** Rounds won per character (charId → win count) for the end-match overlay tally. */
+  p1CharWins?: Record<number, number>;
+  p2CharWins?: Record<number, number>;
 }
 
 // ─── Buffer Interfaces ─────────────────────────────────────────────

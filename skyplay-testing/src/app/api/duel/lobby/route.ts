@@ -153,26 +153,33 @@ export async function GET(req: NextRequest) {
     const players = rs.rows.map((row) => ({
       userId: row.user_id as number,
       username: `Player-${row.user_id}`, // fallback
+      avatar: null as string | null,
+      country: null as string | null,
       system: row.system as string,
       rom: row.rom as string,
       status: row.status as string,
       createdAt: row.created_at as string,
     }));
 
-    // Fetch display names from users table (works in both dev and prod — ensureUser creates dev users)
+    // Fetch display names + profile (avatar/country) from users table (works in dev and prod).
     if (players.length > 0) {
       const userIds = players.map((p) => p.userId);
       const placeholders = userIds.map(() => "?").join(", ");
       const userRs = await db.execute({
-        sql: `SELECT id, username FROM users WHERE id IN (${placeholders})`,
+        sql: `SELECT id, username, avatar_base64, country FROM users WHERE id IN (${placeholders})`,
         args: userIds,
       });
-      const userMap = new Map<number, string>();
+      const userMap = new Map<number, { username: string; avatar: string | null; country: string | null }>();
       for (const row of userRs.rows) {
-        userMap.set(row.id as number, row.username as string);
+        userMap.set(row.id as number, {
+          username: row.username as string,
+          avatar: (row.avatar_base64 as string) ?? null,
+          country: (row.country as string) ?? null,
+        });
       }
       for (const p of players) {
-        p.username = userMap.get(p.userId) || p.username;
+        const u = userMap.get(p.userId);
+        if (u) { p.username = u.username || p.username; p.avatar = u.avatar; p.country = u.country; }
       }
     }
 

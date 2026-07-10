@@ -371,7 +371,8 @@ export const SYSTEM_KEY_MAPS: Record<SystemType, KeyMapping> = {
     Space:      { player: 1, button: 5 },  // Space → START (alt)
     ShiftRight: { player: 1, button: 4 },  // Shift Right → SELECT
     Tab:        { player: 1, button: 4 },  // Tab → SELECT (alt)
-    // P2 uses same keys as P1 (each player on own device; CloudAdapter handles routing)
+    // P2 uses same keys as P1 (each player on own device; CloudAdapter forces
+    // the player number to this._player, so the keymap player field is ignored in cloud mode)
     NumpadEnter: { player: 2, button: 5 },
     NumpadAdd:   { player: 2, button: 4 },
   },

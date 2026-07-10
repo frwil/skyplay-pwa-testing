@@ -53,6 +53,8 @@ export async function GET(request: NextRequest) {
         u.id,
         u.username,
         u.email,
+        u.avatar_base64,
+        u.country,
         COUNT(DISTINCT s.id) as total_submissions,
         COUNT(DISTINCT CASE WHEN s.status = 'APPROVED' THEN s.id END) as approved_submissions,
         COALESCE(SUM(CASE WHEN s.status = 'APPROVED' THEN q.reward_amount ELSE 0 END), 0)

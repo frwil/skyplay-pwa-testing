@@ -7,6 +7,8 @@ import { useState, useCallback, useRef, useEffect } from "react";
 export interface DuelPlayer {
   userId: number;
   username: string;
+  avatar?: string | null;
+  country?: string | null;
   system: string;
   rom: string;
   status: string;

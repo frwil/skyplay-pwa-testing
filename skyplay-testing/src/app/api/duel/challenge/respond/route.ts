@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getDb, ensureUser } from "@/lib/db";
 import { getAuthFromRequest } from "@/lib/auth";
 import { setRoomCode, generateRoomCode } from "@/app/api/cloud-session/room-codes";
+import { chargeEntryFees, InsufficientFunds } from "@/lib/duel/wallet";
 
 async function getUserId(req: NextRequest, body?: Record<string, unknown>): Promise<{ userId: number; username: string } | null> {
   // Try JWT first (works in all environments — production AND local dev)
@@ -109,6 +110,29 @@ export async function POST(req: NextRequest) {
 
     const roomCode = generateRoomCode();
     await setRoomCode(roomCode, sessionId);
+
+    // ── Duel stake: debit both players' entry fee into this duel's isolated escrow chamber ──
+    // Admins are never charged (unlimited SKY). A non-admin who cannot cover the stake aborts
+    // the accept with 402 — nothing is persisted (challenge stays 'pending', lobby unchanged).
+    try {
+      await chargeEntryFees({
+        challengeId,
+        sessionId,
+        playerAId: Number(row.challenger_id),
+        playerBId: user.userId,
+        system,
+        rom,
+      });
+    } catch (e) {
+      if (e instanceof InsufficientFunds) {
+        return NextResponse.json(
+          { error: "SKY insuffisant pour la mise de ce duel", code: "insufficient_sky", userId: e.userId },
+          { status: 402 },
+        );
+      }
+      console.error("[respond] ❌ chargeEntryFees (accept):", e);
+      throw e;
+    }
 
     console.log("[respond] accept: challengeId=%d sessionId=%s roomCode=%s wsUrl=%s", challengeId, sessionId, roomCode, wsUrl);
     try { await db.execute({ sql: `UPDATE duel_challenges SET status = 'accepted', session_id = ?, room_code = ?, ws_url = ? WHERE id = ?`, args: [sessionId, roomCode, wsUrl, challengeId] }); }

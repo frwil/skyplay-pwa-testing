@@ -6,6 +6,8 @@ export interface InitMessage {
   token: string;
   system: string;
   rom: string;
+  /** "cpu" = play page (P1 vs CPU), "pvp" = duel (P1 vs P2). Defaults to "cpu". */
+  mode?: "cpu" | "pvp";
 }
 
 export interface JoinMessage {
@@ -35,12 +37,16 @@ export interface RematchRequestMessage {
   type: "rematch_request";
 }
 
-/** P2 accepts the rematch and provides new session info. */
+/**
+ * A player accepts the rematch. Same-session rematch (the default now) carries
+ * no payload — the server unlocks input and broadcasts "rematch_starting".
+ * The legacy new-session fields are kept optional for backward compatibility.
+ */
 export interface RematchAcceptMessage {
   type: "rematch_accept";
-  newSessionId: string;
-  newWsUrl: string;
-  newRoomCode: string;
+  newSessionId?: string;
+  newWsUrl?: string;
+  newRoomCode?: string;
 }
 
 /** P2 declines the rematch. */
@@ -102,6 +108,8 @@ export interface RoundResultMessage {
   p1Losses: number;
   /** Total KOs scored against P2 so far. */
   p2Losses: number;
+  /** KO type — "perfect" if winner still has full health, otherwise "normal". */
+  koType?: "normal" | "perfect" | "timeout" | "draw";
 }
 
 /** Waiting message sent to P2 when they join before P1. */
@@ -118,6 +126,24 @@ export interface MatchEndMessage {
   /** Final score: { p1Losses, p2Losses }. */
   p1Losses: number;
   p2Losses: number;
+  /** 1-based match number within the session. */
+  matchNumber?: number;
+  /** Total rounds played in this match. */
+  totalRounds?: number;
+  /** Number of perfect KOs in this match. */
+  perfectKos?: number;
+  /** Team rosters as character IDs (0x00-0x25), slot order. For end-match stats. */
+  p1TeamIds?: number[];
+  p2TeamIds?: number[];
+  /** Character IDs in the order each player selected them. */
+  p1SelectOrder?: number[];
+  p2SelectOrder?: number[];
+  /** Gauge mode per player. */
+  p1Mode?: "ADVANCED" | "EXTRA";
+  p2Mode?: "ADVANCED" | "EXTRA";
+  /** Rounds won per character (charId → win count), for the end-match overlay tally. */
+  p1CharWins?: Record<number, number>;
+  p2CharWins?: Record<number, number>;
 }
 
 /** Rematch requested by opponent — show accept/decline UI. */
@@ -138,9 +164,37 @@ export interface RematchDeclinedMessage {
   type: "rematch_declined";
 }
 
+/**
+ * Same-session rematch is starting: the server has unlocked input and the game
+ * is back at character select. Both clients reset their end-match state and
+ * resume in place (no reconnect, no new session).
+ */
+export interface RematchStartingMessage {
+  type: "rematch_starting";
+}
+
 /** Session is closed — all players should return to lobby and reload. */
 export interface SessionClosedMessage {
   type: "session_closed";
+}
+
+/** Live in-match state pushed ~every 500ms so the browser HUD updates during a match. */
+export interface MatchStateMessage {
+  type: "match_state";
+  /** Team rosters as character names (locked at char select). */
+  p1Team: string[];
+  p2Team: string[];
+  /** Currently-fighting character IDs (0x00-0x25), -1 when unknown. */
+  p1Active: number;
+  p2Active: number;
+  /** Gauge mode per player. */
+  p1Mode: "ADVANCED" | "EXTRA";
+  p2Mode: "ADVANCED" | "EXTRA";
+  /** Health percentages (0-100). */
+  p1Health: number;
+  p2Health: number;
+  /** Raw match flag at 0xA840: 0x40/0x48 = steady combat, 0x00 = char select. */
+  matchFlag: number;
 }
 
 export type ServerMessage =
@@ -155,7 +209,9 @@ export type ServerMessage =
   | RematchRequestedMessage
   | RematchAcceptedMessage
   | RematchDeclinedMessage
-  | SessionClosedMessage;
+  | RematchStartingMessage
+  | SessionClosedMessage
+  | MatchStateMessage;
 
 /** Binary frame header: 0x01 + width(u16) + height(u16) + frameId(u32) + nalLength(u32) + H.264 NAL data */
 export const FRAME_MAGIC = 0x01;

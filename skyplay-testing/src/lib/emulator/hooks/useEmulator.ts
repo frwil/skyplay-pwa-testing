@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, useCallback, useState, useEffect } from "react";
-import type { EmulatorStatus, RomEntry, EmulatorState, SystemType, DuelRoundResult, DuelMatchResult } from "../types";
+import type { EmulatorStatus, RomEntry, EmulatorState, SystemType, DuelRoundResult, DuelMatchResult, MatchStateData } from "../types";
 import type { EmulatorAdapter } from "../EmulatorAdapter";
 import { SYSTEM_CONFIGS, SYSTEM_KEY_MAPS } from "../EmulatorAdapter";
 import { StateBuffer } from "../buffers/StateBuffer";
@@ -94,24 +94,39 @@ export function useEmulator(system: SystemType = "nes") {
   const [duelSessionClosed, setDuelSessionClosed] = useState(false);
   const [rematchRequested, setRematchRequested] = useState(false); // opponent wants rematch
   const [rematchDeclined, setRematchDeclined] = useState(false); // opponent declined
+  const [matchState, setMatchState] = useState<MatchStateData | null>(null); // live in-match HUD data
+  // New session id emitted when a rematch is accepted — page.tsx uses it to charge the rematch
+  // entry fees (WS rematch path never hits challenge/respond). Idempotent server-side per session.
+  const [duelRematchSessionId, setDuelRematchSessionId] = useState<string | null>(null);
 
   // ── Duel callbacks (stable refs) ──────────────────────────────────
   const duelCallbacksRef = useRef({
-    onRoundResult: (loser: number, winner: number, p1Losses: number, p2Losses: number) => {
-      console.log(`[useEmulator] 🏆 Round result: P${winner} wins! P${loser} KO. P1=${p1Losses} P2=${p2Losses}`);
-      setDuelRoundResult({ loser, winner, p1Losses, p2Losses });
+    onRoundResult: (loser: number, winner: number, p1Losses: number, p2Losses: number, koType?: string) => {
+      console.log(`[useEmulator] 🏆 Round result: P${winner} wins! P${loser} KO (${koType || "normal"}). P1=${p1Losses} P2=${p2Losses}`);
+      setDuelRoundResult({ loser, winner, p1Losses, p2Losses, koType: koType as "normal" | "perfect" | undefined });
     },
-    onMatchEnd: (winner: number, loser: number, p1Losses: number, p2Losses: number) => {
-      console.log(`[useEmulator] 🏁 Match over! P${winner} wins 2-${Math.max(p1Losses, p2Losses)}. P1=${p1Losses} P2=${p2Losses}`);
-      const result = { winner, loser, p1Losses, p2Losses };
+    onMatchEnd: (
+      winner: number, loser: number, p1Losses: number, p2Losses: number,
+      matchNumber?: number, totalRounds?: number, perfectKos?: number,
+      meta?: {
+        p1TeamIds?: number[]; p2TeamIds?: number[];
+        p1SelectOrder?: number[]; p2SelectOrder?: number[];
+        p1Mode?: "ADVANCED" | "EXTRA"; p2Mode?: "ADVANCED" | "EXTRA";
+        p1CharWins?: Record<number, number>; p2CharWins?: Record<number, number>;
+      },
+    ) => {
+      console.log(`[useEmulator] 🏁 Match #${matchNumber || "?"} over! P${winner} wins. P1=${p1Losses} P2=${p2Losses} perfectKOs=${perfectKos || 0}`);
+      const result = { winner, loser, p1Losses, p2Losses, matchNumber, totalRounds, perfectKos, ...(meta || {}) };
       setDuelMatchResult(result);
       setDuelMatchHistory((prev) => [...prev, result]);
-      // Keep status as "running" — game auto-continues
+      // Keep status as "running" — same-session; a rematch just unlocks input.
     },
     onRematchStarting: () => {
-      console.log("[useEmulator] 🔄 Rematch starting — resetting duel state");
+      console.log("[useEmulator] 🔄 Rematch starting — resetting duel state (same session)");
       setDuelRoundResult(null);
       setDuelMatchResult(null);
+      setRematchRequested(false);
+      setRematchDeclined(false);
       setStatus("running");
     },
     onSessionClosed: () => {
@@ -128,6 +143,7 @@ export function useEmulator(system: SystemType = "nes") {
       setRematchRequested(false);
       setDuelRoundResult(null);
       setDuelMatchResult(null);
+      setDuelRematchSessionId(newSessionId); // page.tsx observes this to charge the rematch stake
       setStatus("loading");
       // Reconnect to new session
       const adapter = adapterRef.current;
@@ -145,6 +161,9 @@ export function useEmulator(system: SystemType = "nes") {
       console.log("[useEmulator] ❌ Rematch declined by opponent");
       setRematchDeclined(true);
       setRematchRequested(false);
+    },
+    onMatchState: (data: MatchStateData) => {
+      setMatchState(data);
     },
   });
 
@@ -441,6 +460,7 @@ export function useEmulator(system: SystemType = "nes") {
             onStatusChange: setStatus,
             onRoundResult: duelCallbacksRef.current.onRoundResult,
             onMatchEnd: duelCallbacksRef.current.onMatchEnd,
+            onMatchState: duelCallbacksRef.current.onMatchState,
             onRematchStarting: duelCallbacksRef.current.onRematchStarting,
             onSessionClosed: duelCallbacksRef.current.onSessionClosed,
             onRematchRequested: duelCallbacksRef.current.onRematchRequested,
@@ -455,6 +475,7 @@ export function useEmulator(system: SystemType = "nes") {
           onStatusChange: setStatus,
           onRoundResult: duelCallbacksRef.current.onRoundResult,
           onMatchEnd: duelCallbacksRef.current.onMatchEnd,
+          onMatchState: duelCallbacksRef.current.onMatchState,
           onRematchStarting: duelCallbacksRef.current.onRematchStarting,
           onSessionClosed: duelCallbacksRef.current.onSessionClosed,
             onRematchRequested: duelCallbacksRef.current.onRematchRequested,
@@ -706,6 +727,7 @@ export function useEmulator(system: SystemType = "nes") {
   // ─── Cloud Gaming: room code + join ────────────────────────────
   const isCloud = system === "neogeo" || system === "ps1";
   const roomCode = (adapterRef.current instanceof CloudAdapter) ? adapterRef.current.roomCode : null;
+  const sessionId = (adapterRef.current instanceof CloudAdapter) ? adapterRef.current.currentSessionId : null;
 
   const joinSession = useCallback(async (code: string) => {
     // Create a CloudAdapter if one isn't already active
@@ -716,6 +738,7 @@ export function useEmulator(system: SystemType = "nes") {
         onStatusChange: setStatus,
         onRoundResult: duelCallbacksRef.current.onRoundResult,
         onMatchEnd: duelCallbacksRef.current.onMatchEnd,
+        onMatchState: duelCallbacksRef.current.onMatchState,
         onRematchStarting: duelCallbacksRef.current.onRematchStarting,
         onSessionClosed: duelCallbacksRef.current.onSessionClosed,
             onRematchRequested: duelCallbacksRef.current.onRematchRequested,
@@ -739,6 +762,7 @@ export function useEmulator(system: SystemType = "nes") {
         onStatusChange: setStatus,
         onRoundResult: duelCallbacksRef.current.onRoundResult,
         onMatchEnd: duelCallbacksRef.current.onMatchEnd,
+        onMatchState: duelCallbacksRef.current.onMatchState,
         onRematchStarting: duelCallbacksRef.current.onRematchStarting,
         onSessionClosed: duelCallbacksRef.current.onSessionClosed,
             onRematchRequested: duelCallbacksRef.current.onRematchRequested,
@@ -812,6 +836,7 @@ export function useEmulator(system: SystemType = "nes") {
      *  - Applying delayed remote inputs on the local emulator
      */
     roomCode,
+    sessionId,
     joinSession,
     connectDuelHost,
     isCloud,
@@ -821,6 +846,8 @@ export function useEmulator(system: SystemType = "nes") {
     duelSessionClosed,
     rematchRequested,
     rematchDeclined,
+    matchState,
+    duelRematchSessionId,
     stopDuel: useCallback(() => {
       const adapter = adapterRef.current;
       if (adapter instanceof CloudAdapter) {
@@ -833,10 +860,10 @@ export function useEmulator(system: SystemType = "nes") {
         adapter.requestRematch();
       }
     }, []),
-    acceptRematch: useCallback((newSessionId: string, newWsUrl: string, newRoomCode: string) => {
+    acceptRematch: useCallback(() => {
       const adapter = adapterRef.current;
       if (adapter instanceof CloudAdapter) {
-        adapter.acceptRematch(newSessionId, newWsUrl, newRoomCode);
+        adapter.acceptRematch();
       }
     }, []),
     declineRematch: useCallback(() => {

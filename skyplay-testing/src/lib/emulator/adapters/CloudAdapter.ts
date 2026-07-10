@@ -1,5 +1,5 @@
 import type { EmulatorAdapter } from "../EmulatorAdapter";
-import type { EmulatorStatus, RomEntry, SystemType } from "../types";
+import type { EmulatorStatus, RomEntry, SystemType, MatchStateData } from "../types";
 import { SYSTEM_CONFIGS } from "../EmulatorAdapter";
 
 const FRAME_HEADER_SIZE = 13; // magic(1) + width(u16) + height(u16) + frameId(u32) + nalLength(u32)
@@ -22,6 +22,7 @@ export class CloudAdapter implements EmulatorAdapter {
   private sessionId: string | null = null;
   private _roomCode: string | null = null;
   private _player: 1 | 2 = 1;
+  private mode: "cpu" | "pvp" = "cpu";
   private lastFrameId: number = 0;
   private pingInterval: ReturnType<typeof setInterval> | null = null;
 
@@ -41,6 +42,8 @@ export class CloudAdapter implements EmulatorAdapter {
   private pendingAudioChunks: EncodedAudioChunk[] = [];
   private audioCtx: AudioContext | null = null;
   private audioFrameCount = 0;
+  private audioOutputCount = 0; // DEBUG: count decoded audio frames output
+  private audioNextTime = 0;    // Precise scheduling timestamp for gapless playback
 
   constructor(systemType: SystemType, callbacks: CloudCallbacks) {
     this.systemType = systemType;
@@ -58,7 +61,7 @@ export class CloudAdapter implements EmulatorAdapter {
       const res = await fetch("/api/cloud-session", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ system: this.systemType, rom: rom.path }),
+        body: JSON.stringify({ system: this.systemType, rom: rom.path, mode: this.mode }),
       });
 
       if (!res.ok) {
@@ -115,6 +118,7 @@ export class CloudAdapter implements EmulatorAdapter {
    * session before the client connects (after P2 accepts the challenge).
    */
   async connectAsHost(wsUrl: string, sessionId: string, rom: string, roomCode: string): Promise<void> {
+    this.mode = "pvp";
     this._status = "loading";
     this.callbacks.onStatusChange("loading");
     this._currentRom = rom;
@@ -130,6 +134,16 @@ export class CloudAdapter implements EmulatorAdapter {
       this._status = "error";
       this.callbacks.onStatusChange("error");
     }
+  }
+
+  /** Set the session mode (cpu or pvp). Call before loadRom/connectAsHost. */
+  setMode(mode: "cpu" | "pvp"): void {
+    this.mode = mode;
+  }
+
+  /** Public session ID for stats lookup. */
+  get currentSessionId(): string | null {
+    return this.sessionId;
   }
 
   private connectWebSocket(wsUrl: string, mode: "init" | "join" = "init"): Promise<void> {
@@ -161,6 +175,7 @@ export class CloudAdapter implements EmulatorAdapter {
           } : {
             type: "init", sessionId: this.sessionId, token: "",
             system: this.systemType, rom: this._currentRom,
+            mode: this.mode,
           };
           this.ws!.send(JSON.stringify(initMessage));
           this.startPing();
@@ -301,6 +316,14 @@ export class CloudAdapter implements EmulatorAdapter {
 
       const init: AudioDecoderInit = {
         output: (data: AudioData) => {
+          // DEBUG: log first 5 decoded audio outputs
+          this.audioOutputCount++;
+          if (this.audioOutputCount <= 5) {
+            console.log(`[Cloud:${this.systemType}] 🔊 Audio output #${this.audioOutputCount}: ` +
+              `frames=${data.numberOfFrames} ch=${data.numberOfChannels} ` +
+              `sampleRate=${data.sampleRate} duration=${data.duration}µs ` +
+              `ctxState=${this.audioCtx?.state} muted=${this._isMuted}`);
+          }
           if (!this.audioCtx || this._isMuted) {
             data.close();
             return;
@@ -325,7 +348,26 @@ export class CloudAdapter implements EmulatorAdapter {
             const gain = this.audioCtx.createGain();
             gain.gain.value = this._volume;
             source.connect(gain).connect(this.audioCtx.destination);
-            source.start();
+
+            // ── Precise scheduling with jitter buffer ──────────────────
+            // Schedule at audioNextTime. When we first start or fall behind
+            // (underrun), add a short look-ahead (40ms) to absorb network
+            // jitter and prevent gaps that cause scratchy audio.
+            const now = this.audioCtx.currentTime;
+            const LOOKAHEAD = 0.04; // 40ms buffer against jitter
+            if (this.audioNextTime < now) {
+              // Underrun detected — this is what causes scratchy gaps.
+              // Log first few occurrences to help diagnose jitter severity.
+              if (this.audioOutputCount <= 10) {
+                console.log(`[Cloud:${this.systemType}] 🔄 Audio underrun #${this.audioOutputCount}: ` +
+                  `nextTime=${this.audioNextTime.toFixed(3)} now=${now.toFixed(3)} gap=${(now - this.audioNextTime).toFixed(3)}s`);
+              }
+              this.audioNextTime = now + LOOKAHEAD;
+            }
+            source.start(this.audioNextTime);
+            // Advance by the exact duration of this audio chunk (µs → s)
+            this.audioNextTime += data.duration / 1_000_000;
+
             data.close();
           } catch (err) {
             console.error(`[Cloud:${this.systemType}] Audio output error:`, err);
@@ -382,6 +424,63 @@ export class CloudAdapter implements EmulatorAdapter {
     }
   }
 
+  /** Play raw s16le PCM chunk directly via Web Audio API (no Opus decoder). */
+  private playPcmChunk(pcmData: Uint8Array): void {
+    if (!this.audioCtx || this._isMuted) return;
+
+    try {
+      const sampleCount = pcmData.length / 2; // s16le = 2 bytes/sample
+      const buffer = this.audioCtx.createBuffer(1, sampleCount, 48000);
+      const channelData = buffer.getChannelData(0);
+
+      // Convert s16le → float32
+      const view = new DataView(pcmData.buffer, pcmData.byteOffset, pcmData.length);
+      for (let i = 0; i < sampleCount; i++) {
+        const s16 = view.getInt16(i * 2, true); // little-endian
+        channelData[i] = s16 / 32768;
+      }
+
+      const source = this.audioCtx.createBufferSource();
+      source.buffer = buffer;
+      const gain = this.audioCtx.createGain();
+      gain.gain.value = this._volume;
+      source.connect(gain).connect(this.audioCtx.destination);
+
+      // Precise scheduling with drift protection
+      // LOOKAHEAD: small buffer to absorb network jitter (20ms for local, tune up for remote)
+      // MAX_BUFFER: hard cap to prevent clock-drift accumulation over long sessions
+      const now = this.audioCtx.currentTime;
+      const LOOKAHEAD = 0.02;
+      const MAX_BUFFER = 0.08;
+
+      if (this.audioNextTime < now) {
+        // Underrun — reset scheduling with small lookahead
+        if (this.audioOutputCount <= 10) {
+          console.log(`[Cloud:${this.systemType}] 🔄 PCM underrun #${this.audioOutputCount}: ` +
+            `nextTime=${this.audioNextTime.toFixed(3)} now=${now.toFixed(3)} gap=${(now - this.audioNextTime).toFixed(3)}s`);
+        }
+        this.audioOutputCount++;
+        this.audioNextTime = now + LOOKAHEAD;
+      } else if (this.audioNextTime > now + MAX_BUFFER) {
+        // Clock drift or burst — buffer too far ahead, reset to prevent growing latency
+        if (this.audioFrameCount <= 500) {
+          console.log(`[Cloud:${this.systemType}] 🔄 Audio drift reset: ` +
+            `buffer=${(this.audioNextTime - now).toFixed(3)}s → capped at ${MAX_BUFFER}s`);
+        }
+        this.audioNextTime = now + LOOKAHEAD;
+      }
+      source.start(this.audioNextTime);
+      this.audioNextTime += sampleCount / 48000; // advance by exact duration
+
+      if (this.audioFrameCount === 0) {
+        console.log(`[Cloud:${this.systemType}] 🎵 PCM audio started: ${sampleCount} samples, ${pcmData.length}B`);
+      }
+      this.audioFrameCount++;
+    } catch (err) {
+      console.warn(`[Cloud:${this.systemType}] PCM playback error:`, err);
+    }
+  }
+
   private closeDecoders(): void {
     if (this.videoDecoder) {
       try { this.videoDecoder.close(); } catch { /* ok */ }
@@ -397,6 +496,7 @@ export class CloudAdapter implements EmulatorAdapter {
     this.pendingVideoChunks = [];
     this.pendingAudioChunks = [];
     this.audioFrameCount = 0;
+    this.audioNextTime = 0;
     this.frameCount = 0;
     if (this.audioCtx) {
       this.audioCtx.close().catch(() => {});
@@ -445,18 +545,24 @@ export class CloudAdapter implements EmulatorAdapter {
           break;
         }
         case "round_result": {
-          const rrData = msg as unknown as { loser: number; winner: number; p1Losses: number; p2Losses: number };
-          console.log(`[Cloud:${this.systemType}] 🏆 Round result: P${rrData.winner} wins! P${rrData.loser} KO. Score: P1=${rrData.p1Losses} P2=${rrData.p2Losses}`);
+          const rrData = msg as unknown as { loser: number; winner: number; p1Losses: number; p2Losses: number; koType?: string };
+          console.log(`[Cloud:${this.systemType}] 🏆 Round result: P${rrData.winner} wins! P${rrData.loser} KO (${rrData.koType || "normal"}). Score: P1=${rrData.p1Losses} P2=${rrData.p2Losses}`);
           this.callbacks.onRoundResult?.(
-            rrData.loser, rrData.winner, rrData.p1Losses, rrData.p2Losses,
+            rrData.loser, rrData.winner, rrData.p1Losses, rrData.p2Losses, rrData.koType,
           );
           break;
         }
         case "match_end": {
-          const meData = msg as unknown as { winner: number; loser: number; p1Losses: number; p2Losses: number };
-          console.log(`[Cloud:${this.systemType}] 🏁 MATCH OVER! P${meData.winner} wins! Score: P1=${meData.p1Losses} P2=${meData.p2Losses}`);
+          const meData = msg as unknown as { winner: number; loser: number; p1Losses: number; p2Losses: number; matchNumber?: number; totalRounds?: number; perfectKos?: number; p1TeamIds?: number[]; p2TeamIds?: number[]; p1SelectOrder?: number[]; p2SelectOrder?: number[]; p1Mode?: "ADVANCED" | "EXTRA"; p2Mode?: "ADVANCED" | "EXTRA"; p1CharWins?: Record<number, number>; p2CharWins?: Record<number, number> };
+          console.log(`[Cloud:${this.systemType}] 🏁 MATCH #${meData.matchNumber || "?"} OVER! P${meData.winner} wins! Score: P1=${meData.p1Losses} P2=${meData.p2Losses}`);
           this.callbacks.onMatchEnd?.(
-            meData.winner, meData.loser, meData.p1Losses, meData.p2Losses,
+            meData.winner, meData.loser, meData.p1Losses, meData.p2Losses, meData.matchNumber, meData.totalRounds, meData.perfectKos,
+            {
+              p1TeamIds: meData.p1TeamIds, p2TeamIds: meData.p2TeamIds,
+              p1SelectOrder: meData.p1SelectOrder, p2SelectOrder: meData.p2SelectOrder,
+              p1Mode: meData.p1Mode, p2Mode: meData.p2Mode,
+              p1CharWins: meData.p1CharWins, p2CharWins: meData.p2CharWins,
+            },
           );
           break;
         }
@@ -484,6 +590,10 @@ export class CloudAdapter implements EmulatorAdapter {
         case "session_closed": {
           console.log(`[Cloud:${this.systemType}] 🚪 Session closed by server`);
           this.callbacks.onSessionClosed?.();
+          break;
+        }
+        case "match_state": {
+          this.callbacks.onMatchState?.(msg as unknown as MatchStateData);
           break;
         }
         case "pong": { break; }
@@ -557,38 +667,17 @@ export class CloudAdapter implements EmulatorAdapter {
       }
 
     } else if (magic === 0x02) {
-      // Server now sends raw Opus packets (Ogg parsing done server-side).
-      // Just feed them directly to AudioDecoder.
+      // PCM audio: raw s16le samples, 20ms chunks (960 samples at 48kHz)
       if (data.byteLength < AUDIO_HEADER_SIZE) return;
 
-      const opusLen = view.getUint32(1, true);
-      if (opusLen === 0 || AUDIO_HEADER_SIZE + opusLen > data.byteLength) return;
+      const pcmLen = view.getUint32(1, true);
+      if (pcmLen === 0 || AUDIO_HEADER_SIZE + pcmLen > data.byteLength) return;
 
-      const rawOpus = new Uint8Array(data, AUDIO_HEADER_SIZE, opusLen);
-      if (rawOpus.length === 0) return;
+      const pcmData = new Uint8Array(data, AUDIO_HEADER_SIZE, pcmLen);
+      if (pcmData.length < 2) return;
 
-      // Validate TOC byte (config field is bits 3-7 of byte 0, valid 0-15)
-      if (((rawOpus[0] >> 3) & 0x1f) > 15) {
-        console.warn(`[Cloud:${this.systemType}] Bad Opus TOC: ${rawOpus[0].toString(16)}`);
-        return;
-      }
-
-      this.audioFrameCount++;
-      const chunk = new EncodedAudioChunk({
-        type: "key",
-        timestamp: this.audioFrameCount * 20000,
-        duration: 20000,
-        data: rawOpus,
-      });
-
-      if (this.audioDecoderReady && this.audioDecoder && this.audioDecoder.state === "configured") {
-        if (this.audioDecoder.decodeQueueSize < MAX_DECODE_QUEUE) {
-          try { this.audioDecoder.decode(chunk); } catch { /* retry next tick */ }
-        }
-      } else {
-        this.pendingAudioChunks.push(chunk);
-        if (this.pendingAudioChunks.length > 600) this.pendingAudioChunks.shift();
-      }
+      // Play PCM directly via Web Audio API — no decoder needed
+      this.playPcmChunk(pcmData);
 
     } else if (magic === 0x03) {
       if (data.byteLength < CODEC_CFG_HEADER_SIZE) return;
@@ -609,7 +698,17 @@ export class CloudAdapter implements EmulatorAdapter {
         const audioCfg = JSON.parse(audioDescJson) as { codec: string; sampleRate: number; channels: number };
         console.log(`[Cloud:${this.systemType}] Codec config received:`, videoCfg.codec, audioCfg.codec);
         this.initVideoDecoder(videoCfg);
-        this.initAudioDecoder(audioCfg);
+
+        // Only init AudioDecoder for Opus; PCM plays directly via Web Audio API
+        if (audioCfg.codec === "pcm_s16le") {
+          console.log(`[Cloud:${this.systemType}] PCM audio mode — no decoder needed`);
+          if (!this.audioCtx) {
+            this.audioCtx = new AudioContext({ sampleRate: audioCfg.sampleRate || 48000 });
+          }
+          this.audioDecoderReady = true; // fake readiness for PCM
+        } else {
+          this.initAudioDecoder(audioCfg);
+        }
       } catch (err) {
         console.error(`[Cloud:${this.systemType}] Failed to parse codec config:`, err);
       }
@@ -634,7 +733,7 @@ export class CloudAdapter implements EmulatorAdapter {
     view.setUint8(4, 0x48); view.setUint8(5, 0x65); view.setUint8(6, 0x61); view.setUint8(7, 0x64);
     view.setUint8(8, 0x01);
     view.setUint8(9, channels);
-    view.setUint16(10, 312, true);
+    view.setUint16(10, 120, true);
     view.setUint32(12, sampleRate, true);
     view.setUint16(16, 0, true);
     view.setUint8(18, 0x00);
@@ -666,14 +765,9 @@ export class CloudAdapter implements EmulatorAdapter {
     this.ws?.send(JSON.stringify({ type: "rematch_request" }));
   }
 
-  /** P2 accepts the rematch — sends new session info back. */
-  acceptRematch(newSessionId: string, newWsUrl: string, newRoomCode: string): void {
-    this.ws?.send(JSON.stringify({
-      type: "rematch_accept",
-      newSessionId,
-      newWsUrl,
-      newRoomCode,
-    }));
+  /** Accept the rematch — same session, no session info needed. The server unlocks input. */
+  acceptRematch(): void {
+    this.ws?.send(JSON.stringify({ type: "rematch_accept" }));
   }
 
   /** P2 declines the rematch. */
@@ -776,9 +870,18 @@ export interface CloudCallbacks {
   onStatusChange: (status: EmulatorStatus) => void;
   onPlayerEvent?: (event: "player_joined" | "player_disconnected", player: number) => void;
   /** Called when a round ends (character KO detected). loser/winner are player numbers (1 or 2). */
-  onRoundResult?: (loser: number, winner: number, p1Losses: number, p2Losses: number) => void;
+  onRoundResult?: (loser: number, winner: number, p1Losses: number, p2Losses: number, koType?: string) => void;
   /** Called when the match is over (one player has accumulated 2+ losses). */
-  onMatchEnd?: (winner: number, loser: number, p1Losses: number, p2Losses: number) => void;
+  onMatchEnd?: (
+    winner: number, loser: number, p1Losses: number, p2Losses: number,
+    matchNumber?: number, totalRounds?: number, perfectKos?: number,
+    meta?: {
+      p1TeamIds?: number[]; p2TeamIds?: number[];
+      p1SelectOrder?: number[]; p2SelectOrder?: number[];
+      p1Mode?: "ADVANCED" | "EXTRA"; p2Mode?: "ADVANCED" | "EXTRA";
+      p1CharWins?: Record<number, number>; p2CharWins?: Record<number, number>;
+    },
+  ) => void;
   /** Called when the opponent requests a rematch. */
   onRematchRequested?: () => void;
   /** Called when the opponent accepts the rematch (new session info provided). */
@@ -789,4 +892,6 @@ export interface CloudCallbacks {
   onRematchStarting?: () => void;
   /** Called when the server closes the session — all players should return to lobby. */
   onSessionClosed?: () => void;
+  /** Live in-match state (teams, active char, gauge mode) — about every 500ms during combat. */
+  onMatchState?: (data: MatchStateData) => void;
 }

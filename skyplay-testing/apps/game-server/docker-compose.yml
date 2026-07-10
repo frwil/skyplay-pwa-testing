@@ -8,6 +8,8 @@ services:
     volumes:
       # Mount ROMs from the PWA's public/roms directory
       - ../../public/roms:/roms:ro
+      # Mount local dist/ for dev (override cached Docker build)
+      - ./dist:/app/dist:ro
     environment:
       - PORT=8080
       - HOST=0.0.0.0
@@ -18,6 +20,9 @@ services:
       - USE_XDUMMY=0
       # Session token — disabled for local dev (no JWT needed on localhost)
       # - SESSION_TOKEN_SECRET=dev-secret-change-in-production
+      # Stats API — Next.js endpoint for persisting game stats
+      - STATS_API_URL=http://host.docker.internal:3000
+      - STATS_API_TOKEN=dev
     # Needed for Xvfb
     stdin_open: true
     tty: true

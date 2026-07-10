@@ -1,29 +1,57 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import GlowBackground from "@/components/GlowBackground";
 import { useEmulator } from "@/lib/emulator/hooks/useEmulator";
+import { useFullscreen } from "@/lib/emulator/hooks/useFullscreen";
 import { useDuelLobby } from "@/lib/emulator/hooks/useDuelLobby";
 import type { DuelSession } from "@/lib/emulator/hooks/useDuelLobby";
 import type { SystemType } from "@/lib/emulator/types";
 import { SYSTEM_CONFIGS } from "@/lib/emulator/EmulatorAdapter";
 import DuelLobby from "@/components/duel/DuelLobby";
 import DuelNotification from "@/components/duel/DuelNotification";
+import { KofMatchHUD } from "@/components/play/KofMatchHUD";
+import DuelEndOverlay, { type RevengePhase, type BalanceMove } from "@/components/duel/DuelEndOverlay";
+import PlayerBadge from "@/components/PlayerBadge";
+import { useTranslation } from "@/lib/i18n/TranslationContext";
 import {
   Gamepad2, Swords, Copy, Users, Cloud, Zap, Loader2,
-  Keyboard, User, Check, AlertCircle, ArrowLeft, Activity,
+  Keyboard, User, Check, AlertCircle, ArrowLeft, Activity, LogOut,
+  Maximize2, Minimize2, History,
 } from "lucide-react";
 
 export default function DuelPage() {
   const system: SystemType = "neogeo";
   const emu = useEmulator(system);
   const cfg = SYSTEM_CONFIGS[system];
+  const { t } = useTranslation();
+
+  // Canvas container ref + fullscreen control (auto-fullscreen at match start; Escape exits).
+  const canvasContainerRef = useRef<HTMLDivElement>(null);
+  const { isFullscreen, enter: enterFullscreen, exit: exitFullscreen, toggle: toggleFullscreen } = useFullscreen();
 
   // ── Auth State ─────────────────────────────────────────────────
   const [currentUserId, setCurrentUserId] = useState<number | null>(null);
   const [currentUsername, setCurrentUsername] = useState<string | null>(null);
   const [authChecked, setAuthChecked] = useState(false);
   const [isDevMode, setIsDevMode] = useState(false);
+
+  // Current user's profile (avatar + nationality) for the header badge.
+  const [myAvatar, setMyAvatar] = useState<string | null>(null);
+  const [myCountry, setMyCountry] = useState<string | null>(null);
+
+  // Both duel participants' profiles (username/avatar/country), keyed by user id — for the overlay.
+  const [duelProfiles, setDuelProfiles] = useState<Record<number, { username: string; avatar: string | null; country: string | null }>>({});
+
+  // ── Duel SKY balance (header badge + button gating) ────────────
+  const [skyBalance, setSkyBalance] = useState<number | null>(null);
+  const [unlimitedSky, setUnlimitedSky] = useState(false);
+  const [canPlay, setCanPlay] = useState(true);
+  const [entryFee, setEntryFee] = useState(1000);
+
+  // Animated end-of-match balance panel data (you + opponent), filled from the /api/duel/result
+  // settlement response. null until the POST resolves (overlay falls back to the static line).
+  const [balanceAnim, setBalanceAnim] = useState<{ you: BalanceMove | null; opp: BalanceMove | null } | null>(null);
 
   useEffect(() => {
     // Detect local dev environment (no JWT available)
@@ -39,6 +67,8 @@ export default function DuelPage() {
           if (data.user) {
             setCurrentUserId(data.user.id);
             setCurrentUsername(data.user.username || null);
+            setMyAvatar(data.user.avatar ?? null);
+            setMyCountry(data.user.country ?? null);
             return;
           }
         }
@@ -54,6 +84,25 @@ export default function DuelPage() {
     };
     checkAuth().finally(() => setAuthChecked(true));
   }, []);
+
+  // Fetch/refresh the caller's SKY balance (used for the header badge + gating challenge/rematch).
+  const refreshBalance = useCallback(async () => {
+    if (!currentUserId) return;
+    try {
+      const q = isDevMode
+        ? `?devUserId=${currentUserId}&devUsername=${encodeURIComponent(currentUsername || "")}`
+        : "";
+      const res = await fetch(`/api/duel/balance${q}`, { credentials: "include" });
+      if (!res.ok) return;
+      const d = await res.json();
+      setSkyBalance(d.unlimitedSky ? null : d.balance);
+      setUnlimitedSky(!!d.unlimitedSky);
+      setCanPlay(!!d.canPlay);
+      if (typeof d.entryFee === "number") setEntryFee(d.entryFee);
+    } catch { /* ignore */ }
+  }, [currentUserId, isDevMode, currentUsername]);
+
+  useEffect(() => { void refreshBalance(); }, [refreshBalance]);
 
   // ── Duel Lobby ─────────────────────────────────────────────────
   const lobby = useDuelLobby({
@@ -89,6 +138,20 @@ export default function DuelPage() {
     }
   }, [lobby.duelSession, emu.status, currentUserId]);
 
+  // Fetch both participants' profiles (avatar/country/username) once a duel session exists — for
+  // the end-of-match overlay badges (players have left the lobby by then).
+  useEffect(() => {
+    const session = lobby.duelSession;
+    if (!session) return;
+    const ids = [session.player1Id, session.player2Id].filter(Boolean);
+    if (ids.length === 0) return;
+    const q = isDevMode ? `&devUserId=${currentUserId}` : "";
+    fetch(`/api/duel/profiles?ids=${ids.join(",")}${q}`, { credentials: "include" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => { if (d?.profiles) setDuelProfiles(d.profiles); })
+      .catch(() => { /* non-fatal — overlay falls back to generic badges */ });
+  }, [lobby.duelSession?.sessionId]);
+
   // ── Handle incoming challenge ──────────────────────────────────
   const handleAcceptChallenge = useCallback(async () => {
     if (!lobby.pendingChallenge) return;
@@ -117,8 +180,21 @@ export default function DuelPage() {
     setTimeout(() => window.location.reload(), 500);
   }, [emu.exit, lobby.clearChallenge, lobby.joinLobby]);
 
+  // ── Post-game summary (shown after session ends) ──────────────
+  const [postGame, setPostGame] = useState<{
+    sessionId: string;
+    matches: typeof emu.duelMatchHistory;
+    p1Wins: number;
+    p2Wins: number;
+    perfectKos: number;
+  } | null>(null);
+
   // ── Toast & auto-save ──────────────────────────────────────────
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+
+  // ── End-match blocking overlay + revenge (same-session) ────────
+  const [revengePhase, setRevengePhase] = useState<RevengePhase | null>(null);
+  const [countdown, setCountdown] = useState(30);
 
   // Auto-save on each match end + show toast
   useEffect(() => {
@@ -132,28 +208,148 @@ export default function DuelPage() {
     const p2Wins = emu.duelMatchHistory.filter((r) => r.winner === 2).length;
 
     // Show toast
-    const winnerLabel = result.winner === (session.player1Id === currentUserId ? 1 : 2) ? "Vous" : "Adversaire";
-    setToastMessage(`🏆 ${winnerLabel} gagne ce match ! Score: ${p1Wins} - ${p2Wins}`);
+    const winnerLabel = result.winner === (session.player1Id === currentUserId ? 1 : 2) ? t.duel.you : t.duel.opponent;
+    setToastMessage(t.duel.page.toastWinMatch(winnerLabel, p1Wins, p2Wins));
     const timer = setTimeout(() => setToastMessage(null), 4000);
 
-    // Save result to DB
+    // Save result to DB. A draw (winner 0) sends winnerId/loserId = 0 so the server settles the
+    // escrow chamber as a draw (platform keeps the pot) instead of mis-reading a fake winner.
+    const decisive = result.winner === 1 || result.winner === 2;
+    const oppId = session.player1Id === currentUserId ? session.player2Id : session.player1Id;
+    // Clear any prior match's animated balances so the new overlay doesn't flash stale numbers.
+    setBalanceAnim(null);
     fetch("/api/duel/result", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         challengeId: session.challengeId,
-        winnerId: result.winner === 1 ? session.player1Id : session.player2Id,
-        loserId: result.loser === 1 ? session.player1Id : session.player2Id,
+        winnerId: decisive ? (result.winner === 1 ? session.player1Id : session.player2Id) : 0,
+        loserId: decisive ? (result.loser === 1 ? session.player1Id : session.player2Id) : 0,
         p1Losses: result.p1Losses,
         p2Losses: result.p2Losses,
+        perfectKoCount: result.perfectKos ?? 0,
         sessionId: session.sessionId,
         markCompleted: false,
         ...(isDevMode ? { devUserId: currentUserId, devUsername: currentUsername } : {}),
       }),
-    }).catch((e) => console.error("[Duel] Failed to save result:", e));
+    })
+      .then(async (r) => {
+        void refreshBalance();
+        if (!r.ok) return;
+        const data = await r.json().catch(() => null);
+        const bal = data?.settlement?.balances as
+          | Record<string, { after: number | null; sessionDelta: number; unlimited: boolean }>
+          | undefined;
+        if (!bal) return;
+        // Reconstruct each player's pre-match balance (before = after − net session delta) for the
+        // animated before→after counter. Admins (unlimited/after null) get no animation (∞).
+        const toMove = (b?: { after: number | null; sessionDelta: number; unlimited: boolean }): BalanceMove | null =>
+          b
+            ? {
+                after: b.after,
+                delta: b.sessionDelta,
+                unlimited: !!b.unlimited,
+                before: b.unlimited || b.after === null ? null : b.after - b.sessionDelta,
+              }
+            : null;
+        setBalanceAnim({
+          you: currentUserId != null ? toMove(bal[String(currentUserId)]) : null,
+          opp: toMove(bal[String(oppId)]),
+        });
+      })
+      .catch((e) => console.error("[Duel] Failed to save result:", e));
 
     return () => clearTimeout(timer);
   }, [emu.duelMatchHistory.length]);
+
+  // Rematch stake: when a rematch is accepted a fresh session id is emitted. Charge both players'
+  // entry fee into the new chamber (the WS rematch path never hits challenge/respond). The server
+  // is idempotent per session id, so both clients firing this is safe.
+  useEffect(() => {
+    const newSessionId = emu.duelRematchSessionId;
+    const session = lobby.duelSession;
+    if (!newSessionId || !session) return;
+    fetch("/api/duel/wager/charge", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        challengeId: session.challengeId,
+        sessionId: newSessionId,
+        player1Id: session.player1Id,
+        player2Id: session.player2Id,
+        ...(isDevMode ? { devUserId: currentUserId, devUsername: currentUsername } : {}),
+      }),
+    })
+      .then((r) => { if (!r.ok) console.error("[Duel] Rematch charge failed:", r.status); void refreshBalance(); })
+      .catch((e) => console.error("[Duel] Rematch charge error:", e));
+  }, [emu.duelRematchSessionId]);
+
+  // ── End-match overlay lifecycle ────────────────────────────────
+  // Show the blocking overlay when a match ends (PvP session), reset when a
+  // same-session rematch starts (onRematchStarting clears duelMatchResult).
+  useEffect(() => {
+    if (emu.duelMatchResult && lobby.duelSession) {
+      setRevengePhase("stats");
+      // Draw match (winner 0) auto-returns to the Cage after a short countdown;
+      // decisive matches keep the (test-frozen) 30 so players can read the stats.
+      setCountdown(emu.duelMatchResult.winner === 0 ? 10 : 30);
+    } else {
+      setRevengePhase(null);
+      setBalanceAnim(null);
+    }
+  }, [emu.duelMatchResult]);
+
+  // Countdown while showing stats (no revenge in progress) → back to lobby at 0.
+  // Décisif : 30 s pour lire les stats puis retour Cage. Nul (winner 0) : 10 s (voir setCountdown).
+  // Le passage en "requesting"/"incoming" (revanche) stoppe le décompte via la garde
+  // revengePhase !== "stats".
+  useEffect(() => {
+    if (revengePhase !== "stats") return;
+    if (countdown <= 0) { handleExit(); return; }
+    const t = setTimeout(() => setCountdown((c) => c - 1), 1000);
+    return () => clearTimeout(t);
+  }, [revengePhase, countdown]);
+
+  // Winner: opponent (loser) requested a rematch → show accept/decline, stop countdown.
+  // Functional update: only the winner is still in "stats" when the request arrives
+  // (the loser has already moved to "requesting"), so this reliably targets the winner.
+  useEffect(() => {
+    if (!emu.rematchRequested) return;
+    setRevengePhase((p) => (p === "stats" ? "incoming" : p));
+  }, [emu.rematchRequested]);
+
+  // Loser: winner declined → notify for 5s (declined countdown) then exit.
+  useEffect(() => {
+    if (emu.rematchDeclined && revengePhase) {
+      setRevengePhase("declined");
+      setCountdown(5);
+    }
+  }, [emu.rematchDeclined]);
+
+  // Safety: if the loser's revenge request goes unanswered (winner left), exit.
+  useEffect(() => {
+    if (revengePhase !== "requesting") return;
+    const t = setTimeout(() => handleExit(), 20000);
+    return () => clearTimeout(t);
+  }, [revengePhase]);
+
+  // ── Revenge handlers ───────────────────────────────────────────
+  const handleRequestRevenge = useCallback(() => {
+    setRevengePhase("requesting");
+    emu.requestRematch();
+  }, [emu.requestRematch]);
+
+  const handleAcceptRevenge = useCallback(() => {
+    // Server unlocks input + broadcasts rematch_starting → onRematchStarting
+    // clears duelMatchResult on both sides → overlay hides, players re-pick teams.
+    emu.acceptRematch();
+  }, [emu.acceptRematch]);
+
+  const handleDeclineRevenge = useCallback(() => {
+    emu.declineRematch();
+    // Give the decline message time to flush before tearing down the socket.
+    setTimeout(() => handleExit(), 400);
+  }, [emu.declineRematch]);
 
   // ── Stop duel ────────────────────────────────────────────────────
   const handleStopDuel = useCallback(async () => {
@@ -179,16 +375,22 @@ export default function DuelPage() {
         console.error("[Duel] Failed to mark challenge completed:", e);
       }
     }
+    // Capture stats before cleanup
+    const sid = emu.sessionId || session?.sessionId || "";
+    const matches = [...emu.duelMatchHistory];
+    const p1Wins = matches.filter((r) => r.winner === 1).length;
+    const p2Wins = matches.filter((r) => r.winner === 2).length;
+    const perfectKos = matches.reduce((sum, r) => sum + (r.perfectKos || 0), 0);
     emu.stopDuel();
-    handleExit();
-  }, [lobby.duelSession, emu.stopDuel, handleExit, isDevMode, currentUserId, currentUsername]);
+    setPostGame({ sessionId: sid, matches, p1Wins, p2Wins, perfectKos });
+  }, [lobby.duelSession, emu.stopDuel, emu.sessionId, emu.duelMatchHistory, isDevMode, currentUserId, currentUsername]);
 
-  // ── Session closed by server → save + reload ──────────────────
+  // ── Session closed by server → save + show post-game ──────────
   useEffect(() => {
     if (!emu.duelSessionClosed) return;
-    console.log("[Duel] Session closed by server — saving result and reloading");
+    console.log("[Duel] Session closed by server — saving result and showing post-game");
 
-    const saveAndReload = async () => {
+    const saveAndShow = async () => {
       // Save result if match ended (overlay was shown) and we have session info
       const result = emu.duelMatchResult;
       const session = lobby.duelSession;
@@ -213,12 +415,16 @@ export default function DuelPage() {
         }
       }
 
-      lobby.clearChallenge();
-      lobby.joinLobby();
-      setTimeout(() => window.location.reload(), 500);
+      // Show post-game summary with stats link
+      const sid = emu.sessionId || session?.sessionId || "";
+      const matches = [...emu.duelMatchHistory];
+      const p1Wins = matches.filter((r) => r.winner === 1).length;
+      const p2Wins = matches.filter((r) => r.winner === 2).length;
+      const perfectKos = matches.reduce((sum, r) => sum + (r.perfectKos || 0), 0);
+      setPostGame({ sessionId: sid, matches, p1Wins, p2Wins, perfectKos });
     };
 
-    saveAndReload();
+    saveAndShow();
   }, [emu.duelSessionClosed]);
 
   // ── Cleanup on unmount ─────────────────────────────────────────
@@ -259,6 +465,18 @@ export default function DuelPage() {
         ? "host"
         : "guest"
       : null;
+
+  // Fullscreen lifecycle: enter when a match is actively being played (no end overlay), exit
+  // when the end overlay appears or the game stops. Escape exits natively (reflected by the hook).
+  // Programmatic enter may be blocked without a fresh user gesture — the toggle button is the
+  // fallback, and a blocked request just leaves the canvas windowed (no crash).
+  useEffect(() => {
+    if (gameActive && !revengePhase) {
+      void enterFullscreen(canvasContainerRef.current);
+    } else {
+      void exitFullscreen();
+    }
+  }, [gameActive, revengePhase, enterFullscreen, exitFullscreen]);
 
   const [copied, setCopied] = useState(false);
   const handleCopyCode = useCallback(async () => {
@@ -302,7 +520,15 @@ export default function DuelPage() {
               DUEL
             </div>
             {authChecked && currentUserId && (
-              <div className="flex items-center gap-2">
+              <a href="/profile" className="flex items-center gap-2 hover:opacity-80 transition" title={t.profile.link}>
+                <PlayerBadge
+                  username={currentUsername || ""}
+                  avatar={myAvatar}
+                  country={myCountry}
+                  size={28}
+                  hideName
+                  accent="#4ade80"
+                />
                 <span
                   className="px-3 py-1 rounded-full text-xs font-bold flex items-center gap-1.5"
                   style={{
@@ -311,20 +537,46 @@ export default function DuelPage() {
                     color: "#4ade80",
                   }}
                 >
-                  <User className="w-3 h-3" />
                   {currentUsername}
                 </span>
-              </div>
+              </a>
             )}
           </div>
 
           <div className="flex items-center gap-4">
-            <a href="/login" className="text-xs text-white/40 hover:text-white transition font-medium">
-              Connexion
-            </a>
+            {authChecked && currentUserId ? (
+              <button
+                onClick={async () => {
+                  try {
+                    await fetch("/api/auth/logout", { method: "POST", credentials: "include" });
+                  } catch { /* ignore */ }
+                  window.location.reload();
+                }}
+                className="text-xs text-white/40 hover:text-white transition font-medium flex items-center gap-1"
+              >
+                <LogOut className="w-3 h-3" />
+                {t.duel.page.logout}
+              </button>
+            ) : (
+              <a href="/login" className="text-xs text-white/40 hover:text-white transition font-medium">
+                {t.duel.page.login}
+              </a>
+            )}
+            {authChecked && currentUserId && (
+              <a href="/duel/history" className="text-xs text-white/40 hover:text-white transition font-medium flex items-center gap-1">
+                <History className="w-3 h-3" />
+                {t.duel.history.link}
+              </a>
+            )}
+            {authChecked && currentUserId && (
+              <a href="/profile" className="text-xs text-white/40 hover:text-white transition font-medium flex items-center gap-1">
+                <User className="w-3 h-3" />
+                {t.profile.link}
+              </a>
+            )}
             <a href="/play" className="text-xs text-white/40 hover:text-white transition font-medium flex items-center gap-1">
               <ArrowLeft className="w-3 h-3" />
-              Back to Play
+              {t.duel.page.backToPlay}
             </a>
           </div>
         </div>
@@ -343,16 +595,48 @@ export default function DuelPage() {
         />
       )}
 
+      {/* ── End-of-match blocking overlay (PvP) ─────────────────── */}
+      {revengePhase && emu.duelMatchResult && lobby.duelSession && (() => {
+        const localSide: 1 | 2 = lobby.duelSession.player1Id === currentUserId ? 1 : 2;
+        const isWinner = emu.duelMatchResult.winner === localSide;
+        const p1 = duelProfiles[lobby.duelSession.player1Id];
+        const p2 = duelProfiles[lobby.duelSession.player2Id];
+        const youProfile = localSide === 1 ? p1 : p2;
+        const oppProfile = localSide === 1 ? p2 : p1;
+        return (
+          <DuelEndOverlay
+            result={emu.duelMatchResult}
+            matchHistory={emu.duelMatchHistory}
+            localSide={localSide}
+            isWinner={isWinner}
+            sessionId={emu.sessionId || lobby.duelSession.sessionId || ""}
+            phase={revengePhase}
+            countdown={countdown}
+            entryFee={entryFee}
+            localBalance={skyBalance}
+            unlimitedSky={unlimitedSky}
+            canRematch={unlimitedSky || (skyBalance !== null && skyBalance >= entryFee)}
+            settlement={balanceAnim}
+            youProfile={youProfile}
+            oppProfile={oppProfile}
+            onRequestRevenge={handleRequestRevenge}
+            onAcceptRevenge={handleAcceptRevenge}
+            onDeclineRevenge={handleDeclineRevenge}
+            onExit={handleExit}
+          />
+        );
+      })()}
+
       <section className="relative z-10 max-w-5xl mx-auto px-4 py-8 pb-20">
         {/* Title */}
         <div className="text-center mb-8">
           <h1 className="text-3xl sm:text-4xl font-black text-white mb-2">
-            ⚔️ KOF &apos;98 Duel Arena
+            {t.duel.page.arenaTitle}
           </h1>
           <p className="text-sm text-white/40 max-w-lg mx-auto">
             {gameActive
-              ? "Fight! Use the controls below to play."
-              : "Join the lobby, find an opponent, and challenge them to a duel."}
+              ? t.duel.fightPrompt
+              : t.duel.intro}
           </p>
         </div>
 
@@ -386,10 +670,10 @@ export default function DuelPage() {
                   style={{ color: "#f15bb5" }}
                 />
                 <p className="text-sm font-bold text-white mb-1">
-                  Challenge sent to {lobby.outgoingChallenge.targetUsername}!
+                  {t.duel.page.challengeSentTo(lobby.outgoingChallenge.targetUsername)}
                 </p>
                 <p className="text-xs text-white/30">
-                  Waiting for response...
+                  {t.duel.page.waitingResponse}
                 </p>
               </>
             )}
@@ -397,10 +681,10 @@ export default function DuelPage() {
               <>
                 <AlertCircle className="w-8 h-8 mx-auto mb-3" style={{ color: "#fd2e5f" }} />
                 <p className="text-sm font-bold text-white mb-1">
-                  Challenge declined
+                  {t.duel.page.challengeDeclinedTitle}
                 </p>
                 <p className="text-xs text-white/30 mb-3">
-                  {lobby.outgoingChallenge.targetUsername} declined your challenge.
+                  {t.duel.page.declinedYourChallenge(lobby.outgoingChallenge.targetUsername)}
                 </p>
                 <button
                   onClick={lobby.clearChallenge}
@@ -411,7 +695,7 @@ export default function DuelPage() {
                     color: "rgba(255,255,255,0.5)",
                   }}
                 >
-                  Back to Lobby
+                  {t.duel.backToLobby}
                 </button>
               </>
             )}
@@ -432,7 +716,7 @@ export default function DuelPage() {
               >
                 <User className="w-10 h-10 mx-auto mb-3" style={{ color: "rgba(255,255,255,0.2)" }} />
                 <p className="text-sm text-white/40 mb-4">
-                  Sign in to join the duel lobby
+                  {t.duel.signInToJoin}
                 </p>
                 <a
                   href="/play"
@@ -443,7 +727,7 @@ export default function DuelPage() {
                     color: "#00c8ff",
                   }}
                 >
-                  Go to Play (sign in)
+                  {t.duel.page.goToPlaySignIn}
                 </a>
               </div>
             )}
@@ -463,6 +747,10 @@ export default function DuelPage() {
                 isSending={lobby.isSending}
                 onChallenge={handleChallenge}
                 onJoinLobby={lobby.joinLobby}
+                canChallenge={canPlay}
+                entryFee={entryFee}
+                balance={skyBalance}
+                unlimitedSky={unlimitedSky}
               />
             )}
           </div>
@@ -476,7 +764,7 @@ export default function DuelPage() {
               style={{ borderColor: "rgba(0,200,255,0.3)", borderTopColor: "transparent" }}
             />
             <p className="text-sm font-medium text-cyan-300/70">
-              {playerRole === "guest" ? "Joining game..." : "Starting KOF '98 duel..."}
+              {playerRole === "guest" ? t.duel.page.joiningGame : t.duel.page.startingDuel}
             </p>
           </div>
         )}
@@ -493,9 +781,9 @@ export default function DuelPage() {
             >
               <span style={{ color: "#fd2e5f", fontSize: "24px" }}>!</span>
             </div>
-            <p className="text-sm font-semibold text-red-400">Failed to start game</p>
+            <p className="text-sm font-semibold text-red-400">{t.duel.page.failedToStart}</p>
             <p className="text-xs text-white/25">
-              Check that the game server is running.
+              {t.duel.page.checkServer}
             </p>
             <button
               onClick={handleExit}
@@ -505,13 +793,14 @@ export default function DuelPage() {
                 border: "1px solid rgba(255,255,255,0.1)",
               }}
             >
-              Back to Lobby
+              {t.duel.backToLobby}
             </button>
           </div>
         )}
 
         {/* ── Game Canvas ────────────────────────────────────────── */}
         <div
+          ref={canvasContainerRef}
           className="relative rounded-3xl border overflow-hidden mx-auto"
           style={{
             backgroundColor: "rgba(13,27,46,0.85)",
@@ -519,8 +808,10 @@ export default function DuelPage() {
             boxShadow: gameActive
               ? "0 0 60px rgba(0,200,255,0.2), inset 0 0 40px rgba(0,200,255,0.03)"
               : "0 0 20px rgba(0,0,0,0.3)",
-            aspectRatio: `${cfg.width} / ${cfg.height}`,
-            maxWidth: "960px",
+            aspectRatio: isFullscreen ? undefined : `${cfg.width} / ${cfg.height}`,
+            width: isFullscreen ? "100vw" : undefined,
+            height: isFullscreen ? "100vh" : undefined,
+            maxWidth: isFullscreen ? undefined : "960px",
             display: gameActive || isLoading || emu.status === "error" ? "block" : "none",
           }}
         >
@@ -541,6 +832,9 @@ export default function DuelPage() {
             />
           )}
 
+          {/* Live in-match HUD: teams + active char + gauge mode */}
+          {gameActive && <KofMatchHUD state={emu.matchState} />}
+
           {/* Paused overlay */}
           {emu.status === "paused" && (
             <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/50 backdrop-blur-[2px]">
@@ -554,7 +848,7 @@ export default function DuelPage() {
                 >
                   <span style={{ color: "#ffd700", fontSize: "28px" }}>⏸</span>
                 </div>
-                <p className="text-sm font-bold uppercase tracking-wider text-yellow-400">Paused</p>
+                <p className="text-sm font-bold uppercase tracking-wider text-yellow-400">{t.duel.page.paused}</p>
               </div>
             </div>
           )}
@@ -575,14 +869,14 @@ export default function DuelPage() {
               </InfoBadge>
               <InfoBadge color="rgba(139,92,246,0.8)" bg="rgba(139,92,246,0.12)">
                 <Cloud className="w-2.5 h-2.5" />
-                Cloud
+                {t.duel.page.cloud}
               </InfoBadge>
               <InfoBadge
                 color={playerRole === "host" ? "#00c8ff" : "#f15bb5"}
                 bg="rgba(0,0,0,0.6)"
               >
                 <User className="w-2.5 h-2.5" />
-                {playerRole === "host" ? "P1 — You (Host)" : "P2 — You (Guest)"}
+                {playerRole === "host" ? t.duel.page.hostYou : t.duel.page.guestYou}
               </InfoBadge>
             </div>
           )}
@@ -599,7 +893,7 @@ export default function DuelPage() {
                   color: "rgba(34,197,94,0.9)",
                   border: "1px solid rgba(34,197,94,0.25)",
                 }}
-                title="Click to copy room code"
+                title={t.duel.page.copyRoomCode}
               >
                 <Users className="w-3.5 h-3.5" />
                 <span className="font-mono tracking-[4px]">{emu.roomCode}</span>
@@ -607,7 +901,149 @@ export default function DuelPage() {
               </button>
             </div>
           )}
+
+          {/* Fullscreen toggle — fallback when programmatic auto-fullscreen is blocked, and an
+              explicit exit control. Escape also exits natively. */}
+          {gameActive && (
+            <button
+              onClick={() => void toggleFullscreen(canvasContainerRef.current)}
+              className="absolute bottom-3 right-3 z-30 flex items-center justify-center rounded-full p-2 pointer-events-auto transition-all hover:scale-105"
+              style={{
+                backgroundColor: "rgba(0,0,0,0.6)",
+                backdropFilter: "blur(8px)",
+                color: "rgba(255,255,255,0.8)",
+                border: "1px solid rgba(255,255,255,0.12)",
+              }}
+              title={isFullscreen ? t.duel.page.exitFullscreen : t.duel.page.enterFullscreen}
+            >
+              {isFullscreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
+            </button>
+          )}
         </div>
+
+        {/* ── Post-Game Summary ─────────────────────────────────── */}
+        {postGame && (
+          <div className="flex flex-col items-center py-12 gap-6">
+            <div
+              className="rounded-3xl border p-8 max-w-lg w-full text-center"
+              style={{
+                backgroundColor: "rgba(13,27,46,0.9)",
+                borderColor: "rgba(241,91,181,0.3)",
+                boxShadow: "0 0 40px rgba(241,91,181,0.15)",
+              }}
+            >
+              {/* Header */}
+              <div className="mb-6">
+                <div
+                  className="w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4"
+                  style={{
+                    backgroundColor: "rgba(241,91,181,0.12)",
+                    border: "2px solid rgba(241,91,181,0.3)",
+                  }}
+                >
+                  <Swords className="w-8 h-8" style={{ color: "#f15bb5" }} />
+                </div>
+                <h2 className="text-xl font-black text-white mb-1">{t.duel.page.duelFinished}</h2>
+                <p className="text-xs text-white/30">
+                  {postGame.matches.length > 0
+                    ? t.duel.page.matchesPlayed(postGame.matches.length)
+                    : t.duel.page.noMatchCompleted}
+                </p>
+              </div>
+
+              {/* Scoreboard */}
+              {postGame.matches.length > 0 && (
+                <div
+                  className="rounded-xl border p-4 mb-6"
+                  style={{
+                    backgroundColor: "rgba(0,0,0,0.3)",
+                    borderColor: "rgba(255,255,255,0.08)",
+                  }}
+                >
+                  <div className="flex items-center justify-center gap-6 mb-3">
+                    <div className="text-center">
+                      <p className="text-[10px] text-white/30 uppercase tracking-wider mb-1">P1</p>
+                      <p className="text-3xl font-black" style={{ color: "#00c8ff" }}>
+                        {postGame.p1Wins}
+                      </p>
+                    </div>
+                    <span className="text-2xl font-black text-white/20">-</span>
+                    <div className="text-center">
+                      <p className="text-[10px] text-white/30 uppercase tracking-wider mb-1">P2</p>
+                      <p className="text-3xl font-black" style={{ color: "#f15bb5" }}>
+                        {postGame.p2Wins}
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Match breakdown */}
+                  <div className="space-y-1.5">
+                    {postGame.matches.map((m, i) => (
+                      <div
+                        key={i}
+                        className="flex items-center justify-between rounded-lg px-3 py-1.5 text-xs"
+                        style={{ backgroundColor: "rgba(255,255,255,0.03)" }}
+                      >
+                        <span className="text-white/40 font-bold">{t.duel.page.matchN(m.matchNumber || i + 1)}</span>
+                        <span className="text-white/60">
+                          P1 {m.p1Losses} - {m.p2Losses} P2
+                        </span>
+                        <span className="font-bold" style={{ color: m.winner === 1 ? "#00c8ff" : "#f15bb5" }}>
+                          {t.duel.page.pWins(m.winner)}
+                        </span>
+                        {(m.perfectKos || 0) > 0 && (
+                          <span
+                            className="rounded-full px-2 py-0.5 text-[9px] font-bold"
+                            style={{
+                              backgroundColor: "rgba(255,215,0,0.15)",
+                              color: "#ffd700",
+                            }}
+                          >
+                            {t.duel.page.perfectTimes(m.perfectKos || 0)}
+                          </span>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+
+                  {postGame.perfectKos > 0 && (
+                    <div className="mt-3 text-[10px] font-bold" style={{ color: "#ffd700" }}>
+                      {t.duel.page.totalPerfects(postGame.perfectKos)}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Action Buttons */}
+              <div className="flex flex-col gap-3">
+                {postGame.sessionId && (
+                  <a
+                    href={`/stats/${postGame.sessionId}`}
+                    className="block w-full px-5 py-3 rounded-xl text-sm font-bold transition-all hover:scale-105"
+                    style={{
+                      backgroundColor: "rgba(241,91,181,0.15)",
+                      border: "1px solid rgba(241,91,181,0.35)",
+                      color: "#f15bb5",
+                    }}
+                  >
+                    {t.duel.page.viewStats}
+                  </a>
+                )}
+                <button
+                  onClick={handleExit}
+                  className="w-full px-5 py-3 rounded-xl text-sm font-bold transition-all hover:scale-105"
+                  style={{
+                    backgroundColor: "rgba(255,255,255,0.05)",
+                    border: "1px solid rgba(255,255,255,0.1)",
+                    color: "rgba(255,255,255,0.6)",
+                  }}
+                >
+                  ↩ {t.duel.backToLobby}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* ── Toast Notification ─────────────────────────────────── */}
         {toastMessage && (
@@ -646,7 +1082,7 @@ export default function DuelPage() {
                 <span>
                   🏆{" "}
                   <span style={{ color: isP1 ? "#4ade80" : "#f15bb5" }}>
-                    {isP1 ? "Vous" : "P1"}
+                    {isP1 ? t.duel.you : "P1"}
                   </span>{" "}
                   <span style={{ color: "#4ade80" }}>{p1Wins}</span>
                 </span>
@@ -654,14 +1090,14 @@ export default function DuelPage() {
                 <span>
                   <span style={{ color: "#f15bb5" }}>{p2Wins}</span>{" "}
                   <span style={{ color: isP1 ? "#f15bb5" : "#4ade80" }}>
-                    {isP1 ? "P2" : "Vous"}
+                    {isP1 ? "P2" : t.duel.you}
                   </span>
                 </span>
                 {lastMatch && (
                   <>
                     <span className="text-white/10">|</span>
                     <span className="text-white/35">
-                      Dernier: {lastMatch.winner === 1 ? "P1" : "P2"}
+                      {t.duel.page.last}: {lastMatch.winner === 1 ? "P1" : "P2"}
                       {" ("}{lastMatch.p1Losses}-{lastMatch.p2Losses}{")"}
                     </span>
                   </>
@@ -675,7 +1111,7 @@ export default function DuelPage() {
                     color: "#fd2e5f",
                   }}
                 >
-                  Stop
+                  {t.duel.page.stop}
                 </button>
               </div>
             </div>
@@ -694,7 +1130,7 @@ export default function DuelPage() {
                 color: "#fd2e5f",
               }}
             >
-              ⏹ Stop Duel
+              {t.duel.page.stopDuel}
             </button>
           </div>
         )}
@@ -703,32 +1139,32 @@ export default function DuelPage() {
         {gameActive && (
           <div className="mt-8 grid grid-cols-1 md:grid-cols-2 gap-6">
             <ControlsCard
-              title="Player 1 Controls"
+              title={t.duel.page.p1Controls}
               accent="#00c8ff"
               controls={[
-                { label: "Move", keys: "W A S D" },
+                { label: t.duel.page.ctrlMove, keys: "W A S D" },
                 { label: "A (Punch)", keys: "Z" },
                 { label: "B (Kick)", keys: "X" },
                 { label: "C (Strong Punch)", keys: "C" },
                 { label: "D (Strong Kick)", keys: "V" },
-                { label: "Coin", keys: "Space" },
-                { label: "Start", keys: "Enter" },
+                { label: t.duel.page.ctrlCoin, keys: "Space" },
+                { label: t.duel.page.ctrlStart, keys: "Enter" },
               ]}
-              note="QWERTY: WASD + Z/X/C/V. AZERTY: ZQSD + W/X/C/V (same physical keys)."
+              note={t.duel.page.p1Note}
             />
             <ControlsCard
-              title="Player 2 Controls"
+              title={t.duel.page.p2Controls}
               accent="#f15bb5"
               controls={[
-                { label: "Move", keys: "W A S D" },
+                { label: t.duel.page.ctrlMove, keys: "W A S D" },
                 { label: "A (Punch)", keys: "Z" },
                 { label: "B (Kick)", keys: "X" },
                 { label: "C (Strong Punch)", keys: "C" },
                 { label: "D (Strong Kick)", keys: "V" },
-                { label: "Coin", keys: "Space" },
-                { label: "Start", keys: "Enter" },
+                { label: t.duel.page.ctrlCoin, keys: "Space" },
+                { label: t.duel.page.ctrlStart, keys: "Enter" },
               ]}
-              note="Guest uses the SAME physical keys. CloudAdapter routes inputs to correct player."
+              note={t.duel.page.p2Note}
             />
           </div>
         )}
