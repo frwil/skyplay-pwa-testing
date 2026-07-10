@@ -10,6 +10,11 @@ services:
       - ../../public/roms:/roms:ro
       # Mount local dist/ for dev (override cached Docker build)
       - ./dist:/app/dist:ro
+      # Plan A: where the mp4 recorder writes before Blob upload (inspectable on host)
+      - ./recordings:/recordings
+    # Plan A: BLOB_READ_WRITE_TOKEN (secret) lives in the gitignored .env, not committed here
+    env_file:
+      - .env
     environment:
       - PORT=8080
       - HOST=0.0.0.0
@@ -20,9 +25,14 @@ services:
       - USE_XDUMMY=0
       # Session token — disabled for local dev (no JWT needed on localhost)
       # - SESSION_TOKEN_SECRET=dev-secret-change-in-production
-      # Stats API — Next.js endpoint for persisting game stats
-      - STATS_API_URL=http://host.docker.internal:3000
+      # Stats API — points at PROD Next.js so recording metadata + stats reach prod.
+      # (Local dev alt: http://host.docker.internal:3000)
+      - STATS_API_URL=https://skyplay-testing.vercel.app
       - STATS_API_TOKEN=dev
+      # Plan A — match recording + live RTMP streaming (see src/recording.ts)
+      - RECORDING_ENABLED=1
+      - STREAMING_ENABLED=1
+      - RECORDINGS_DIR=/recordings
     # Needed for Xvfb
     stdin_open: true
     tty: true

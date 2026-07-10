@@ -1,3 +1,4 @@
 .vercel
 
 db-backups/
+cloudflared.log

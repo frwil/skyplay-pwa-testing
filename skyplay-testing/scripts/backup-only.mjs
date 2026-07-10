@@ -7,7 +7,7 @@ const envContent = fs.readFileSync(".env.local", "utf8");
 const env = {};
 envContent.split("\n").forEach((line) => {
   const m = line.match(/^([^=]+)=(.*)$/);
-  if (m) env[m[1]] = m[2].trim();
+  if (m) env[m[1]] = m[2].trim().replace(/^["']|["']$/g, "");
 });
 
 const url = env.TURSO_DATABASE_URL;

@@ -1,0 +1,10 @@
+import { createClient } from "@libsql/client";
+import fs from "fs";
+const env = {};
+fs.readFileSync(".env.local","utf8").split("\n").forEach(l=>{const m=l.match(/^([^=]+)=(.*)$/);if(m)env[m[1]]=m[2].trim().replace(/^["']|["']$/g,"");});
+const db = createClient({ url: env.TURSO_DATABASE_URL, authToken: env.TURSO_AUTH_TOKEN });
+const info = await db.execute("PRAGMA table_info(duel_recordings)");
+console.log("duel_recordings columns:");
+for (const r of info.rows) console.log(`  ${r.name} ${r.type}${r.pk?" PK":""}`);
+const eco = await db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('sky_transactions','escrow_rooms','platform_bank','duel_recordings') ORDER BY name");
+console.log("economy+recording tables present:", eco.rows.map(r=>r.name).join(", "));
