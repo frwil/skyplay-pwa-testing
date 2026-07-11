@@ -29,8 +29,10 @@ services:
       # (Local dev alt: http://host.docker.internal:3000)
       - STATS_API_URL=https://skyplay-testing.vercel.app
       - STATS_API_TOKEN=dev
-      # Plan A — match recording + live RTMP streaming (see src/recording.ts)
-      - RECORDING_ENABLED=1
+      # Plan A — recording OFF (a 2nd libx264 encode per duel starves the live feed on
+      # this CPU-bound host). Streaming stays gated (inert until a client sends an RTMP key).
+      # Re-enable once recording muxes the already-encoded live h264 (tee) instead of re-grabbing.
+      - RECORDING_ENABLED=0
       - STREAMING_ENABLED=1
       - RECORDINGS_DIR=/recordings
     # Needed for Xvfb

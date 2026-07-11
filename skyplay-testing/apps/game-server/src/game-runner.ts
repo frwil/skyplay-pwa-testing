@@ -7,6 +7,12 @@ import { join } from "path";
 import { SYSTEM_CORES, SYSTEM_RESOLUTIONS, UPSCALE, XDOTOOL_KEY_MAP, XDOTOOL_KEY_MAP_P2, getButtonToRetroarch, buildRetroarchKeyConfig } from "./config.js";
 import { isRecordingEnabled, isStreamingEnabled, recordingDir, recorderFfmpegArgs, streamerFfmpegArgs, uploadRecording } from "./recording.js";
 
+// Verbose per-frame / per-input RAM-detection tracing. OFF by default: those logs fire
+// dozens of times per second during a live round and each console.log to the Docker
+// json-file driver is a synchronous stdout write that competes with the frame pump.
+// Re-enable with DEBUG_RAM=1 when working on RAM/roster/input detection.
+const DEBUG_RAM = process.env.DEBUG_RAM === "1";
+
 export interface GameRunnerEvents {
   onFrame: (jpegData: Buffer, width: number, height: number) => void;
   onAudio: (opusData: Buffer) => void;
@@ -548,7 +554,7 @@ export class GameRunner extends EventEmitter {
             this.memTimer = tLo;
             this.prevTimer16 = this.memTimer16;
             timerPollCount++;
-            if (timerPollCount <= 3 || timerPollCount % 30 === 0) {
+            if (DEBUG_RAM && (timerPollCount <= 3 || timerPollCount % 30 === 0)) {
               console.log(`[game-runner] ${this.readerTag} ⏱️ timer-only poll #${timerPollCount}: A83A=${this.memTimer} 16bit=${this.memTimer16}`);
             }
           }
@@ -712,7 +718,7 @@ export class GameRunner extends EventEmitter {
           }
 
           // Verbose logging for first 100 reads (25s) to capture ephemeral team data during char select
-          if (successCount <= 100 || successCount % 30 === 0) {
+          if (DEBUG_RAM && (successCount <= 100 || successCount % 30 === 0)) {
             const p1Name = KOF98_CHARACTERS[this.memP1Char] || "?";
             const p2Name = KOF98_CHARACTERS[this.memP2Char] || "?";
             const p1Mode = this.memP1Mode === 1 ? "ADVANCED" : "EXTRA";
@@ -2312,10 +2318,12 @@ export class GameRunner extends EventEmitter {
       ? [action, "--window", this.retroarchWindowId, xdoKey]
       : [action, xdoKey];
 
-    if (!this.retroarchWindowId) {
-      console.log(`[game-runner] 🕹️  xdotool ${action} ${xdoKey} (P${player} btn=${button}) [NO WINDOW — may be lost]`);
-    } else {
-      console.log(`[game-runner] 🕹️  xdotool --window ${this.retroarchWindowId} ${action} ${xdoKey} (P${player} btn=${button})`);
+    if (DEBUG_RAM) {
+      if (!this.retroarchWindowId) {
+        console.log(`[game-runner] 🕹️  xdotool ${action} ${xdoKey} (P${player} btn=${button}) [NO WINDOW — may be lost]`);
+      } else {
+        console.log(`[game-runner] 🕹️  xdotool --window ${this.retroarchWindowId} ${action} ${xdoKey} (P${player} btn=${button})`);
+      }
     }
 
     const proc = spawn("xdotool", args, {

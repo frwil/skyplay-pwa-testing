@@ -1,0 +1,9 @@
+# The game-server is a standalone Docker service — not part of the Next.js build.
+# It carries node_modules, compiled dist, ROMs and test recordings (a single .mp4
+# can exceed Vercel's 100 MB/file limit and break the deploy). src/ only mirrors a
+# character list from it via a comment, never imports it — safe to exclude entirely.
+apps/
+
+# Local ops artifacts that must never ship to prod.
+db-backups/
+cloudflared.log

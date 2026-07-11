@@ -39,6 +39,12 @@ export class CloudAdapter implements EmulatorAdapter {
   private streamHeight = 224;
   private frameCount = 0;
   private lastFpsTime = performance.now();
+  // Playout: the newest decoded frame awaiting paint, and the rAF handle.
+  // We paint on requestAnimationFrame (synced to the display) instead of drawing
+  // inside the decoder callback — bursty TCP arrival (tunnel HOL blocking) would
+  // otherwise be painted off-cadence and read as stutter even at 60fps average.
+  private latestFrame: VideoFrame | null = null;
+  private rafId: number | null = null;
 
   // WebCodecs — Audio
   private audioDecoder: AudioDecoder | null = null;
@@ -250,25 +256,21 @@ export class CloudAdapter implements EmulatorAdapter {
 
       const init: VideoDecoderInit = {
         output: (frame: VideoFrame) => {
-          if (this.ctx && this.canvasEl) {
-            // Ne redimensionner que si nécessaire
-            if (this.canvasEl.width !== frame.displayWidth || this.canvasEl.height !== frame.displayHeight) {
-              this.canvasEl.width = frame.displayWidth;
-              this.canvasEl.height = frame.displayHeight;
-            }
-            // Éviter clearRect inutile, drawImage écrase tout
-            this.ctx.drawImage(frame, 0, 0);
-            
-            // Compteur FPS (debug)
-            this.frameCount++;
-            const now = performance.now();
-            if (now - this.lastFpsTime >= 5000) {
-              console.log(`[Video] FPS: ${Math.round(this.frameCount / 5)}`);
-              this.frameCount = 0;
-              this.lastFpsTime = now;
-            }
+          // Coalesce: keep only the newest decoded frame. The rAF paint loop
+          // presents it in sync with the display refresh. If a burst decodes
+          // several frames between two vsyncs, only the latest is shown (correct
+          // at 60fps source / 60fps display, and favors latency over slow-motion).
+          if (this.latestFrame) this.latestFrame.close();
+          this.latestFrame = frame;
+
+          // Compteur FPS (debug) — frames décodées
+          this.frameCount++;
+          const now = performance.now();
+          if (now - this.lastFpsTime >= 5000) {
+            console.log(`[Video] FPS: ${Math.round(this.frameCount / 5)}`);
+            this.frameCount = 0;
+            this.lastFpsTime = now;
           }
-          frame.close();
         },
         error: (err) => {
           // VideoDecoder errors are often transient (corrupted frame, etc.)
@@ -294,6 +296,7 @@ export class CloudAdapter implements EmulatorAdapter {
       this.videoDecoder.configure(support.config!);
       this.videoDecoderReady = true;
       this.videoNeedsKeyframe = true;
+      this.startPaintLoop();
 
       // === CORRECTION : Ne pas envoyer SPS/PPS seuls ===
       // Trouver la première keyframe
@@ -498,7 +501,40 @@ export class CloudAdapter implements EmulatorAdapter {
     }
   }
 
+  /** Paint the newest decoded frame once per display refresh (vsync-synced).
+   *  Decoupling paint from decode absorbs bursty network arrival into smooth motion. */
+  private startPaintLoop(): void {
+    if (this.rafId !== null) return;
+    if (typeof requestAnimationFrame !== "function") return; // SSR / non-browser guard
+    const paint = () => {
+      const frame = this.latestFrame;
+      if (frame && this.ctx && this.canvasEl) {
+        if (this.canvasEl.width !== frame.displayWidth || this.canvasEl.height !== frame.displayHeight) {
+          this.canvasEl.width = frame.displayWidth;
+          this.canvasEl.height = frame.displayHeight;
+        }
+        this.ctx.drawImage(frame, 0, 0);
+        frame.close();
+        this.latestFrame = null;
+      }
+      this.rafId = requestAnimationFrame(paint);
+    };
+    this.rafId = requestAnimationFrame(paint);
+  }
+
+  private stopPaintLoop(): void {
+    if (this.rafId !== null) {
+      cancelAnimationFrame(this.rafId);
+      this.rafId = null;
+    }
+    if (this.latestFrame) {
+      this.latestFrame.close();
+      this.latestFrame = null;
+    }
+  }
+
   private closeDecoders(): void {
+    this.stopPaintLoop();
     if (this.videoDecoder) {
       try { this.videoDecoder.close(); } catch { /* ok */ }
       this.videoDecoder = null;
