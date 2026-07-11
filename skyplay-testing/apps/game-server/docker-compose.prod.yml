@@ -1,0 +1,69 @@
+# ── Production deployment (VPS, e.g. Hetzner / OVH / Scaleway, Europe) ─────────
+#
+# Differs from docker-compose.yml (local dev):
+#   • no ./dist mount — runs the dist baked into the image (built here from src/)
+#   • ROMs from ./roms (put your .zip files there), no recordings mount
+#   • recording OFF, verbose RAM logs OFF
+#   • a Caddy reverse proxy terminates TLS (Let's Encrypt) so the browser reaches
+#     the WebSocket over wss:// — the game-server itself is NOT exposed publicly.
+#
+# On the VPS:
+#   1. put ROM zips in ./roms   (at least: kof98.zip + neogeo.zip)
+#   2. cp .env.prod.example .env.prod   and set DOMAIN (+ optional TLS_EMAIL)
+#   3. docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build
+#
+# See DEPLOY-VPS.md for the full walkthrough.
+
+services:
+  game-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    # Internal only: Caddy reaches it over the compose network. Not published to
+    # the host / public internet (no `ports:`), so the raw ws:// port is closed.
+    expose:
+      - "8080"
+    volumes:
+      - ./roms:/roms:ro
+    environment:
+      - PORT=8080
+      - HOST=0.0.0.0
+      - RETROARCH_CORES_DIR=/usr/lib/libretro
+      - ROMS_DIR=/roms
+      - FRAME_ENCODE_QUALITY=5
+      - USE_XDUMMY=0
+      - STATS_API_URL=https://skyplay-testing.vercel.app
+      - STATS_API_TOKEN=${STATS_API_TOKEN:-dev}
+      # Recording OFF: a 2nd libx264 encode per duel starves the live feed.
+      - RECORDING_ENABLED=0
+      # Streaming stays gated/off (inert without an RTMP key from the client).
+      - STREAMING_ENABLED=0
+      # Verbose per-frame / per-input RAM tracing OFF (set 1 only to debug detection).
+      - DEBUG_RAM=0
+    # Xvfb needs a tty allocated.
+    stdin_open: true
+    tty: true
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    depends_on:
+      - game-server
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"      # HTTP/3
+    environment:
+      # Public hostname (DNS A record → this VPS). Caddy gets a cert for it and
+      # serves wss:// on 443. Fails fast if unset.
+      - DOMAIN=${DOMAIN:?set DOMAIN in .env.prod}
+      - TLS_EMAIL=${TLS_EMAIL:-}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data      # persisted certificates — do NOT delete between deploys
+      - caddy_config:/config
+
+volumes:
+  caddy_data:
+  caddy_config:

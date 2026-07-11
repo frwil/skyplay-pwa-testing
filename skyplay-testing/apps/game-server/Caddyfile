@@ -1,0 +1,14 @@
+# Caddy reverse proxy — automatic HTTPS (Let's Encrypt) + WebSocket passthrough.
+# {$DOMAIN} / {$TLS_EMAIL} are read from the caddy container's environment,
+# which docker-compose.prod.yml fills from .env.prod.
+
+{
+	# Optional: contact for Let's Encrypt expiry notices. Empty is fine.
+	email {$TLS_EMAIL}
+}
+
+{$DOMAIN} {
+	# Caddy v2 auto-detects the WebSocket Upgrade and proxies it transparently —
+	# no special config needed. Plain GET / also works (health check → {"status":"ok"}).
+	reverse_proxy game-server:8080
+}
