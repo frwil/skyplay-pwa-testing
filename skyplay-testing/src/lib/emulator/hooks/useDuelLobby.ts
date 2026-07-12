@@ -20,7 +20,7 @@ export interface DuelNotification {
   duelChallengeId: number;
   fromUserId: number;
   fromUsername: string;
-  type: "duel_challenge" | "duel_accepted" | "duel_declined";
+  type: "duel_challenge" | "duel_accepted" | "duel_declined" | "duel_rules_pending";
   challengeId: number | null;
   message: string;
   read: boolean;
@@ -70,6 +70,10 @@ interface UseDuelLobbyOptions {
   /** When true, sends devUserId/devUsername in API requests (local development without JWT). */
   isDevMode?: boolean;
   enabled: boolean;
+  /** Emulator system (e.g. "neogeo", "snes"). */
+  system?: string;
+  /** ROM filename (e.g. "kof98.zip"). */
+  rom?: string;
 }
 
 interface UseDuelLobbyResult {
@@ -78,12 +82,17 @@ interface UseDuelLobbyResult {
   pendingChallenge: DuelNotification | null;
   outgoingChallenge: OutgoingChallenge | null;
   duelSession: DuelSession | null;
+  /** Set when both players need to confirm rules before the session is created. */
+  rulesPendingChallenge: DuelNotification | null;
   joinLobby: () => Promise<void>;
   leaveLobby: () => Promise<void>;
-  sendChallenge: (targetUserId: number) => Promise<string | null>;
+  sendChallenge: (targetUserId: number, modeId?: string) => Promise<string | null>;
   acceptChallenge: (duelChallengeId: number) => Promise<DuelSession | null>;
   declineChallenge: (duelChallengeId: number) => Promise<void>;
   clearChallenge: () => void;
+  clearRulesPending: () => void;
+  /** Directly set the duel session (used by confirm-rules response to avoid polling delay). */
+  setDuelSession: (session: DuelSession | null) => void;
   isSending: boolean;
   isResponding: boolean;
   error: string | null;
@@ -94,12 +103,15 @@ export function useDuelLobby({
   username,
   isDevMode,
   enabled,
+  system = "neogeo",
+  rom = "kof98.zip",
 }: UseDuelLobbyOptions): UseDuelLobbyResult {
   const [players, setPlayers] = useState<DuelPlayer[]>([]);
   const [inLobby, setInLobby] = useState(false);
   const [pendingChallenge, setPendingChallenge] = useState<DuelNotification | null>(null);
   const [outgoingChallenge, setOutgoingChallenge] = useState<OutgoingChallenge | null>(null);
   const [duelSession, setDuelSession] = useState<DuelSession | null>(null);
+  const [rulesPendingChallenge, setRulesPendingChallenge] = useState<DuelNotification | null>(null);
   const [isSending, setIsSending] = useState(false);
   const [isResponding, setIsResponding] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -112,11 +124,15 @@ export function useDuelLobby({
   const userIdRef = useRef<number | null>(userId);
   const usernameRef = useRef<string | null>(username ?? null);
   const isDevModeRef = useRef<boolean>(!!isDevMode);
+  const systemRef = useRef<string>(system);
+  const romRef = useRef<string>(rom);
 
   // Keep refs in sync with props
   userIdRef.current = userId;
   usernameRef.current = username ?? null;
   isDevModeRef.current = !!isDevMode;
+  systemRef.current = system;
+  romRef.current = rom;
 
   pendingRef.current = pendingChallenge;
   outgoingRef.current = outgoingChallenge;
@@ -203,19 +219,39 @@ export function useDuelLobby({
               }
             }
 
-            // Handle accepted response (for the challenger — P1)
+            // Handle rules_pending (both players must confirm rules)
+            if (n.type === "duel_rules_pending") {
+              if (mountedRef.current) {
+                setRulesPendingChallenge(n);
+              }
+            }
+
+            // Handle accepted response (both challenger P1 + target P2 via rules_pending)
             if (n.type === "duel_accepted") {
+              // P1 (challenger): outgoing challenge matches the notification
               if (outgoingRef.current?.challengeId === n.duelChallengeId) {
                 fetchChallengeSession(n.duelChallengeId, devId, devName).then((session) => {
                   if (session && mountedRef.current) {
                     setDuelSession(session);
+                    setRulesPendingChallenge(null); // dismiss rules overlay for the waiting player
                     setOutgoingChallenge((prev) =>
                       prev ? { ...prev, status: "accepted", session } : null,
                     );
                   }
                 });
+              } else if (!outgoingRef.current) {
+                // P2 (target) or rules_pending flow: no outgoing challenge, but the session
+                // may have been created via confirm-rules. Try to fetch it — if successful,
+                // this is our signal to connect. If fetch returns null, the session was
+                // already set directly by handleRulesAccept, or it's genuinely stale.
+                fetchChallengeSession(n.duelChallengeId, devId, devName).then((session) => {
+                  if (session && mountedRef.current) {
+                    setDuelSession(session);
+                    setRulesPendingChallenge(null); // dismiss rules overlay for P2 as well
+                  }
+                });
               } else {
-                // Stale accepted notification — mark as read
+                // Stale accepted notification (different challenge) — mark as read
                 await markNotificationRead(n.id, devId, devName);
               }
             }
@@ -282,7 +318,7 @@ export function useDuelLobby({
     const devId = isDevModeRef.current ? userIdRef.current : 0;
     const devName = usernameRef.current || "";
     try {
-      let body: Record<string, unknown> = { action: "join", system: "neogeo", rom: "kof98.zip" };
+      let body: Record<string, unknown> = { action: "join", system: systemRef.current, rom: romRef.current };
       if (devId) body = withDevAuth(body, devId, devName);
       const res = await fetch("/api/duel/lobby", {
         method: "POST",
@@ -322,13 +358,14 @@ export function useDuelLobby({
   // ── Send challenge ──────────────────────────────────────────────
 
   const sendChallenge = useCallback(
-    async (targetUserId: number): Promise<string | null> => {
+    async (targetUserId: number, modeId?: string): Promise<string | null> => {
       setIsSending(true);
       setError(null);
       const devId = isDevModeRef.current ? userIdRef.current : 0;
       const devName = usernameRef.current || "";
       try {
-        let body: Record<string, unknown> = { targetUserId, system: "neogeo", rom: "kof98.zip" };
+        let body: Record<string, unknown> = { targetUserId, system: systemRef.current, rom: romRef.current };
+        if (modeId) body.modeId = modeId;
         if (devId) body = withDevAuth(body, devId, devName);
         const res = await fetch("/api/duel/challenge", {
           method: "POST",
@@ -383,6 +420,22 @@ export function useDuelLobby({
         }
 
         setPendingChallenge(null);
+
+        if (data.rulesPending) {
+          // Set rules pending — both players will see the DuelRulesOverlay
+          setRulesPendingChallenge({
+            id: 0,
+            duelChallengeId: data.challengeId as number,
+            fromUsername: "",
+            message: "",
+            fromUserId: 0,
+            type: "duel_rules_pending",
+            challengeId: data.challengeId as number,
+            read: false,
+            createdAt: new Date().toISOString(),
+          });
+          return null; // Session will be created after both confirm rules
+        }
 
         if (data.session) {
           const session: DuelSession = {
@@ -443,18 +496,25 @@ export function useDuelLobby({
     setError(null);
   }, []);
 
+  const clearRulesPending = useCallback(() => {
+    setRulesPendingChallenge(null);
+  }, []);
+
   return {
     players,
     inLobby,
     pendingChallenge,
     outgoingChallenge,
     duelSession,
+    rulesPendingChallenge,
     joinLobby,
     leaveLobby,
     sendChallenge,
     acceptChallenge,
     declineChallenge,
     clearChallenge,
+    clearRulesPending,
+    setDuelSession,
     isSending,
     isResponding,
     error,
