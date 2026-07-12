@@ -7,6 +7,7 @@ import {
 import { GameRunner } from "./game-runner.js";
 import type { ClientMessage } from "./types.js";
 import { FRAME_MAGIC, AUDIO_MAGIC, CODEC_CONFIG_MAGIC } from "./types.js";
+import { getGameConfig } from "./game-config.js";
 
 /** Map sessionId → GameRunner for lifecycle management. */
 const sessionRunners = new Map<string, GameRunner>();
@@ -112,7 +113,7 @@ function handleMessage(ws: WebSocket, msg: ClientMessage, sessionId: string): vo
   switch (msg.type) {
     case "init":
       logMsg("init", `system=${(msg as { system?: string }).system || "?"}`);
-      handleInit(ws, msg, sessionId);
+      void handleInit(ws, msg, sessionId);
       break;
 
     case "join":
@@ -128,7 +129,7 @@ function handleMessage(ws: WebSocket, msg: ClientMessage, sessionId: string): vo
     case "pause":
     case "resume":
       logMsg("control", msg.type);
-      handleControl(msg.type, sessionId);
+      handleControl(msg.type, sessionId, ws);
       break;
 
     case "stop":
@@ -151,6 +152,11 @@ function handleMessage(ws: WebSocket, msg: ClientMessage, sessionId: string): vo
       handleRematchDecline(sessionId);
       break;
 
+    case "auto_rematch":
+      logMsg("auto_rematch");
+      void handleAutoRematch(sessionId, (msg as any).matchNumber ?? 0, (msg as any).totalMatches ?? 0);
+      break;
+
     case "stop_duel":
       logMsg("stop_duel");
       stopSession(sessionId);
@@ -166,11 +172,11 @@ function handleMessage(ws: WebSocket, msg: ClientMessage, sessionId: string): vo
   }
 }
 
-function handleInit(
+async function handleInit(
   ws: WebSocket,
   msg: { type: "init"; sessionId: string; token: string; system: string; rom: string; mode?: "cpu" | "pvp"; rtmpUrl?: string },
   sessionId: string,
-): void {
+): Promise<void> {
   const { system, rom } = msg;
 
   // Validate token
@@ -207,9 +213,23 @@ function handleInit(
 
   addConnection(msg.sessionId, ws, 1);
 
+  // ── Load game config from DB (RAM addresses, controls) ──
+  let gameConfig = null;
+  try {
+    gameConfig = await getGameConfig(rom);
+  } catch (err) {
+    console.warn(`[ws] Failed to load game config for ${rom}:`, err);
+  }
+
   // Start game runner
   const mode = session.mode;
-  const runner = new GameRunner(system, rom, msg.sessionId, mode, msg.rtmpUrl ?? null);
+  const runner = new GameRunner(
+    system, rom, msg.sessionId, mode, msg.rtmpUrl ?? null,
+    gameConfig?.ramConfig ?? null,
+  );
+  if (gameConfig) {
+    console.log(`[ws] 🎮 Game config loaded for ${rom}: mode=${gameConfig.mode}, ramConfig=${gameConfig.ramConfig ? "yes" : "no"}, controls=${gameConfig.controls.length}`);
+  }
   sessionRunners.set(msg.sessionId, runner);
 
   // ── Initialize stats accumulator ──
@@ -514,22 +534,68 @@ function handleInput(
     return;
   }
 
+  // ── Block manual coin + START for NeoGeo/arcade PvP sessions ──
+  // The server injects both automatically (2 coins at 15s, START at 20s).
+  // Letting clients send button 4 (SELECT = coin) or button 5 (START) would
+  // let players insert extra credits or interfere with the auto-start sequencer.
+  // Pause is a separate "control" message (not input), so blocking START does
+  // not affect the pause/resume functionality.
+  const session = getSession(info.sessionId);
+  if (session && session.mode === "pvp" && session.system === "neogeo" && (msg.button === 4 || msg.button === 5)) {
+    console.log(`[ws] 🚫 BLOCKED manual ${msg.button === 4 ? "coin" : "START"} (btn ${msg.button}) from P${msg.player} in PvP session ${info.sessionId}`);
+    return;
+  }
+
   // Pass the declared player number (from client) to injectInput
   console.log(`[ws] ✅ Routing P${msg.player} input to session ${info.sessionId} runner`);
   runner.injectInput(msg.player, msg.button, msg.pressed);
 }
 
-function handleControl(action: "pause" | "resume", sessionId: string): void {
+/** Which player sent the pause/resume message — resolved from the WebSocket connection. */
+function handleControl(action: "pause" | "resume", sessionId: string, initiatorWs?: WebSocket): void {
   const session = getSession(sessionId);
   const runner = sessionRunners.get(sessionId);
   if (!session || !runner) return;
 
+  // Resolve which player sent the control message
+  let initiator: 1 | 2 | undefined;
+  if (initiatorWs) {
+    const info = getPlayerInfo(initiatorWs);
+    if (info) initiator = info.player as 1 | 2;
+  }
+
   if (action === "pause") {
+    // Clear any existing pause timer (shouldn't happen, but safe)
+    if (session.pauseTimer) { clearTimeout(session.pauseTimer); session.pauseTimer = null; }
+
     session.status = "paused";
+    session.pauseInitiator = initiator;
     runner.pause();
+
+    // Broadcast pause to both players with 30s countdown
+    const COUNTDOWN = 30;
+    sendToSession(session, { type: "paused", player: initiator ?? 1, countdown: COUNTDOWN });
+    console.log(`[ws] ⏸ Pause by P${initiator} for ${sessionId} — ${COUNTDOWN}s countdown`);
+
+    // Auto-resume after countdown
+    session.pauseTimer = setTimeout(() => {
+      console.log(`[ws] ⏯ Auto-resume (timeout) for ${sessionId}`);
+      session.pauseTimer = null;
+      if (session.status === "paused") {
+        session.status = "running";
+        runner.resume();
+        sendToSession(session, { type: "resumed", initiator: 0 });
+      }
+    }, COUNTDOWN * 1000);
   } else {
+    // Resume — clear the timer and notify both players
+    if (session.pauseTimer) { clearTimeout(session.pauseTimer); session.pauseTimer = null; }
+
+    if (session.status !== "paused") return; // Already running
     session.status = "running";
     runner.resume();
+    sendToSession(session, { type: "resumed", initiator: initiator ?? 0 });
+    console.log(`[ws] ▶ Resume by P${initiator} for ${sessionId}`);
   }
 }
 
@@ -553,6 +619,8 @@ function stopSession(sessionId: string): void {
 
   const session = getSession(sessionId);
   if (session) {
+    // Clear any active pause timer
+    if (session.pauseTimer) { clearTimeout(session.pauseTimer); session.pauseTimer = null; }
     // Notify ALL connected players that the session is closing
     sendToSession(session, { type: "session_closed" });
   }
@@ -638,4 +706,33 @@ function handleRematchDecline(sessionId: string): void {
   if (!session) return;
   console.log(`[ws] ❌ Rematch DECLINED for ${sessionId}`);
   sendToSession(session, { type: "rematch_declined" });
+}
+
+/**
+ * Auto-rematch for multi-match modes (XL/Fighter). Same as handleRematchAccept but
+ * sends `auto_rematch` instead of `rematch_starting` so clients skip the stats overlay
+ * and roll directly into the next match. Called by either client after match_end when
+ * the series isn't over yet. matchNumber = the NEXT match (1-based), totalMatches = the
+ * full series length (3 or 5).
+ */
+async function handleAutoRematch(sessionId: string, matchNumber: number, totalMatches: number): Promise<void> {
+  const session = getSession(sessionId);
+  if (!session) return;
+  // Guard: only allow auto-rematch when the match is over (input locked). Prevents
+  // a rogue client from restarting mid-match.
+  if (!matchInputLocked.has(sessionId)) {
+    console.log(`[ws] ⚠️ Auto-rematch ignored for ${sessionId} — match is still in progress`);
+    return;
+  }
+  const loser = matchLoserSide.get(sessionId) === 1 ? 1 : 2;
+  console.log(`[ws] 🔄 Auto-rematch for ${sessionId} — match ${matchNumber}/${totalMatches}, P${loser} (loser) re-joining`);
+  matchInputLocked.delete(sessionId);
+  const runner = sessionRunners.get(sessionId);
+  if (runner) {
+    try {
+      await runner.beginRematch();
+      void runner.continueLoser(loser);
+    } catch { /* ok */ }
+  }
+  sendToSession(session, { type: "auto_rematch", matchNumber, totalMatches });
 }
