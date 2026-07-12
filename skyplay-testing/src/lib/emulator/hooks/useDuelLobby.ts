@@ -20,7 +20,7 @@ export interface DuelNotification {
   duelChallengeId: number;
   fromUserId: number;
   fromUsername: string;
-  type: "duel_challenge" | "duel_accepted" | "duel_declined" | "duel_rules_pending";
+  type: "duel_challenge" | "duel_accepted" | "duel_declined" | "duel_rules_pending" | "duel_challenge_expired";
   challengeId: number | null;
   message: string;
   read: boolean;
@@ -40,7 +40,7 @@ export interface OutgoingChallenge {
   challengeId: number;
   targetUserId: number;
   targetUsername: string;
-  status: "pending" | "accepted" | "declined";
+  status: "pending" | "accepted" | "declined" | "expired";
   session?: DuelSession;
 }
 
@@ -118,6 +118,7 @@ export function useDuelLobby({
 
   const lastNotifIdRef = useRef(0);
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const challengeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mountedRef = useRef(true);
   const pendingRef = useRef<DuelNotification | null>(null);
   const outgoingRef = useRef<OutgoingChallenge | null>(null);
@@ -275,6 +276,25 @@ export function useDuelLobby({
                 await markNotificationRead(n.id, devId, devName);
               }
             }
+
+            // Handle expired challenge (30s timeout — cancels on both sides)
+            if (n.type === "duel_challenge_expired") {
+              // P2 (target): clear pending challenge
+              if (pendingRef.current?.duelChallengeId === n.duelChallengeId) {
+                setPendingChallenge(null);
+                setError("Le défi a expiré — pas de réponse après 30s");
+              }
+              // P1 (challenger): confirm cancellation — the timeout already set
+              // outgoingChallenge to "expired", but if the notification arrives first
+              // (race), update it here too.
+              if (outgoingRef.current?.challengeId === n.duelChallengeId) {
+                setOutgoingChallenge((prev) =>
+                  prev ? { ...prev, status: "expired" } : null,
+                );
+                setError(n.message || "Défi expiré — pas de réponse après 30s");
+              }
+              await markNotificationRead(n.id, devId, devName);
+            }
           }
         }
       } catch {
@@ -298,6 +318,14 @@ export function useDuelLobby({
       mountedRef.current = false;
     };
   }, []);
+
+  // ── Clear 30s timeout when challenge is no longer pending ──────
+  useEffect(() => {
+    if (outgoingChallenge?.status !== "pending" && challengeTimeoutRef.current) {
+      clearTimeout(challengeTimeoutRef.current);
+      challengeTimeoutRef.current = null;
+    }
+  }, [outgoingChallenge?.status]);
 
   // ── Fetch challenge session info (P1 polls this after P2 accepts) ─
 
@@ -360,6 +388,10 @@ export function useDuelLobby({
     setPlayers([]);
     setPendingChallenge(null);
     setOutgoingChallenge(null);
+    if (challengeTimeoutRef.current) {
+      clearTimeout(challengeTimeoutRef.current);
+      challengeTimeoutRef.current = null;
+    }
   }, []);
 
   // ── Send challenge ──────────────────────────────────────────────
@@ -392,6 +424,36 @@ export function useDuelLobby({
           status: "pending",
         };
         setOutgoingChallenge(challenge);
+
+        // ── 30s auto-cancel timeout ────────────────────────────
+        // Clear any previous timeout
+        if (challengeTimeoutRef.current) {
+          clearTimeout(challengeTimeoutRef.current);
+          challengeTimeoutRef.current = null;
+        }
+        challengeTimeoutRef.current = setTimeout(async () => {
+          const devId2 = isDevModeRef.current ? userIdRef.current : 0;
+          const devName2 = usernameRef.current || "";
+          try {
+            let cancelBody: Record<string, unknown> = { challengeId: challenge.challengeId };
+            if (devId2) cancelBody = withDevAuth(cancelBody, devId2, devName2);
+            await fetch("/api/duel/challenge/cancel", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(cancelBody),
+              credentials: "include",
+            });
+          } catch { /* best effort — the server-side cancel may have already run */ }
+          if (mountedRef.current) {
+            setOutgoingChallenge((prev) =>
+              prev?.challengeId === challenge.challengeId
+                ? { ...prev, status: "expired" }
+                : prev,
+            );
+            setError("Défi expiré — pas de réponse après 30s");
+          }
+        }, 30_000);
+
         return null; // success
       } catch (err) {
         const msg = err instanceof Error ? err.message : "Challenge failed";
@@ -501,6 +563,10 @@ export function useDuelLobby({
   const clearChallenge = useCallback(() => {
     setOutgoingChallenge(null);
     setError(null);
+    if (challengeTimeoutRef.current) {
+      clearTimeout(challengeTimeoutRef.current);
+      challengeTimeoutRef.current = null;
+    }
   }, []);
 
   const clearRulesPending = useCallback(() => {

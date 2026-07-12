@@ -1042,6 +1042,28 @@ export default function DuelPage() {
                 </button>
               </>
             )}
+            {lobby.outgoingChallenge.status === "expired" && (
+              <>
+                <AlertCircle className="w-8 h-8 mx-auto mb-3" style={{ color: "#f59e0b" }} />
+                <p className="text-sm font-bold text-white mb-1">
+                  Défi expiré
+                </p>
+                <p className="text-xs text-white/30 mb-3">
+                  Pas de réponse de {lobby.outgoingChallenge.targetUsername} après 30 secondes
+                </p>
+                <button
+                  onClick={lobby.clearChallenge}
+                  className="px-4 py-2 rounded-lg text-xs font-bold"
+                  style={{
+                    backgroundColor: "rgba(255,255,255,0.05)",
+                    border: "1px solid rgba(255,255,255,0.1)",
+                    color: "rgba(255,255,255,0.5)",
+                  }}
+                >
+                  {t.duel.backToLobby}
+                </button>
+              </>
+            )}
           </div>
         )}
 
