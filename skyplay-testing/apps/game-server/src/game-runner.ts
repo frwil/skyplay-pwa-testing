@@ -6,6 +6,7 @@ import { tmpdir } from "os";
 import { join } from "path";
 import { SYSTEM_CORES, SYSTEM_RESOLUTIONS, UPSCALE, XDOTOOL_KEY_MAP, XDOTOOL_KEY_MAP_P2, getButtonToRetroarch, buildRetroarchKeyConfig } from "./config.js";
 import { isRecordingEnabled, isStreamingEnabled, recordingDir, recorderFfmpegArgs, streamerFfmpegArgs, uploadRecording } from "./recording.js";
+import type { RamConfig } from "./game-config.js";
 
 // Verbose per-frame / per-input RAM-detection tracing. OFF by default: those logs fire
 // dozens of times per second during a live round and each console.log to the Docker
@@ -297,7 +298,15 @@ export class GameRunner extends EventEmitter {
   /** Tag used in log messages to identify which reader produced the output (e.g. "R1.1"). */
   private readerTag = "R?.?";
 
-  constructor(system: string, rom: string, sessionId: string, mode: "cpu" | "pvp" = "cpu", rtmpUrl?: string | null) {
+  constructor(
+    system: string,
+    rom: string,
+    sessionId: string,
+    mode: "cpu" | "pvp" = "cpu",
+    rtmpUrl?: string | null,
+    /** RAM config from the DB (or fallback). If null, the hardcoded HEALTH_MEMORY_MAP is used. */
+    ramConfig?: RamConfig | null,
+  ) {
     super();
     this.system = system;
     this.rom = rom;
@@ -306,6 +315,11 @@ export class GameRunner extends EventEmitter {
     this.rtmpUrl = rtmpUrl ?? null;
     this.runnerId = GameRunner.nextRunnerId++;
     this.displayNum = 99;
+
+    // Pre-set the memory map from the provided config (or fall back to hardcoded lookup).
+    if (ramConfig) {
+      this.healthMemMap = ramConfig;
+    }
   }
 
   get display(): string {
@@ -369,17 +383,20 @@ export class GameRunner extends EventEmitter {
     this.startRecorder(displayW, displayH);
     this.startStreamer(displayW, displayH);
 
-    // Start health bar watcher — prefer direct memory reading, fall back to pixel capture
-    // Match ROM by basename without extension (e.g., "kof98" or "kof98.zip" both match)
-    const romKey = this.rom.split("/").pop()?.replace(/\.zip$/i, "") ?? this.rom;
-    const memMapEntry = Object.entries(HEALTH_MEMORY_MAP).find(([k]) =>
-      k.replace(/\.zip$/i, "") === romKey
-    );
-    this.healthMemMap = memMapEntry?.[1] ?? null;
+    // Start health bar watcher — prefer direct memory reading, fall back to pixel capture.
+    // If a RamConfig was passed to the constructor (from DB), it's already set. Otherwise
+    // look up the hardcoded HEALTH_MEMORY_MAP by ROM basename.
+    if (!this.healthMemMap) {
+      const romKey = this.rom.split("/").pop()?.replace(/\.zip$/i, "") ?? this.rom;
+      const memMapEntry = Object.entries(HEALTH_MEMORY_MAP).find(([k]) =>
+        k.replace(/\.zip$/i, "") === romKey
+      );
+      this.healthMemMap = memMapEntry?.[1] ?? null;
+    }
     if (this.healthMemMap) {
       this.startMemoryHealthReader();
     } else {
-      console.log(`[game-runner] 🧠 No memory map for ${this.rom} (key=${romKey}), using pixel analysis`);
+      console.log(`[game-runner] 🧠 No memory map for ${this.rom}, using pixel analysis`);
       this.startHealthBarCapture();
     }
 
@@ -714,6 +731,7 @@ export class GameRunner extends EventEmitter {
               p1Health: this.memHealthP1,
               p2Health: this.memHealthP2,
               matchFlag: this.memMatchFlag,
+              gameStarted: this.gameStarted,
             });
           }
 

@@ -448,7 +448,11 @@ export default function DuelPage() {
     const ms = emu.matchState;
     if (!session || !sid || !ms) return;
     const inCombat = (ms.matchFlag & 0x40) !== 0 && ms.p1Team.length > 0 && ms.p2Team.length > 0;
-    if (!inCombat || chargedSessionsRef.current.has(sid)) return;
+    // Only charge when the server has confirmed that coins+START were injected
+    // (gameStarted=true). Without this, demo/attract CPU-vs-CPU matches would
+    // trigger a debit even though no human player started the game.
+    const reallyStarted = ms.gameStarted === true;
+    if (!inCombat || !reallyStarted || chargedSessionsRef.current.has(sid)) return;
     chargedSessionsRef.current.add(sid);
     fetch("/api/duel/wager/charge", {
       method: "POST",
@@ -994,7 +998,7 @@ export default function DuelPage() {
         )}
 
         {/* ── Outgoing Challenge Status ─────────────────────────── */}
-        {lobby.outgoingChallenge && !gameActive && (
+        {lobby.outgoingChallenge && !gameActive && !rulesChallenge && !lobby.rulesPendingChallenge && (
           <div
             className="rounded-2xl border p-5 mb-6 text-center"
             style={{

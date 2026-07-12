@@ -148,6 +148,12 @@ export interface EmulatorState {
   opponentAbandoned: number | null;
   /** Clear the abandon flag (e.g. after handling the forfeit or on reconnect). */
   clearOpponentAbandoned: () => void;
+  /** Auto-rematch info for multi-match modes (XL/Fighter). null when not in auto-rematch. */
+  autoRematch: { matchNumber: number; totalMatches: number } | null;
+  /** Send an auto-rematch request to the server (skips stats overlay, rolls to next match). */
+  requestAutoRematch: (matchNumber: number, totalMatches: number) => void;
+  /** Duel pause state: who paused + remaining countdown. null when game is running. */
+  pauseState: { pausedBy: 1 | 2; countdown: number } | null;
 }
 
 /** Live in-match state for the on-canvas HUD (cloud/neogeo only). */
@@ -166,6 +172,9 @@ export interface MatchStateData {
   p2Health: number;
   /** Raw match flag: 0x40/0x48 = steady combat, 0x00 = char select. */
   matchFlag: number;
+  /** True after the server has injected coins+START — gates charge/debit to prevent
+   *  debiting players during demo/attract mode (CPU-vs-CPU). */
+  gameStarted?: boolean;
 }
 
 /** Result of a single round in a duel. */
