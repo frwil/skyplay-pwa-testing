@@ -59,7 +59,8 @@ RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
 RUN mkdir -p /usr/lib/libretro && \
     for core_url in \
       "https://buildbot.libretro.com/nightly/linux/x86_64/latest/fbneo_libretro.so.zip" \
-      "https://buildbot.libretro.com/nightly/linux/x86_64/latest/pcsx_rearmed_libretro.so.zip"; \
+      "https://buildbot.libretro.com/nightly/linux/x86_64/latest/pcsx_rearmed_libretro.so.zip" \
+      "https://buildbot.libretro.com/nightly/linux/x86_64/latest/snes9x_libretro.so.zip"; \
     do \
       core_name=$(basename "$core_url" .zip); \
       echo "Downloading $core_name..."; \
