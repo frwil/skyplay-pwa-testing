@@ -1046,7 +1046,7 @@ export default function DuelPage() {
         )}
 
         {/* ── Lobby View (pre-game) ──────────────────────────────── */}
-        {!gameActive && !isLoading && !lobby.outgoingChallenge && (
+        {!gameActive && !isLoading && !lobby.outgoingChallenge && !lobby.rulesPendingChallenge && !rulesChallenge && (
           <div className="mb-6">
             {/* Auth required */}
             {authChecked && !currentUserId && !isDevMode && (

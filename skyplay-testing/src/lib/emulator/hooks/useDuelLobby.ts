@@ -223,6 +223,13 @@ export function useDuelLobby({
             if (n.type === "duel_rules_pending") {
               if (mountedRef.current) {
                 setRulesPendingChallenge(n);
+                // Fully clear the outgoing challenge — the flow is now in "rules"
+                // phase and the "Défi envoyé" banner must disappear. The
+                // duel_accepted handler below has a fallback path for null
+                // outgoingChallenge, so clearing here is safe.
+                if (outgoingRef.current?.challengeId === n.duelChallengeId) {
+                  setOutgoingChallenge(null);
+                }
               }
             }
 
