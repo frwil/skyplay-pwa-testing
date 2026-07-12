@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb, ensureUser } from "@/lib/db";
 import { getAuthFromRequest } from "@/lib/auth";
-import { getBalance, ENTRY_FEE } from "@/lib/duel/wallet";
+import { getBalance, DEFAULT_ENTRY_FEE, assertEntryAffordable, InsufficientFunds } from "@/lib/duel/wallet";
 
 async function getUserId(req: NextRequest, body?: Record<string, unknown>): Promise<{ userId: number; username: string } | null> {
   // Try JWT first (works in all environments — production AND local dev)
@@ -58,6 +58,8 @@ export async function GET(req: NextRequest) {
       rom: row.rom as string,
       status: row.status as string,
       createdAt: row.created_at as string,
+      modeId: row.mode_id as string | null,
+      matchCount: (row.match_count as number) ?? 1,
     };
 
     // Include session info if accepted
@@ -80,6 +82,97 @@ export async function GET(req: NextRequest) {
 }
 
 /**
+ * Auto-accept an existing challenge on behalf of the new challenger.
+ * Used to resolve mutual-challenge races: when P1→P2 exists and P2→P1
+ * is attempted, we silently accept P1's challenge for P2 instead of
+ * creating a second challenge that would deadlock both players.
+ */
+async function autoAcceptExistingChallenge(
+  db: Awaited<ReturnType<typeof getDb>>,
+  challengeId: number,
+  user: { userId: number; username: string },
+  _targetUserId: number,
+  matchCount: number,
+  entryFee: number,
+  modeId: string | null,
+  _system: string,
+  _rom: string,
+): Promise<NextResponse> {
+  try {
+    // Gate: the auto-accepting player must have enough SKY
+    const existingRs = await db.execute({
+      sql: "SELECT challenger_id, target_id FROM duel_challenges WHERE id = ?",
+      args: [challengeId],
+    });
+    if (existingRs.rows.length === 0) {
+      return NextResponse.json({ error: "Défi introuvable" }, { status: 404 });
+    }
+    const challengerId = existingRs.rows[0].challenger_id as number;
+    const targetId = existingRs.rows[0].target_id as number;
+
+    await assertEntryAffordable(challengerId, user.userId, entryFee);
+
+    // Transition to rules_pending — both players must confirm rules
+    await db.execute({
+      sql: "UPDATE duel_challenges SET status = 'rules_pending', challenger_rules_accepted = 0, target_rules_accepted = 0 WHERE id = ?",
+      args: [challengeId],
+    });
+
+    const isLocalDev = !process.env.NORTHFLANK_API_KEY && !process.env.VERCEL;
+    const acceptorName = user.username || `Player-${user.userId}`;
+    let challengerName = `Player-${challengerId}`;
+    try {
+      const crs = await db.execute({ sql: "SELECT username FROM users WHERE id = ?", args: [challengerId] });
+      if (crs.rows.length > 0) challengerName = crs.rows[0].username as string;
+    } catch { /* fallback */ }
+
+    // Notify BOTH players
+    await db.execute("PRAGMA foreign_keys = OFF");
+    try {
+      // Notify original challenger (P1)
+      await db.execute({
+        sql: `INSERT INTO netplay_notifications (session_id, user_id, from_user_id, from_username, type, challenge_id, message)
+              VALUES (?, ?, ?, ?, 'duel_rules_pending', ?, ?)`,
+        args: [challengeId, challengerId, user.userId, acceptorName, challengeId,
+          `${acceptorName} a accepté votre défi ! Veuillez confirmer les règles du duel.`],
+      });
+      // Notify auto-accepting player (P2 — the one who sent the second challenge)
+      await db.execute({
+        sql: `INSERT INTO netplay_notifications (session_id, user_id, from_user_id, from_username, type, challenge_id, message)
+              VALUES (?, ?, ?, ?, 'duel_rules_pending', ?, ?)`,
+        args: [challengeId, user.userId, challengerId, challengerName, challengeId,
+          `Vous avez accepté le défi ! Veuillez confirmer les règles du duel.`],
+      });
+    } finally {
+      await db.execute("PRAGMA foreign_keys = ON");
+    }
+
+    console.log("[challenge] 🔄 Mutual challenge resolved: auto-accepted challenge %d for P%d (original challenger: P%d)",
+      challengeId, user.userId, challengerId);
+
+    return NextResponse.json({
+      success: true,
+      autoAccepted: true,
+      challengeId,
+      modeId,
+      matchCount,
+      entryFee,
+      challengerId,
+      targetId,
+    });
+  } catch (error) {
+    if (error instanceof InsufficientFunds) {
+      return NextResponse.json(
+        { error: `SKY insuffisant pour la participation à ce duel (${entryFee} SKY requis)`, code: "insufficient_sky", userId: error.userId },
+        { status: 402 },
+      );
+    }
+    console.error("[challenge] autoAcceptExistingChallenge error:", error);
+    return NextResponse.json({ error: "Erreur interne du serveur" }, { status: 500 });
+  }
+}
+
+/**
  * POST /api/duel/challenge
  * Send a duel challenge to a target player.
  */
@@ -94,6 +187,7 @@ export async function POST(req: NextRequest) {
     const targetUserId = body.targetUserId as number;
     const system = (body.system as string) || "neogeo";
     const rom = (body.rom as string) || "kof98.zip";
+    const modeId = (body.modeId as string) || null;
 
     if (!targetUserId || typeof targetUserId !== "number") {
       return NextResponse.json({ error: "targetUserId requis (nombre)" }, { status: 400 });
@@ -103,6 +197,30 @@ export async function POST(req: NextRequest) {
     }
 
     const db = await getDb();
+
+    // Look up the game label + entry fee + match count for the notification message and stake gate
+    let gameLabel = "KOF '98"; // fallback
+    let gameEntryFee = DEFAULT_ENTRY_FEE;
+    let gameMatchCount = 1;
+    let modeLabel = "";
+    if (modeId) {
+      // Use mode-specific entry fee and match count
+      const modeRs = await db.execute({ sql: "SELECT m.entry_fee, m.match_count, m.label, g.label as game_label FROM duel_game_modes m JOIN duel_games g ON m.game_id = g.id WHERE m.id = ? AND m.enabled = 1 LIMIT 1", args: [modeId] });
+      if (modeRs.rows.length > 0) {
+        gameEntryFee = Number(modeRs.rows[0].entry_fee ?? DEFAULT_ENTRY_FEE);
+        gameMatchCount = Number(modeRs.rows[0].match_count ?? 1);
+        gameLabel = modeRs.rows[0].game_label as string;
+        modeLabel = modeRs.rows[0].label as string;
+      }
+    } else {
+      try {
+        const gameRs = await db.execute({ sql: "SELECT label, entry_fee FROM duel_games WHERE rom = ? LIMIT 1", args: [rom] });
+        if (gameRs.rows.length > 0) {
+          gameLabel = gameRs.rows[0].label as string;
+          gameEntryFee = Number(gameRs.rows[0].entry_fee ?? DEFAULT_ENTRY_FEE);
+        }
+      } catch {}
+    }
 
     const challengerRs = await db.execute({
       sql: "SELECT id FROM duel_lobby WHERE user_id = ?", args: [user.userId],
@@ -119,12 +237,25 @@ export async function POST(req: NextRequest) {
     }
 
     const existingRs = await db.execute({
-      sql: `SELECT id FROM duel_challenges
+      sql: `SELECT id, challenger_id, target_id FROM duel_challenges
             WHERE ((challenger_id = ? AND target_id = ?) OR (challenger_id = ? AND target_id = ?))
             AND status = 'pending'`,
       args: [user.userId, targetUserId, targetUserId, user.userId],
     });
     if (existingRs.rows.length > 0) {
+      const existing = existingRs.rows[0];
+      // ── Mutual challenge: the target already challenged us ──────
+      // Instead of creating a second challenge (which would deadlock both players
+      // at the rules overlay on different challenges), silently auto-accept the
+      // existing challenge on behalf of the new challenger. One invitation is
+      // silently cancelled (never created), the normal flow continues.
+      if ((existing.challenger_id as number) === targetUserId && (existing.target_id as number) === user.userId) {
+        return autoAcceptExistingChallenge(
+          db, existing.id as number, user, targetUserId,
+          gameMatchCount, gameEntryFee, modeId, system, rom,
+        );
+      }
+      // Same direction — real duplicate, reject
       return NextResponse.json({ error: "Un défi est déjà en cours avec ce joueur" }, { status: 409 });
     }
 
@@ -135,11 +266,12 @@ export async function POST(req: NextRequest) {
       await ensureUser(targetUserId, `Player-${targetUserId}`);
     }
 
-    // ── Duel stake gate: the challenger must hold at least the entry fee to send a challenge ──
+    // ── Duel participation gate: the challenger must hold at least the per-game entry fee ──
     // Admins have unlimited SKY and always pass. The real debit happens on accept (both players).
-    if ((await getBalance(user.userId)) < ENTRY_FEE) {
+    const challengerBalance = await getBalance(user.userId);
+    if (challengerBalance < gameEntryFee) {
       return NextResponse.json(
-        { error: `SKY insuffisant : la mise d'un duel est de ${ENTRY_FEE} SKY`, code: "insufficient_sky" },
+        { error: `SKY insuffisant : la participation à un duel ${gameLabel} est de ${gameEntryFee} SKY`, code: "insufficient_sky" },
         { status: 402 },
       );
     }
@@ -151,9 +283,9 @@ export async function POST(req: NextRequest) {
     targetUsername = tr.rows.length > 0 ? (tr.rows[0].username as string) : targetUsername;
 
     const insertRs = await db.execute({
-      sql: `INSERT INTO duel_challenges (challenger_id, target_id, system, rom, status)
-            VALUES (?, ?, ?, ?, 'pending')`,
-      args: [user.userId, targetUserId, system, rom],
+      sql: `INSERT INTO duel_challenges (challenger_id, target_id, system, rom, status, mode_id, match_count)
+            VALUES (?, ?, ?, ?, 'pending', ?, ?)`,
+      args: [user.userId, targetUserId, system, rom, modeId, gameMatchCount],
     });
     const challengeId = Number(insertRs.lastInsertRowid);
 
@@ -163,14 +295,16 @@ export async function POST(req: NextRequest) {
     });
 
     // Notification via netplay_notifications (disable FK — session_id stores duel_challenge id, not a netplay_sessions id)
+    const notificationMsg = modeLabel
+      ? `${challengerUsername} vous a défié en duel ${gameLabel} — ${modeLabel} (${gameMatchCount} match${gameMatchCount > 1 ? 's' : ''}, ${gameEntryFee} SKY) !`
+      : `${challengerUsername} vous a défié en duel ${gameLabel} !`;
     await db.execute("PRAGMA foreign_keys = OFF");
     try {
       await db.execute({
         sql: `INSERT INTO netplay_notifications
                 (session_id, user_id, from_user_id, from_username, type, challenge_id, message)
               VALUES (?, ?, ?, ?, 'duel_challenge', ?, ?)`,
-        args: [challengeId, targetUserId, user.userId, challengerUsername, challengeId,
-          `${challengerUsername} vous a défié en duel KOF '98 !`],
+        args: [challengeId, targetUserId, user.userId, challengerUsername, challengeId, notificationMsg],
       });
     } finally {
       await db.execute("PRAGMA foreign_keys = ON");
@@ -181,10 +315,13 @@ export async function POST(req: NextRequest) {
       challenge: {
         id: challengeId, challengerId: user.userId, challengerUsername,
         targetId: targetUserId, targetUsername, system, rom, status: "pending",
+        modeId, matchCount: gameMatchCount, entryFee: gameEntryFee,
       },
     });
   } catch (error) {
     console.error("POST /api/duel/challenge error:", error);
-    return NextResponse.json({ error: "Erreur interne du serveur" }, { status: 500 });
+    const isLocalDev = !process.env.NORTHFLANK_API_KEY && !process.env.VERCEL;
+    const message = isLocalDev && error instanceof Error ? `Erreur: ${error.message}` : "Erreur interne du serveur";
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }

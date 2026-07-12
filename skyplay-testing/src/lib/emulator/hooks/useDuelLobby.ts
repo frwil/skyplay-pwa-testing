@@ -417,6 +417,24 @@ export function useDuelLobby({
           throw new Error(data.error || "Failed to send challenge");
         }
 
+        // ── Mutual challenge resolution: the target already challenged us ──
+        // The server auto-accepted the existing challenge instead of creating
+        // a second one. Set rules_pending directly — skip the "Défi envoyé" banner.
+        if (data.autoAccepted) {
+          setRulesPendingChallenge({
+            id: 0,
+            duelChallengeId: data.challengeId as number,
+            fromUsername: "",
+            message: "",
+            fromUserId: 0,
+            type: "duel_rules_pending",
+            challengeId: data.challengeId as number,
+            read: false,
+            createdAt: new Date().toISOString(),
+          });
+          return null; // success — rules overlay will show for both players
+        }
+
         const challenge: OutgoingChallenge = {
           challengeId: data.challenge.id,
           targetUserId,
