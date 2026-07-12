@@ -236,27 +236,63 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Ce joueur n'est plus dans le lobby" }, { status: 400 });
     }
 
+    // ── One-challenge-per-player gate (FIFO) ──────────────────────
+    // Each player can only be involved in ONE pending challenge at a time.
+    // This query finds all pending challenges involving either the challenger
+    // or the target. FIFO: the first request wins, subsequent ones are rejected.
+    // Exception: mutual (bi-directional) challenges between the same two players
+    // are auto-resolved rather than rejected.
     const existingRs = await db.execute({
       sql: `SELECT id, challenger_id, target_id FROM duel_challenges
-            WHERE ((challenger_id = ? AND target_id = ?) OR (challenger_id = ? AND target_id = ?))
-            AND status = 'pending'`,
-      args: [user.userId, targetUserId, targetUserId, user.userId],
+            WHERE (challenger_id = ? OR target_id = ? OR challenger_id = ? OR target_id = ?)
+            AND status = 'pending'
+            ORDER BY id ASC`,
+      args: [user.userId, user.userId, targetUserId, targetUserId],
     });
+
     if (existingRs.rows.length > 0) {
-      const existing = existingRs.rows[0];
       // ── Mutual challenge: the target already challenged us ──────
-      // Instead of creating a second challenge (which would deadlock both players
-      // at the rules overlay on different challenges), silently auto-accept the
-      // existing challenge on behalf of the new challenger. One invitation is
-      // silently cancelled (never created), the normal flow continues.
-      if ((existing.challenger_id as number) === targetUserId && (existing.target_id as number) === user.userId) {
+      const mutual = existingRs.rows.find(
+        (r) => (r.challenger_id as number) === targetUserId && (r.target_id as number) === user.userId,
+      );
+      if (mutual) {
         return autoAcceptExistingChallenge(
-          db, existing.id as number, user, targetUserId,
+          db, mutual.id as number, user, targetUserId,
           gameMatchCount, gameEntryFee, modeId, system, rom,
         );
       }
-      // Same direction — real duplicate, reject
-      return NextResponse.json({ error: "Un défi est déjà en cours avec ce joueur" }, { status: 409 });
+
+      // ── Same-direction duplicate (already challenged this player) ─
+      const sameDirection = existingRs.rows.find(
+        (r) => (r.challenger_id as number) === user.userId && (r.target_id as number) === targetUserId,
+      );
+      if (sameDirection) {
+        return NextResponse.json(
+          { error: "Un défi est déjà en cours avec ce joueur" },
+          { status: 409 },
+        );
+      }
+
+      // ── Non-mutual, different-player conflict ───────────────────
+      // FIFO: whichever challenge was created first wins. Determine who is busy.
+      const challengerBusy = existingRs.rows.some(
+        (r) => (r.challenger_id as number) === user.userId || (r.target_id as number) === user.userId,
+      );
+      const targetBusy = existingRs.rows.some(
+        (r) => (r.challenger_id as number) === targetUserId || (r.target_id as number) === targetUserId,
+      );
+
+      if (challengerBusy) {
+        return NextResponse.json(
+          { error: "Vous avez déjà un défi en cours — attendez qu'il soit résolu" },
+          { status: 409 },
+        );
+      }
+      // targetBusy: the target is already dealing with another challenger
+      return NextResponse.json(
+        { error: "Ce joueur est déjà en négociation avec un autre adversaire" },
+        { status: 409 },
+      );
     }
 
     // Ensure dev users exist (FK constraint against users table)
