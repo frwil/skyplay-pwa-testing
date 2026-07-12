@@ -131,6 +131,7 @@ export function useEmulator(system: SystemType = "nes") {
       setRematchRequested(false);
       setRematchDeclined(false);
       setOpponentAbandoned(null);
+      setMatchState(null); // reset so combat detection (stake charge) restarts for the new fight
       setStatus("running");
     },
     onSessionClosed: () => {
@@ -147,7 +148,8 @@ export function useEmulator(system: SystemType = "nes") {
       setRematchRequested(false);
       setDuelRoundResult(null);
       setDuelMatchResult(null);
-      setDuelRematchSessionId(newSessionId); // page.tsx observes this to charge the rematch stake
+      setMatchState(null); // reset so combat detection (stake charge) restarts for the new session
+      setDuelRematchSessionId(newSessionId); // page.tsx observes emu.sessionId + matchState to charge at combat start
       setStatus("loading");
       // Reconnect to new session
       const adapter = adapterRef.current;

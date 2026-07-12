@@ -270,27 +270,36 @@ export default function DuelPage() {
     return () => clearTimeout(timer);
   }, [emu.duelMatchHistory.length]);
 
-  // Rematch stake: when a rematch is accepted a fresh session id is emitted. Charge both players'
-  // entry fee into the new chamber (the WS rematch path never hits challenge/respond). The server
-  // is idempotent per session id, so both clients firing this is safe.
+  // Duel stake: charge both players ONLY when the fight actually starts (2 coins + START →
+  // combat), for the initial match AND every rematch. We detect the real start client-side from
+  // the server's ~500ms match_state: combat is the 0x40 bit of matchFlag (same heuristic as
+  // KofMatchHUD), with a team-non-empty guard to skip the boot flash. Charging here (not at
+  // accept) means a session that bugs before combat never debits anyone. The charge opens the
+  // escrow chamber; it's idempotent per session id server-side, so both clients firing — and
+  // stale match_state frames — are safe (dedup by session id below is just an optimisation).
+  const chargedSessionsRef = useRef<Set<string>>(new Set());
   useEffect(() => {
-    const newSessionId = emu.duelRematchSessionId;
     const session = lobby.duelSession;
-    if (!newSessionId || !session) return;
+    const sid = emu.sessionId;
+    const ms = emu.matchState;
+    if (!session || !sid || !ms) return;
+    const inCombat = (ms.matchFlag & 0x40) !== 0 && ms.p1Team.length > 0 && ms.p2Team.length > 0;
+    if (!inCombat || chargedSessionsRef.current.has(sid)) return;
+    chargedSessionsRef.current.add(sid);
     fetch("/api/duel/wager/charge", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         challengeId: session.challengeId,
-        sessionId: newSessionId,
+        sessionId: sid,
         player1Id: session.player1Id,
         player2Id: session.player2Id,
         ...(isDevMode ? { devUserId: currentUserId, devUsername: currentUsername } : {}),
       }),
     })
-      .then((r) => { if (!r.ok) console.error("[Duel] Rematch charge failed:", r.status); void refreshBalance(); })
-      .catch((e) => console.error("[Duel] Rematch charge error:", e));
-  }, [emu.duelRematchSessionId]);
+      .then((r) => { if (!r.ok) console.error("[Duel] Match-start charge failed:", r.status); void refreshBalance(); })
+      .catch((e) => console.error("[Duel] Match-start charge error:", e));
+  }, [emu.matchState, emu.sessionId]);
 
   // ── End-match overlay lifecycle ────────────────────────────────
   // Show the blocking overlay when a match ends (PvP session), reset when a
@@ -474,16 +483,28 @@ export default function DuelPage() {
         : "guest"
       : null;
 
-  // Fullscreen lifecycle: enter when a match is actively being played (no end overlay), exit
-  // when the end overlay appears or the game stops. Escape exits natively (reflected by the hook).
-  // Programmatic enter may be blocked without a fresh user gesture — the toggle button is the
-  // fallback, and a blocked request just leaves the canvas windowed (no crash).
+  // Fullscreen lifecycle. Entering MUST ride a user gesture — browsers block
+  // requestFullscreen() from a state-driven effect — so when a match goes live we
+  // arm a one-shot: the player's first key/click enters fullscreen (that gesture is
+  // allowed). Leaving the match / showing the end overlay exits (no gesture needed).
+  // Escape exits natively (reflected by the hook); since the one-shot has already
+  // fired, an Escape mid-match won't drag the player back in.
   useEffect(() => {
-    if (gameActive && !revengePhase) {
-      void enterFullscreen(canvasContainerRef.current);
-    } else {
+    if (!gameActive || revengePhase) {
       void exitFullscreen();
+      return;
     }
+    const enterOnGesture = () => {
+      void enterFullscreen(canvasContainerRef.current);
+      window.removeEventListener("keydown", enterOnGesture);
+      window.removeEventListener("pointerdown", enterOnGesture);
+    };
+    window.addEventListener("keydown", enterOnGesture);
+    window.addEventListener("pointerdown", enterOnGesture);
+    return () => {
+      window.removeEventListener("keydown", enterOnGesture);
+      window.removeEventListener("pointerdown", enterOnGesture);
+    };
   }, [gameActive, revengePhase, enterFullscreen, exitFullscreen]);
 
   // ── Opponent abandon → automatic forfeit win (client-side, no Docker rebuild) ──

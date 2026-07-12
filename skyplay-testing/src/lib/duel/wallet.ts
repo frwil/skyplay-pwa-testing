@@ -86,6 +86,17 @@ export async function getBalance(userId: number): Promise<number> {
   return Number(rs.rows[0]?.balance ?? 0);
 }
 
+/**
+ * Funds barrier: throws InsufficientFunds if a non-admin player can't cover the entry fee.
+ * No writes, no chamber — used at accept time to gate a duel WITHOUT debiting (the real
+ * debit happens later, when the fight actually starts). Admins pass (getBalance = Infinity).
+ */
+export async function assertEntryAffordable(playerAId: number, playerBId: number): Promise<void> {
+  for (const id of [playerAId, playerBId]) {
+    if ((await getBalance(id)) < ENTRY_FEE) throw new InsufficientFunds(id);
+  }
+}
+
 /** SKY currently held in open escrow chambers (funds in transit; ~0 outside a live match). */
 export async function getOpenEscrowTotal(): Promise<number> {
   const db = await getDb();

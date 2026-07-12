@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getDb, ensureUser } from "@/lib/db";
 import { getAuthFromRequest } from "@/lib/auth";
 import { setRoomCode, generateRoomCode } from "@/app/api/cloud-session/room-codes";
-import { chargeEntryFees, InsufficientFunds } from "@/lib/duel/wallet";
+import { assertEntryAffordable, InsufficientFunds } from "@/lib/duel/wallet";
 
 async function getUserId(req: NextRequest, body?: Record<string, unknown>): Promise<{ userId: number; username: string } | null> {
   // Try JWT first (works in all environments — production AND local dev)
@@ -92,8 +92,6 @@ export async function POST(req: NextRequest) {
     }
 
     // ── Accept: Create cloud session ──────────────────────────
-    const system = (row.system as string) || "neogeo";
-    const rom = (row.rom as string) || "kof98.zip";
     const sessionId = `sess-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
     let wsUrl: string;
@@ -111,18 +109,14 @@ export async function POST(req: NextRequest) {
     const roomCode = generateRoomCode();
     await setRoomCode(roomCode, sessionId);
 
-    // ── Duel stake: debit both players' entry fee into this duel's isolated escrow chamber ──
-    // Admins are never charged (unlimited SKY). A non-admin who cannot cover the stake aborts
-    // the accept with 402 — nothing is persisted (challenge stays 'pending', lobby unchanged).
+    // ── Duel stake: funds barrier ONLY — no debit here ──
+    // The real debit (open escrow chamber + charge both players) happens later, when the
+    // fight actually starts (client detects combat via matchFlag → POST /api/duel/wager/charge).
+    // This avoids debiting players when the platform bugs before a match ever runs. We still
+    // gate: a non-admin who can't cover the stake aborts the accept with 402 (nothing persisted,
+    // challenge stays 'pending', lobby unchanged). Admins pass (unlimited SKY).
     try {
-      await chargeEntryFees({
-        challengeId,
-        sessionId,
-        playerAId: Number(row.challenger_id),
-        playerBId: user.userId,
-        system,
-        rom,
-      });
+      await assertEntryAffordable(Number(row.challenger_id), user.userId);
     } catch (e) {
       if (e instanceof InsufficientFunds) {
         return NextResponse.json(
@@ -130,7 +124,7 @@ export async function POST(req: NextRequest) {
           { status: 402 },
         );
       }
-      console.error("[respond] ❌ chargeEntryFees (accept):", e);
+      console.error("[respond] ❌ assertEntryAffordable (accept):", e);
       throw e;
     }
 
