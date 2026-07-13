@@ -34,12 +34,22 @@ export class CloudAdapter implements EmulatorAdapter {
   private videoDecoder: VideoDecoder | null = null;
   private videoDecoderReady = false;
   private videoNeedsKeyframe = false;
-  private pendingVideoChunks: { chunk: EncodedVideoChunk; nalType: number }[] = [];
+  private pendingVideoChunks: { chunk: EncodedVideoChunk; nalType: number; nalData: Uint8Array }[] = [];
   private lastVideoDecoderConfig: VideoDecoderConfig | null = null;
   /** Saved init config so the error handler can re-create the decoder. */
   private lastDecoderInitConfig: { codec: string; width: number; height: number; framerate: number } | null = null;
   /** Whether the codec config had extradata (SPS/PPS in description). */
   private hasConfigExtradata = false;
+  /** Pending config waiting for SPS+PPS before decoder creation. */
+  private pendingVideoConfig: { codec: string; width: number; height: number; framerate: number } | null = null;
+  /** Timer for deferred decoder creation (fired when SPS/PPS not yet available). */
+  private deferredDecoderTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Most recent SPS NAL unit (with Annex B start code). */
+  private latestSpsNal: Uint8Array | null = null;
+  /** Most recent PPS NAL unit (with Annex B start code). */
+  private latestPpsNal: Uint8Array | null = null;
+  /** Set when deferred timer fires — skip deferral to break the infinite loop. */
+  private deferredTimedOut = false;
   private streamWidth = 320;
   private streamHeight = 224;
   private frameCount = 0;
@@ -264,16 +274,45 @@ export class CloudAdapter implements EmulatorAdapter {
       this.streamWidth = config.width;
       this.streamHeight = config.height;
 
+      // Extract SPS/PPS from pending chunks to build AVCDecoderConfigurationRecord.
+      // Chrome's VideoDecoder requires extradata for H.264 — without it, configure()
+      // triggers an async EncodingError even before any frames are fed.
+      let description: Uint8Array | undefined;
+      for (const p of this.pendingVideoChunks) {
+        if (p.nalType === 7 && !this.latestSpsNal) this.latestSpsNal = p.nalData;
+        if (p.nalType === 8 && !this.latestPpsNal) this.latestPpsNal = p.nalData;
+        if (this.latestSpsNal && this.latestPpsNal) break;
+      }
+      if (this.latestSpsNal && this.latestPpsNal) {
+        description = this.buildAvccRecord(this.latestSpsNal, this.latestPpsNal);
+        console.log(`[Cloud:${this.systemType}] 📦 Built AVCDecoderConfigurationRecord from SPS/PPS ` +
+          `(${this.extractNalPayload(this.latestSpsNal).length}+${this.extractNalPayload(this.latestPpsNal).length} bytes)`);
+      } else if (this.deferredTimedOut) {
+        // Deferred timer already fired — create without extradata to break the cycle
+        console.warn(`[Cloud:${this.systemType}] ⚠️ Deferred timed out — creating without extradata`);
+        this.deferredTimedOut = false;
+      } else {
+        // No SPS/PPS yet — defer decoder creation. handleBinaryMessage will trigger
+        // it when both SPS and PPS arrive, with a 3s timer fallback.
+        console.log(`[Cloud:${this.systemType}] ⏳ No SPS/PPS yet — deferring VideoDecoder creation`);
+        this.pendingVideoConfig = config;
+        this.deferredDecoderTimer = setTimeout(() => {
+          if (!this.pendingVideoConfig) return; // already created by handleBinaryMessage
+          console.warn(`[Cloud:${this.systemType}] ⏰ Deferred timeout after 3s — creating decoder without extradata`);
+          const cfg = this.pendingVideoConfig;
+          this.pendingVideoConfig = null;
+          this.deferredDecoderTimer = null;
+          this.deferredTimedOut = true;
+          this.initVideoDecoder(cfg);
+        }, 3000);
+        return;
+      }
+
       const init: VideoDecoderInit = {
         output: (frame: VideoFrame) => {
-          // Coalesce: keep only the newest decoded frame. The rAF paint loop
-          // presents it in sync with the display refresh. If a burst decodes
-          // several frames between two vsyncs, only the latest is shown (correct
-          // at 60fps source / 60fps display, and favors latency over slow-motion).
           if (this.latestFrame) this.latestFrame.close();
           this.latestFrame = frame;
 
-          // Compteur FPS (debug) — frames décodées
           this.frameCount++;
           const now = performance.now();
           if (now - this.lastFpsTime >= 5000) {
@@ -283,10 +322,6 @@ export class CloudAdapter implements EmulatorAdapter {
           }
         },
         error: (err) => {
-          // The decoder enters "closed" state on fatal error — reset() and configure()
-          // are NOT allowed. We must create a brand-new decoder. Close the dead one,
-          // then re-init on the next microtask (WebCodecs forbids construction inside
-          // the error callback).
           console.warn(`[Cloud:${this.systemType}] VideoDecoder error — recreating:`, err);
           this.videoNeedsKeyframe = true;
           try { this.videoDecoder?.close(); } catch {}
@@ -304,11 +339,17 @@ export class CloudAdapter implements EmulatorAdapter {
         },
       };
 
-      const support = await VideoDecoder.isConfigSupported({
+      // Build config WITH extradata if we have it
+      const checkConfig: VideoDecoderConfig = {
         codec: config.codec,
         codedWidth: config.width,
         codedHeight: config.height,
-      });
+      };
+      if (description) {
+        checkConfig.description = description as BufferSource;
+      }
+
+      const support = await VideoDecoder.isConfigSupported(checkConfig);
 
       if (!support.supported) {
         console.warn(`[Cloud:${this.systemType}] H.264 codec not supported`);
@@ -316,7 +357,6 @@ export class CloudAdapter implements EmulatorAdapter {
       }
 
       this.videoDecoder = new VideoDecoder(init);
-      // Use the config returned by the browser (may normalize codec string)
       this.videoDecoder.configure(support.config!);
       this.lastVideoDecoderConfig = support.config!;
       this.hasConfigExtradata = !!(support.config?.description &&
@@ -325,19 +365,57 @@ export class CloudAdapter implements EmulatorAdapter {
       this.videoNeedsKeyframe = true;
       this.startPaintLoop();
 
-      // Never feed buffered frames — they may contain an incomplete GOP (missing SPS/PPS
-      // or referencing unknown frames). Instead, wait for the next natural keyframe from
-      // the live stream. handleBinaryMessage will feed SPS/PPS + keyframe when they arrive,
-      // exactly like P1's cold-start path.
-      // Keep only recent SPS/PPS from the buffer (discard everything else) so that when
-      // the next keyframe arrives, handleBinaryMessage can feed the SPS/PPS first.
+      // Discard delta frames from the buffer (they reference unknown frames).
+      // Keep only recent SPS/PPS so handleBinaryMessage can feed them ahead of
+      // the first keyframe when extradata wasn't available.
       this.pendingVideoChunks = this.pendingVideoChunks.filter(p =>
         p.nalType === 7 || p.nalType === 8
-      ).slice(-8); // keep at most 4 SPS + 4 PPS (2 full parameter sets)
-      console.log(`[Cloud:${this.systemType}] VideoDecoder ready: ${config.codec} ${config.width}x${config.height} (awaiting fresh keyframe, ${this.pendingVideoChunks.length} SPS/PPS kept)`);
+      ).slice(-8);
+      console.log(`[Cloud:${this.systemType}] VideoDecoder ready: ${config.codec} ${config.width}x${config.height}` +
+        ` extradata=${this.hasConfigExtradata} (${this.pendingVideoChunks.length} SPS/PPS kept)`);
     } catch (err) {
       console.error(`[Cloud:${this.systemType}] Failed to init VideoDecoder:`, err);
     }
+  }
+
+  /** Extract the NAL unit payload without the Annex B start code (00 00 00 01 or 00 00 01). */
+  private extractNalPayload(nalUnit: Uint8Array): Uint8Array {
+    if (nalUnit.length >= 4 &&
+        nalUnit[0] === 0x00 && nalUnit[1] === 0x00 && nalUnit[2] === 0x00 && nalUnit[3] === 0x01) {
+      return nalUnit.subarray(4);
+    }
+    if (nalUnit.length >= 3 &&
+        nalUnit[0] === 0x00 && nalUnit[1] === 0x00 && nalUnit[2] === 0x01) {
+      return nalUnit.subarray(3);
+    }
+    return nalUnit; // no start code — return as-is
+  }
+
+  /** Build AVCDecoderConfigurationRecord (ISO/IEC 14496-15 §5.2.4.1.1) from SPS and PPS NAL units. */
+  private buildAvccRecord(spsNal: Uint8Array, ppsNal: Uint8Array): Uint8Array {
+    const sps = this.extractNalPayload(spsNal);
+    const pps = this.extractNalPayload(ppsNal);
+
+    // 7 bytes header + SPS + 2 bytes PPS header + PPS
+    const totalSize = 7 + sps.length + 2 + pps.length;
+    const buf = new Uint8Array(totalSize);
+    let o = 0;
+
+    buf[o++] = 1;                     // configurationVersion
+    buf[o++] = sps[1];                // AVCProfileIndication
+    buf[o++] = sps[2];                // profile_compatibility
+    buf[o++] = sps[3];                // AVCLevelIndication
+    buf[o++] = 0xFF;                  // 6 bits reserved(1) + 2 bits lengthSizeMinusOne(3 = 4-byte lengths)
+    buf[o++] = 0xE1;                  // 3 bits reserved(1) + 5 bits numOfSequenceParameterSets(1)
+    buf[o++] = (sps.length >> 8) & 0xFF;  // SPS length (big-endian u16)
+    buf[o++] = sps.length & 0xFF;
+    buf.set(sps, o); o += sps.length;
+    buf[o++] = 0x01;                  // numOfPictureParameterSets
+    buf[o++] = (pps.length >> 8) & 0xFF;  // PPS length (big-endian u16)
+    buf[o++] = pps.length & 0xFF;
+    buf.set(pps, o);
+
+    return buf;
   }
 
   private async initAudioDecoder(config: { codec: string; sampleRate: number; channels: number }): Promise<void> {
@@ -563,6 +641,14 @@ export class CloudAdapter implements EmulatorAdapter {
     this.audioFrameCount = 0;
     this.audioNextTime = 0;
     this.frameCount = 0;
+    this.latestSpsNal = null;
+    this.latestPpsNal = null;
+    if (this.deferredDecoderTimer) {
+      clearTimeout(this.deferredDecoderTimer);
+      this.deferredDecoderTimer = null;
+    }
+    this.pendingVideoConfig = null;
+    this.deferredTimedOut = false;
     if (this.audioCtx) {
       this.audioCtx.close().catch(() => {});
       this.audioCtx = null;
@@ -709,6 +795,24 @@ export class CloudAdapter implements EmulatorAdapter {
       this.lastFrameId = frameId;
       const nalData = new Uint8Array(data, FRAME_HEADER_SIZE, nalLength);
       const nalUnitType = this.getNalUnitType(nalData);
+
+      // Always track latest SPS/PPS for AVCDecoderConfigurationRecord building
+      if (nalUnitType === 7) this.latestSpsNal = nalData;
+      if (nalUnitType === 8) this.latestPpsNal = nalData;
+
+      // Deferred decoder creation: codec config arrived before SPS/PPS.
+      // Now that we have both, build extradata and create the decoder.
+      if (this.latestSpsNal && this.latestPpsNal && this.pendingVideoConfig && !this.videoDecoder) {
+        const cfg = this.pendingVideoConfig;
+        this.pendingVideoConfig = null;
+        if (this.deferredDecoderTimer) { clearTimeout(this.deferredDecoderTimer); this.deferredDecoderTimer = null; }
+        console.log(`[Cloud:${this.systemType}] 🎯 SPS+PPS received — creating deferred VideoDecoder`);
+        this.initVideoDecoder(cfg);
+        // Don't feed this frame — it'll be a delta; let initVideoDecoder set up the decoder
+        // and handleBinaryMessage will feed the next keyframe.
+        return;
+      }
+
       const chunkType: EncodedVideoChunkType = nalUnitType === 5 ? "key" : "delta";
 
       const chunk = new EncodedVideoChunk({
@@ -733,7 +837,7 @@ export class CloudAdapter implements EmulatorAdapter {
             this.pendingVideoChunks = [];
           } else if (nalUnitType === 7 || nalUnitType === 8) {
             // Stocker SPS/PPS pour plus tard
-            this.pendingVideoChunks.push({ chunk, nalType: nalUnitType });
+            this.pendingVideoChunks.push({ chunk, nalType: nalUnitType, nalData });
           }
           // Ignorer les delta avant la première keyframe
         } else {
@@ -742,7 +846,7 @@ export class CloudAdapter implements EmulatorAdapter {
           }
         }
       } else {
-        this.pendingVideoChunks.push({ chunk, nalType: nalUnitType });
+        this.pendingVideoChunks.push({ chunk, nalType: nalUnitType, nalData });
         if (this.pendingVideoChunks.length > 300) {
           this.pendingVideoChunks.shift();
         }
