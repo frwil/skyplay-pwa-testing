@@ -35,6 +35,11 @@ export class CloudAdapter implements EmulatorAdapter {
   private videoDecoderReady = false;
   private videoNeedsKeyframe = false;
   private pendingVideoChunks: { chunk: EncodedVideoChunk; nalType: number }[] = [];
+  private lastVideoDecoderConfig: VideoDecoderConfig | null = null;
+  /** Saved init config so the error handler can re-create the decoder. */
+  private lastDecoderInitConfig: { codec: string; width: number; height: number; framerate: number } | null = null;
+  /** Whether the codec config had extradata (SPS/PPS in description). */
+  private hasConfigExtradata = false;
   private streamWidth = 320;
   private streamHeight = 224;
   private frameCount = 0;
@@ -222,12 +227,16 @@ export class CloudAdapter implements EmulatorAdapter {
           }
         };
 
-        this.ws.onerror = () => {
+        this.ws.onerror = (event) => {
+          const target = event.target as WebSocket | null;
           console.error(`[Cloud:${this.systemType}] ❌ WebSocket ERROR`, {
-            url: wsUrl, readyState: this.ws?.readyState,
+            url: wsUrl,
+            readyState: target?.readyState ?? this.ws?.readyState,
+            hint: "Vérifie que le game-server tourne (docker compose up -d dans apps/game-server)",
           });
+          // Only reject on initial connect; reconnection errors are logged but not fatal
           if (this._status === "loading") {
-            reject(new Error(`WebSocket connection failed to ${wsUrl}`));
+            reject(new Error(`WebSocket connection failed to ${wsUrl} — game server down or unreachable`));
           }
         };
 
@@ -251,6 +260,7 @@ export class CloudAdapter implements EmulatorAdapter {
 
   private async initVideoDecoder(config: { codec: string; width: number; height: number; framerate: number }): Promise<void> {
     try {
+      this.lastDecoderInitConfig = config;
       this.streamWidth = config.width;
       this.streamHeight = config.height;
 
@@ -273,10 +283,24 @@ export class CloudAdapter implements EmulatorAdapter {
           }
         },
         error: (err) => {
-          // VideoDecoder errors are often transient (corrupted frame, etc.)
-          // Don't destroy the decoder — just wait for the next keyframe
-          console.warn(`[Cloud:${this.systemType}] VideoDecoder error (non-fatal):`, err);
+          // The decoder enters "closed" state on fatal error — reset() and configure()
+          // are NOT allowed. We must create a brand-new decoder. Close the dead one,
+          // then re-init on the next microtask (WebCodecs forbids construction inside
+          // the error callback).
+          console.warn(`[Cloud:${this.systemType}] VideoDecoder error — recreating:`, err);
           this.videoNeedsKeyframe = true;
+          try { this.videoDecoder?.close(); } catch {}
+          this.videoDecoder = null;
+          this.videoDecoderReady = false;
+          queueMicrotask(() => {
+            if (!this.lastDecoderInitConfig) {
+              console.warn(`[Cloud:${this.systemType}] No saved config — waiting for next codec config`);
+              return;
+            }
+            this.initVideoDecoder(this.lastDecoderInitConfig).catch(e => {
+              console.error(`[Cloud:${this.systemType}] Decoder re-creation failed:`, e);
+            });
+          });
         },
       };
 
@@ -294,34 +318,48 @@ export class CloudAdapter implements EmulatorAdapter {
       this.videoDecoder = new VideoDecoder(init);
       // Use the config returned by the browser (may normalize codec string)
       this.videoDecoder.configure(support.config!);
+      this.lastVideoDecoderConfig = support.config!;
+      this.hasConfigExtradata = !!(support.config?.description &&
+        (support.config.description as AllowSharedBufferSource).byteLength > 0);
       this.videoDecoderReady = true;
       this.videoNeedsKeyframe = true;
       this.startPaintLoop();
 
-      // === CORRECTION : Ne pas envoyer SPS/PPS seuls ===
-      // Trouver la première keyframe
+      // === Feed buffered frames to the new decoder ===
+      // If the codec config included extradata (AVCDecoderConfigurationRecord with
+      // SPS/PPS in the `description` field), skip in-band SPS/PPS — feeding them
+      // on top of the config SPS/PPS can confuse some browser decoders.
       const firstKeyIdx = this.pendingVideoChunks.findIndex(p => p.nalType === 5);
-      
+
       if (firstKeyIdx >= 0) {
-        // Envoyer UNIQUEMENT la keyframe en premier
+        if (!this.hasConfigExtradata) {
+          // No extradata in config → feed in-band SPS/PPS before the keyframe
+          for (let i = 0; i < firstKeyIdx; i++) {
+            const p = this.pendingVideoChunks[i];
+            if (p.nalType === 7 || p.nalType === 8) {
+              try { this.videoDecoder.decode(p.chunk); } catch { /* decoder closed */ }
+            }
+          }
+        }
+        // Feed the keyframe (SPS/PPS from config description will be used if present)
         this.videoDecoder.decode(this.pendingVideoChunks[firstKeyIdx].chunk);
         this.videoNeedsKeyframe = false;
-        
-        // Ensuite, traiter les trames suivantes normalement
+
+        // Process remaining frames after the keyframe
         for (let i = firstKeyIdx + 1; i < this.pendingVideoChunks.length; i++) {
           if (this.videoDecoder.decodeQueueSize < MAX_DECODE_QUEUE) {
             this.videoDecoder.decode(this.pendingVideoChunks[i].chunk);
           }
         }
-        
+
         this.pendingVideoChunks = [];
-        console.log(`[Cloud:${this.systemType}] VideoDecoder ready: ${config.codec} ${config.width}x${config.height}`);
+        console.log(`[Cloud:${this.systemType}] VideoDecoder ready: ${config.codec} ${config.width}x${config.height}${this.hasConfigExtradata ? ' (extradata)' : ''}`);
       } else {
-        // Garder uniquement SPS/PPS en attente de la première keyframe
-        this.pendingVideoChunks = this.pendingVideoChunks.filter(p => 
+        // No keyframe yet — keep only SPS/PPS + any keyframes, drop deltas
+        this.pendingVideoChunks = this.pendingVideoChunks.filter(p =>
           p.nalType === 5 || p.nalType === 7 || p.nalType === 8
         );
-        console.log(`[Cloud:${this.systemType}] VideoDecoder ready (awaiting keyframe)`);
+        console.log(`[Cloud:${this.systemType}] VideoDecoder ready (awaiting keyframe, ${this.pendingVideoChunks.length} SPS/PPS queued)`);
       }
     } catch (err) {
       console.error(`[Cloud:${this.systemType}] Failed to init VideoDecoder:`, err);
@@ -624,6 +662,12 @@ export class CloudAdapter implements EmulatorAdapter {
           this.callbacks.onRematchStarting?.();
           break;
         }
+        case "auto_rematch": {
+          const arData = msg as unknown as { matchNumber: number; totalMatches: number };
+          console.log(`[Cloud:${this.systemType}] 🔄 Auto-rematch ${arData.matchNumber}/${arData.totalMatches}`);
+          this.callbacks.onAutoRematch?.(arData.matchNumber, arData.totalMatches);
+          break;
+        }
         case "rematch_requested": {
           console.log(`[Cloud:${this.systemType}] 🔄 Rematch requested by opponent`);
           this.callbacks.onRematchRequested?.();
@@ -647,6 +691,22 @@ export class CloudAdapter implements EmulatorAdapter {
         }
         case "match_state": {
           this.callbacks.onMatchState?.(msg as unknown as MatchStateData);
+          break;
+        }
+        case "paused": {
+          const pData = msg as unknown as { player: 1 | 2; countdown: number };
+          console.log(`[Cloud:${this.systemType}] ⏸ Paused by P${pData.player} — ${pData.countdown}s`);
+          this._status = "paused";
+          this.callbacks.onStatusChange("paused");
+          this.callbacks.onPaused?.(pData.player, pData.countdown);
+          break;
+        }
+        case "resumed": {
+          const rData = msg as unknown as { initiator: 1 | 2 | 0 };
+          console.log(`[Cloud:${this.systemType}] ▶ Resumed (initiator: ${rData.initiator === 0 ? "auto" : `P${rData.initiator}`})`);
+          this._status = "running";
+          this.callbacks.onStatusChange("running");
+          this.callbacks.onResumed?.();
           break;
         }
         case "pong": { break; }
@@ -687,12 +747,14 @@ export class CloudAdapter implements EmulatorAdapter {
       if (this.videoDecoderReady && this.videoDecoder) {
         if (this.videoNeedsKeyframe) {
           if (nalUnitType === 5) {
-            // Envoyer SPS/PPS en attente, puis la keyframe
-            const pendingSpsPps = this.pendingVideoChunks.filter(p => p.nalType === 7 || p.nalType === 8);
-            for (const p of pendingSpsPps) {
-              this.videoDecoder.decode(p.chunk);
+            // Feed buffered SPS/PPS only if the codec config had no extradata
+            if (!this.hasConfigExtradata) {
+              const pendingSpsPps = this.pendingVideoChunks.filter(p => p.nalType === 7 || p.nalType === 8);
+              for (const p of pendingSpsPps) {
+                try { this.videoDecoder.decode(p.chunk); } catch { /* decoder closed */ }
+              }
             }
-            this.videoDecoder.decode(chunk);
+            try { this.videoDecoder.decode(chunk); } catch { /* decoder closed */ }
             this.videoNeedsKeyframe = false;
             this.pendingVideoChunks = [];
           } else if (nalUnitType === 7 || nalUnitType === 8) {
@@ -702,7 +764,7 @@ export class CloudAdapter implements EmulatorAdapter {
           // Ignorer les delta avant la première keyframe
         } else {
           if (this.videoDecoder.decodeQueueSize < MAX_DECODE_QUEUE) {
-            this.videoDecoder.decode(chunk);
+            try { this.videoDecoder.decode(chunk); } catch { /* decoder closed */ }
           }
         }
       } else {
@@ -828,6 +890,11 @@ export class CloudAdapter implements EmulatorAdapter {
     this.ws?.send(JSON.stringify({ type: "rematch_decline" }));
   }
 
+  /** Auto-rematch for multi-match modes — skip the request/accept dance. */
+  autoRematch(matchNumber: number, totalMatches: number): void {
+    this.ws?.send(JSON.stringify({ type: "auto_rematch", matchNumber, totalMatches }));
+  }
+
   /** Stop the duel entirely — closes the session. */
   stopDuel(): void {
     this.ws?.send(JSON.stringify({ type: "stop_duel" }));
@@ -943,8 +1010,14 @@ export interface CloudCallbacks {
   onRematchDeclined?: () => void;
   /** Called when a rematch is starting (server has reset the game — legacy same-session). */
   onRematchStarting?: () => void;
+  /** Auto-rematch for multi-match modes — skip overlay, next match starting. */
+  onAutoRematch?: (matchNumber: number, totalMatches: number) => void;
   /** Called when the server closes the session — all players should return to lobby. */
   onSessionClosed?: () => void;
   /** Live in-match state (teams, active char, gauge mode) — about every 500ms during combat. */
   onMatchState?: (data: MatchStateData) => void;
+  /** Called when the game is paused (by either player). player = who initiated, countdown = initial seconds. */
+  onPaused?: (player: 1 | 2, countdown: number) => void;
+  /** Called when the game resumes after a pause. */
+  onResumed?: () => void;
 }
