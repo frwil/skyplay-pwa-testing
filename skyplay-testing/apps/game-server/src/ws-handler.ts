@@ -2,12 +2,12 @@ import { WebSocket } from "ws";
 import {
   createSession, addConnection, removeConnection, getSession,
   sendToSession, sendBinaryToSession, sendBinaryToConnection, resetIdleTimer, removeSession,
-  getPlayerInfo, hasActiveConnections, getConnections,
+  getPlayerInfo, hasActiveConnections, getConnections, type Session,
 } from "./session-manager.js";
 import { GameRunner } from "./game-runner.js";
 import type { ClientMessage } from "./types.js";
 import { FRAME_MAGIC, AUDIO_MAGIC, CODEC_CONFIG_MAGIC } from "./types.js";
-import { getGameConfig } from "./game-config.js";
+import { getGameConfig, getSnesCharGrid, type SnesCharGrid } from "./game-config.js";
 
 /** Map sessionId → GameRunner for lifecycle management. */
 const sessionRunners = new Map<string, GameRunner>();
@@ -276,6 +276,10 @@ async function handleInit(
 
   // ── Codec configuration (H.264 + Opus descriptors) ──
   runner.on("codecConfig", (videoDesc: Uint8Array, audioDesc: Uint8Array) => {
+    // Cache descriptors so late-joining P2 can receive them
+    session.codecVideoDesc = videoDesc;
+    session.codecAudioDesc = audioDesc;
+
     const videoLen = Buffer.alloc(2);
     videoLen.writeUInt16LE(videoDesc.length, 0);
     const payload = Buffer.concat([videoLen, Buffer.from(videoDesc), Buffer.from(audioDesc)]);
@@ -327,6 +331,13 @@ async function handleInit(
   runner.on("matchEnd", (data: { winner: number; loser: number; p1Losses: number; p2Losses: number; matchNumber?: number; totalRounds?: number; perfectKos?: number; p1TeamIds?: number[]; p2TeamIds?: number[]; p1SelectOrder?: number[]; p2SelectOrder?: number[]; p1Mode?: string; p2Mode?: string; p1CharWins?: Record<number, number>; p2CharWins?: Record<number, number> }) => {
     const resultLabel = data.winner === 0 ? "DRAW!" : `P${data.winner} wins!`;
     console.log(`[ws] 🏁 MATCH OVER! ${resultLabel} Score: P1=${data.p1Losses} P2=${data.p2Losses}`);
+
+    // For SNES: include cursor-tracked character names from the session
+    const snesP1Name = session.system === "snes" ? session.p1SelectedCharName : undefined;
+    const snesP2Name = session.system === "snes" ? session.p2SelectedCharName : undefined;
+    const snesP1Id = session.system === "snes" && session.p1SelectedCharId >= 0 ? [session.p1SelectedCharId] : undefined;
+    const snesP2Id = session.system === "snes" && session.p2SelectedCharId >= 0 ? [session.p2SelectedCharId] : undefined;
+
     sendToSession(session, {
       type: "match_end",
       winner: data.winner,
@@ -336,14 +347,16 @@ async function handleInit(
       matchNumber: data.matchNumber,
       totalRounds: data.totalRounds,
       perfectKos: data.perfectKos,
-      p1TeamIds: data.p1TeamIds,
-      p2TeamIds: data.p2TeamIds,
+      p1TeamIds: data.p1TeamIds ?? snesP1Id,
+      p2TeamIds: data.p2TeamIds ?? snesP2Id,
       p1SelectOrder: data.p1SelectOrder,
       p2SelectOrder: data.p2SelectOrder,
       p1Mode: data.p1Mode as "ADVANCED" | "EXTRA" | undefined,
       p2Mode: data.p2Mode as "ADVANCED" | "EXTRA" | undefined,
       p1CharWins: data.p1CharWins,
       p2CharWins: data.p2CharWins,
+      p1CharName: snesP1Name,
+      p2CharName: snesP2Name,
     });
     // Accumulate match stats
     const stats = sessionStats.get(msg.sessionId);
@@ -390,60 +403,237 @@ async function handleInit(
     session.status = "running";
     sendToSession(session, { type: "ready", width, height });
 
-    // ── Auto coin + start (PvP only; CPU sessions let player control START) ──
-    if (session.mode === "pvp") {
-      // Insert 2 coins via P1 at 15s after launch (sequential, no overlap)
-      setTimeout(() => {
-        if (session.status !== "running") return;
-        console.log(`[ws] 🪙 Inserting coins via P1 for session ${msg.sessionId}`);
-        runner.ensureFocus();
-        // Coin 1: DOWN → UP
-        runner.injectInput(1, 4, true);
-        setTimeout(() => { runner.injectInput(1, 4, false); }, 200);
-        // Coin 2: DOWN → UP
-        setTimeout(() => { runner.injectInput(1, 4, true); }, 400);
-        setTimeout(() => {
-          runner.injectInput(1, 4, false);
-          console.log(`[ws] ✅ 2 coins inserted for session ${msg.sessionId}`);
-        }, 600);
-      }, 15000);
+    // ── Auto coin + start ──────────────────────────────────────────
+    // Button indices vary per system (Neo Geo: 4=SELECT/coin, 5=START;
+    // SNES: 2=SELECT, 3=START, no coin). We auto-detect the right mapping.
+    const startButton = system === "snes" ? 3 : system === "ps1" ? 9 : 5;
+    const coinButton = system === "snes" ? null : system === "ps1" ? 8 : 4; // SNES has no coin
+    const coinDelay = system === "snes" ? 0 : 15000; // skip coin for SNES
+    const startDelay = system === "snes" ? 18000 : 20000;
+    const needCoins = coinButton != null;
 
-      // Start game for both players 5s after coins (20s total)
-      setTimeout(() => {
-        if (session.status !== "running") return;
-        console.log(`[ws] ▶️  Starting game for P1+P2 in session ${msg.sessionId}`);
-        runner.ensureFocus();
-        runner.injectInput(1, 5, true);
-        setTimeout(() => { runner.injectInput(2, 5, true); }, 100);
+    if (session.mode === "pvp") {
+      if (needCoins) {
+        // Insert 2 coins via P1 (Neo Geo / PS1)
         setTimeout(() => {
-          runner.injectInput(1, 5, false);
-          runner.injectInput(2, 5, false);
-          console.log(`[ws] ✅ Auto-start complete for session ${msg.sessionId}`);
-          // Start memory watcher 5s after game starts (give time for character select)
+          if (session.status !== "running") return;
+          console.log(`[ws] 🪙 Inserting coins via P1 for session ${msg.sessionId}`);
+          runner.ensureFocus();
+          runner.injectInput(1, coinButton, true);
+          setTimeout(() => { runner.injectInput(1, coinButton, false); }, 200);
+          setTimeout(() => { runner.injectInput(1, coinButton, true); }, 400);
           setTimeout(() => {
-            if (session.status === "running") {
-              console.log(`[ws] 🧠 Starting round detection for session ${msg.sessionId}`);
-              runner.startMemoryWatcher();
-            }
-          }, 5000);
-        }, 300);
-      }, 20000);
-    } else {
-      // CPU mode: insert 1 coin only, no auto-START (player presses Enter themselves)
+            runner.injectInput(1, coinButton, false);
+            console.log(`[ws] ✅ 2 coins inserted for session ${msg.sessionId}`);
+          }, 600);
+        }, coinDelay);
+      }
+
+      // Start game for both players
       setTimeout(() => {
         if (session.status !== "running") return;
-        console.log(`[ws] 🪙 Inserting 1 coin for CPU session ${msg.sessionId}`);
+        console.log(`[ws] ▶️  Starting game for P1+P2 in session ${msg.sessionId} (system=${system}, startBtn=${startButton})`);
         runner.ensureFocus();
-        runner.injectInput(1, 4, true);
-        setTimeout(() => { runner.injectInput(1, 4, false); }, 200);
-      }, 15000);
-      // Start memory watcher after a delay (player will start the game themselves)
+        runner.injectInput(1, startButton, true);
+        setTimeout(() => { runner.injectInput(2, startButton, true); }, 100);
+        setTimeout(() => {
+          runner.injectInput(1, startButton, false);
+          runner.injectInput(2, startButton, false);
+          console.log(`[ws] ✅ Auto-start complete for session ${msg.sessionId}`);
+
+          // ── SNES menu navigation (SFA2) ──
+          // SFA2 boot flow: Capcom logo (~4s) → intro cinematic (~10s) → title "PRESS START" → main menu
+          // Main menu: ARCADE (default), VS MODE, OPTIONS
+          // SNES button layout: B = confirm (btn 0), START = menu/begin (btn 3), DOWN = btn 5
+          //
+          // Strategy: spam START aggressively to punch through ALL pre-menu screens
+          // (logo, license, intro, title), then navigate the menu. The additional STARTs
+          // happen WHILE the initial START is still being processed by the game, ensuring
+          // we don't miss any press-to-continue screens.
+          if (system === "snes") {
+            const confirmBtn = 0;  // SNES B = confirm
+            const downBtn = 5;     // SNES DOWN
+            const HOLD_MS = 300;
+            const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
+
+            const tap = (player: number, btn: number, holdMs = HOLD_MS) => {
+              runner.ensureFocus();
+              runner.injectInput(player, btn, true);
+              setTimeout(() => runner.injectInput(player, btn, false), holdMs);
+            };
+
+            // Phase 1: spam START every 2s to skip logo → intro → title → menu.
+            // More aggressive than before: every 2s instead of every 3s, with longer holds.
+            // This covers all possible "press any button" screens in the SFA2 boot flow.
+            const startPhases = [1500, 3500, 5500, 7500, 9500]; // every 2s for 10s
+            for (const delay of startPhases) {
+              setTimeout(() => {
+                if (session.status !== "running") return;
+                console.log(`[ws] 🎮 SNES: START spam at +${delay}ms for ${msg.sessionId}`);
+                tap(1, startButton, 250);
+                setTimeout(() => tap(2, startButton, 250), 100);
+              }, delay);
+            }
+
+            // Phase 2: menu navigation (after START spam has punched through to the menu)
+            const navDelay = 12000; // ~12s after auto-start release = menu should be visible
+            setTimeout(async () => {
+              if (session.status !== "running") return;
+
+              if (session.mode === "pvp") {
+                // ── PvP: navigate to VS MODE ──
+                // Main menu has: ARCADE (default/highlighted), VS MODE (one DOWN), OPTIONS
+                console.log(`[ws] 🎮 SNES PvP: DOWN → select VS MODE for ${msg.sessionId}`);
+                tap(1, downBtn, 250);
+                await sleep(800);
+
+                console.log(`[ws] 🎮 SNES PvP: B → confirm VS MODE for ${msg.sessionId}`);
+                tap(1, confirmBtn, 250);
+                await sleep(3000); // wait for character select to appear
+
+                // ── Character select phase (player-controlled) ──
+                if (session.status !== "running") return;
+                const grid = getSnesCharGrid(msg.rom);
+                if (grid) {
+                  console.log(`[ws] 🎮 SNES PvP: entering character select for ${msg.sessionId}`);
+                  startCharSelectPhase(session, runner, grid);
+                } else {
+                  // No grid defined — fall back to auto-B for both players
+                  console.log(`[ws] 🎮 SNES: P1 B → select character for ${msg.sessionId}`);
+                  tap(1, confirmBtn);
+                  await sleep(1500);
+                  if (session.status !== "running") return;
+                  console.log(`[ws] 🎮 SNES: P2 B → select character for ${msg.sessionId}`);
+                  tap(2, confirmBtn);
+                  await sleep(1500);
+                  if (session.status !== "running") return;
+                  console.log(`[ws] 🎮 SNES: START → begin match for ${msg.sessionId}`);
+                  runner.resetHealthWarmup();
+                  tap(1, startButton);
+                  await sleep(200);
+                  tap(2, startButton);
+                }
+              } else {
+                // ── CPU/ARCADE: just confirm default ARCADE mode ──
+                console.log(`[ws] 🎮 SNES CPU: B → confirm ARCADE for ${msg.sessionId}`);
+                tap(1, confirmBtn);
+                await sleep(2500);
+
+                // Character select: enter player-controlled phase
+                if (session.status !== "running") return;
+                const cpuGrid = getSnesCharGrid(msg.rom);
+                if (cpuGrid) {
+                  console.log(`[ws] 🎮 SNES CPU: entering character select for ${msg.sessionId}`);
+                  startCharSelectPhase(session, runner, cpuGrid);
+                } else {
+                  // No grid — fall back to auto-B
+                  console.log(`[ws] 🎮 SNES: P1 B → select character for ${msg.sessionId}`);
+                  tap(1, confirmBtn);
+                  await sleep(1500);
+                  if (session.status !== "running") return;
+                  console.log(`[ws] 🎮 SNES: START → begin match for ${msg.sessionId}`);
+                  runner.resetHealthWarmup();
+                  tap(1, startButton);
+                }
+              }
+            }, navDelay);
+
+            // Start round detection after navigation should have completed
+            const rdDelay = navDelay + 14000;
+            setTimeout(() => {
+              if (session.status === "running") {
+                console.log(`[ws] 🧠 Starting round detection for ${system} session ${msg.sessionId}`);
+                runner.startMemoryWatcher();
+              }
+            }, rdDelay);
+          } else {
+            // Non-SNES: start round detection 5s after game starts (give time for character select)
+            setTimeout(() => {
+              if (session.status === "running") {
+                console.log(`[ws] 🧠 Starting round detection for session ${msg.sessionId}`);
+                runner.startMemoryWatcher();
+              }
+            }, 5000);
+          }
+        }, 300);
+      }, startDelay);
+    } else {
+      // ── CPU mode ──
+      if (needCoins) {
+        // CPU mode: insert 1 coin
+        setTimeout(() => {
+          if (session.status !== "running") return;
+          console.log(`[ws] 🪙 Inserting 1 coin for CPU session ${msg.sessionId}`);
+          runner.ensureFocus();
+          runner.injectInput(1, coinButton, true);
+          setTimeout(() => { runner.injectInput(1, coinButton, false); }, 200);
+        }, coinDelay);
+      }
+
+      // For SNES: auto-start + navigate to ARCADE (mirrors PvP but without P2)
+      if (system === "snes") {
+        const confirmBtn = 0;
+        const HOLD_MS = 300;
+        const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
+
+        const tap = (player: number, btn: number, holdMs = HOLD_MS) => {
+          runner.ensureFocus();
+          runner.injectInput(player, btn, true);
+          setTimeout(() => runner.injectInput(player, btn, false), holdMs);
+        };
+
+        setTimeout(() => {
+          if (session.status !== "running") return;
+          console.log(`[ws] ▶️  Starting game for CPU session ${msg.sessionId} (snes)`);
+          runner.ensureFocus();
+          runner.injectInput(1, startButton, true);
+          setTimeout(() => {
+            runner.injectInput(1, startButton, false);
+            console.log(`[ws] ✅ CPU auto-start complete for ${msg.sessionId}`);
+
+            // Spam START to skip intro screens
+            const startPhases = [1500, 3500, 5500, 7500, 9500];
+            for (const delay of startPhases) {
+              setTimeout(() => {
+                if (session.status !== "running") return;
+                console.log(`[ws] 🎮 SNES CPU: START spam at +${delay}ms`);
+                tap(1, startButton, 250);
+              }, delay);
+            }
+
+            // Navigate ARCADE mode
+            setTimeout(async () => {
+              if (session.status !== "running") return;
+              console.log(`[ws] 🎮 SNES CPU: B → confirm ARCADE for ${msg.sessionId}`);
+              tap(1, confirmBtn);
+              await sleep(2500);
+
+              if (session.status !== "running") return;
+              const playGrid = getSnesCharGrid(msg.rom);
+              if (playGrid) {
+                console.log(`[ws] 🎮 SNES CPU: entering character select for ${msg.sessionId}`);
+                startCharSelectPhase(session, runner, playGrid);
+              } else {
+                console.log(`[ws] 🎮 SNES CPU: B → select character for ${msg.sessionId}`);
+                tap(1, confirmBtn);
+                await sleep(1500);
+                if (session.status !== "running") return;
+                console.log(`[ws] 🎮 SNES CPU: START → begin match for ${msg.sessionId}`);
+                runner.resetHealthWarmup();
+                tap(1, startButton);
+              }
+            }, 12000);
+          }, 300);
+        }, startDelay);
+      }
+
+      // Start round detection after a delay
       setTimeout(() => {
         if (session.status === "running") {
-          console.log(`[ws] 🧠 Starting round detection for CPU session ${msg.sessionId}`);
+          console.log(`[ws] 🧠 Starting round detection for ${system} session ${msg.sessionId}`);
           runner.startMemoryWatcher();
         }
-      }, 25000);
+      }, system === "snes" ? 50000 : 25000);
     }
 
     let lastFrameCount = 0;
@@ -468,6 +658,8 @@ function handleJoin(
   msg: { type: "join"; sessionId: string; token: string },
   _sessionId: string,
 ): void {
+  console.log(`[ws] 👤 P2 join request for session ${msg.sessionId}`);
+
   // Validate token
   const expectedToken = process.env.SESSION_TOKEN_SECRET;
   if (expectedToken && msg.token !== expectedToken) {
@@ -477,6 +669,8 @@ function handleJoin(
   }
 
   let session = getSession(msg.sessionId);
+  console.log(`[ws] 👤 P2 join: session=${session ? `found (status=${session.status}, conns=${session.connections.length})` : "NOT FOUND"}`);
+
   if (!session) {
     // P2 joined before P1 — reserve the session and wait for P1's init
     console.log(`[ws] P2 joined before P1 — reserving session ${msg.sessionId}`);
@@ -501,12 +695,161 @@ function handleJoin(
   // Notify P1 that P2 joined
   sendToSession(session, { type: "player_joined", player: 2 });
 
+  // Re-send codec config to P2 if it was already sent (P2 joined after game start)
+  console.log(`[ws] 👤 P2 join: codecVideoDesc=${session.codecVideoDesc ? "cached" : "NOT YET"} videoWidth=${session.videoWidth} videoHeight=${session.videoHeight}`);
+  if (session.codecVideoDesc && session.codecAudioDesc) {
+    const videoLen = Buffer.alloc(2);
+    videoLen.writeUInt16LE(session.codecVideoDesc.length, 0);
+    const payload = Buffer.concat([videoLen, Buffer.from(session.codecVideoDesc), Buffer.from(session.codecAudioDesc)]);
+
+    const header = Buffer.alloc(3);
+    header.writeUInt8(CODEC_CONFIG_MAGIC, 0);
+    header.writeUInt16LE(payload.length, 1);
+
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(Buffer.concat([header, payload]));
+      console.log(`[ws] 📡 Re-sent codec config to P2 for session ${msg.sessionId}`);
+    }
+  } else if (session.status === "running" || session.status === "loading") {
+    console.log(`[ws] ⚠️ P2 joined but codec config not cached yet — frames may not decode!`);
+  }
+
   // Send ready to P2 with current video dimensions
   ws.send(JSON.stringify({
     type: "ready",
     width: session.videoWidth,
     height: session.videoHeight,
   }));
+}
+
+// ── Character Select Phase (SNES cursor tracking) ─────────────────────
+
+/** SNES button indices used during character select. */
+const SNES_B = 0;
+const SNES_START = 3;
+const SNES_UP = 4;
+const SNES_DOWN = 5;
+const SNES_LEFT = 6;
+const SNES_RIGHT = 7;
+
+/** How long players have to pick characters before auto-lock (ms). */
+const CHAR_SELECT_TIMEOUT_MS = 15_000;
+
+/**
+ * Enter character select phase. Resets cursors, notifies clients, and arms
+ * the auto-lock timeout. When both players lock in (or the timeout fires),
+ * the match begins automatically.
+ */
+function startCharSelectPhase(
+  session: Session,
+  runner: GameRunner,
+  grid: SnesCharGrid,
+): void {
+  if (!session) return;
+
+  // Clear any previous char select state
+  if (session.charSelectTimer) {
+    clearTimeout(session.charSelectTimer);
+    session.charSelectTimer = null;
+  }
+
+  // Reset cursors to starting position
+  session.charSelectActive = true;
+  session.p1CursorRow = grid.startRow;
+  session.p1CursorCol = grid.startCol;
+  session.p2CursorRow = grid.startRow;
+  session.p2CursorCol = grid.startCol;
+  session.p1CharLocked = false;
+  session.p2CharLocked = false;
+  session.p1SelectedCharId = -1;
+  session.p2SelectedCharId = -1;
+  session.p1SelectedCharName = "";
+  session.p2SelectedCharName = "";
+
+  console.log(`[ws] 🎯 Char select STARTED for ${session.id} — grid ${grid.rows}×${grid.cols}, timeout ${CHAR_SELECT_TIMEOUT_MS}ms`);
+
+  sendToSession(session, { type: "char_select_start", timeout: CHAR_SELECT_TIMEOUT_MS });
+
+  // Auto-lock after timeout
+  session.charSelectTimer = setTimeout(() => {
+    if (!session.charSelectActive) return;
+    console.log(`[ws] ⏰ Char select TIMEOUT for ${session.id} — auto-locking`);
+    finalizeCharSelect(session, runner, grid);
+  }, CHAR_SELECT_TIMEOUT_MS);
+}
+
+/**
+ * Ends the character select phase: auto-locks any unselected players at their
+ * current cursor position, presses START for both players, and sends final
+ * char_selected events.
+ */
+function finalizeCharSelect(
+  session: Session,
+  runner: GameRunner,
+  grid: SnesCharGrid,
+): void {
+  if (!session || !session.charSelectActive) return;
+
+  session.charSelectActive = false;
+  if (session.charSelectTimer) {
+    clearTimeout(session.charSelectTimer);
+    session.charSelectTimer = null;
+  }
+
+  // Clamp cursor positions to grid bounds (defensive)
+  const clamp = (row: number, col: number) => ({
+    row: Math.max(0, Math.min(grid.rows - 1, row)),
+    col: Math.max(0, Math.min(grid.cols - 1, col)),
+  });
+
+  // Lock P1 if not already locked
+  if (!session.p1CharLocked) {
+    const pos = clamp(session.p1CursorRow, session.p1CursorCol);
+    const cell = grid.grid[pos.row]?.[pos.col];
+    session.p1SelectedCharId = cell?.id ?? -1;
+    session.p1SelectedCharName = cell?.name ?? "???";
+    session.p1CharLocked = true;
+    sendToSession(session, {
+      type: "char_selected",
+      player: 1,
+      charId: session.p1SelectedCharId,
+      charName: session.p1SelectedCharName,
+      row: pos.row,
+      col: pos.col,
+    });
+    console.log(`[ws] 🎯 P1 auto-locked: ${session.p1SelectedCharName} (0x${session.p1SelectedCharId.toString(16)})`);
+  }
+
+  // Lock P2 if not already locked (PvP mode only — CPU mode has no P2)
+  if (session.mode === "pvp" && !session.p2CharLocked) {
+    const pos = clamp(session.p2CursorRow, session.p2CursorCol);
+    const cell = grid.grid[pos.row]?.[pos.col];
+    session.p2SelectedCharId = cell?.id ?? -1;
+    session.p2SelectedCharName = cell?.name ?? "???";
+    session.p2CharLocked = true;
+    sendToSession(session, {
+      type: "char_selected",
+      player: 2,
+      charId: session.p2SelectedCharId,
+      charName: session.p2SelectedCharName,
+      row: pos.row,
+      col: pos.col,
+    });
+    console.log(`[ws] 🎯 P2 auto-locked: ${session.p2SelectedCharName} (0x${session.p2SelectedCharId.toString(16)})`);
+  }
+
+  // Press START for both players to begin the match
+  console.log(`[ws] 🎮 START → begin match for ${session.id} (P1=${session.p1SelectedCharName}, P2=${session.p2SelectedCharName})`);
+  runner.resetHealthWarmup();
+  runner.ensureFocus();
+  runner.injectInput(1, SNES_START, true);
+  setTimeout(() => runner.injectInput(1, SNES_START, false), 300);
+  if (session.mode === "pvp") {
+    setTimeout(() => {
+      runner.injectInput(2, SNES_START, true);
+      setTimeout(() => runner.injectInput(2, SNES_START, false), 300);
+    }, 200);
+  }
 }
 
 function handleInput(
@@ -541,6 +884,86 @@ function handleInput(
   // Pause is a separate "control" message (not input), so blocking START does
   // not affect the pause/resume functionality.
   const session = getSession(info.sessionId);
+
+  // ── Character select cursor tracking (SNES) ──
+  if (session?.charSelectActive && msg.pressed) {
+    const grid = getSnesCharGrid(session.rom);
+    const isP1 = msg.player === 1;
+    const isP2 = msg.player === 2;
+    const locked = isP1 ? session.p1CharLocked : (isP2 ? session.p2CharLocked : true);
+
+    if (grid && !locked) {
+      // Directional inputs → move cursor
+      if (msg.button === SNES_UP || msg.button === SNES_DOWN ||
+          msg.button === SNES_LEFT || msg.button === SNES_RIGHT) {
+        if (isP1) {
+          if (msg.button === SNES_UP) session.p1CursorRow--;
+          if (msg.button === SNES_DOWN) session.p1CursorRow++;
+          if (msg.button === SNES_LEFT) session.p1CursorCol--;
+          if (msg.button === SNES_RIGHT) session.p1CursorCol++;
+          session.p1CursorRow = Math.max(0, Math.min(grid.rows - 1, session.p1CursorRow));
+          session.p1CursorCol = Math.max(0, Math.min(grid.cols - 1, session.p1CursorCol));
+          console.log(`[ws] 🎯 P1 cursor: (${session.p1CursorRow},${session.p1CursorCol})`);
+        } else if (isP2) {
+          if (msg.button === SNES_UP) session.p2CursorRow--;
+          if (msg.button === SNES_DOWN) session.p2CursorRow++;
+          if (msg.button === SNES_LEFT) session.p2CursorCol--;
+          if (msg.button === SNES_RIGHT) session.p2CursorCol++;
+          session.p2CursorRow = Math.max(0, Math.min(grid.rows - 1, session.p2CursorRow));
+          session.p2CursorCol = Math.max(0, Math.min(grid.cols - 1, session.p2CursorCol));
+          console.log(`[ws] 🎯 P2 cursor: (${session.p2CursorRow},${session.p2CursorCol})`);
+        }
+      }
+
+      // B button → lock in character selection
+      if (msg.button === SNES_B) {
+        if (isP1) {
+          const cell = grid.grid[session.p1CursorRow]?.[session.p1CursorCol];
+          session.p1SelectedCharId = cell?.id ?? -1;
+          session.p1SelectedCharName = cell?.name ?? "???";
+          session.p1CharLocked = true;
+          sendToSession(session, {
+            type: "char_selected", player: 1,
+            charId: session.p1SelectedCharId,
+            charName: session.p1SelectedCharName,
+            row: session.p1CursorRow, col: session.p1CursorCol,
+          });
+          console.log(`[ws] 🎯 P1 selected: ${session.p1SelectedCharName} (0x${session.p1SelectedCharId.toString(16)})`);
+        } else if (isP2) {
+          const cell = grid.grid[session.p2CursorRow]?.[session.p2CursorCol];
+          session.p2SelectedCharId = cell?.id ?? -1;
+          session.p2SelectedCharName = cell?.name ?? "???";
+          session.p2CharLocked = true;
+          sendToSession(session, {
+            type: "char_selected", player: 2,
+            charId: session.p2SelectedCharId,
+            charName: session.p2SelectedCharName,
+            row: session.p2CursorRow, col: session.p2CursorCol,
+          });
+          console.log(`[ws] 🎯 P2 selected: ${session.p2SelectedCharName} (0x${session.p2SelectedCharId.toString(16)})`);
+        }
+
+        // Check if both players have locked in (PvP) or P1 is locked (CPU)
+        const bothLocked = session.mode === "pvp"
+          ? session.p1CharLocked && session.p2CharLocked
+          : session.p1CharLocked;
+        if (bothLocked) {
+          console.log(`[ws] 🎯 Both players locked — scheduling START for ${info.sessionId}`);
+          // Delay START slightly so the game processes the B press first, then
+          // finalizeCharSelect will clear the charSelectActive flag and inject START.
+          setTimeout(() => finalizeCharSelect(session, runner, grid), 400);
+          // Fall through — let the B press reach the game so the UI confirms visually
+        }
+      }
+
+      // START is blocked during char select — match starts only after both lock in
+      if (msg.button === SNES_START) {
+        console.log(`[ws] 🚫 START blocked during char select for P${msg.player} in ${info.sessionId}`);
+        return;
+      }
+    }
+  }
+
   if (session && session.mode === "pvp" && session.system === "neogeo" && (msg.button === 4 || msg.button === 5)) {
     console.log(`[ws] 🚫 BLOCKED manual ${msg.button === 4 ? "coin" : "START"} (btn ${msg.button}) from P${msg.player} in PvP session ${info.sessionId}`);
     return;
@@ -698,6 +1121,19 @@ async function handleRematchAccept(sessionId: string): Promise<void> {
     } catch { /* ok */ }
   }
   sendToSession(session, { type: "rematch_starting" });
+
+  // For SNES: restart character select phase after the continue screen (~12s)
+  if (session.system === "snes") {
+    const grid = getSnesCharGrid(session.rom);
+    if (grid && runner) {
+      setTimeout(() => {
+        if (session.status === "running") {
+          console.log(`[ws] 🎯 Rematch char select for ${sessionId}`);
+          startCharSelectPhase(session, runner, grid);
+        }
+      }, 12000);
+    }
+  }
 }
 
 /** P2 declined the rematch — relay to P1. */
@@ -735,4 +1171,17 @@ async function handleAutoRematch(sessionId: string, matchNumber: number, totalMa
     } catch { /* ok */ }
   }
   sendToSession(session, { type: "auto_rematch", matchNumber, totalMatches });
+
+  // For SNES: restart character select phase after the continue screen (~12s)
+  if (session.system === "snes") {
+    const grid = getSnesCharGrid(session.rom);
+    if (grid && runner) {
+      setTimeout(() => {
+        if (session.status === "running") {
+          console.log(`[ws] 🎯 Auto-rematch char select for ${sessionId}`);
+          startCharSelectPhase(session, runner, grid);
+        }
+      }, 12000);
+    }
+  }
 }

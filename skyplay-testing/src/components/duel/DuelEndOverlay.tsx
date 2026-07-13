@@ -291,10 +291,7 @@ function BalancePanel({
 
   return (
     <div className="flex flex-col gap-2">
-      <div className="grid grid-cols-2 gap-3">
-        <BalanceCell t={t} label={t.duel.you} move={settlement.you} highlight />
-        <BalanceCell t={t} label={t.duel.opponent} move={settlement.opp} highlight={false} />
-      </div>
+      <BalanceCell t={t} label={t.duel.you} move={settlement.you} highlight />
       <p className="text-center text-[10px] text-white/30">{t.duel.entryFeeNotice(entryFee)}</p>
     </div>
   );

@@ -61,6 +61,15 @@ export interface StopDuelMessage {
   type: "stop_duel";
 }
 
+/** Auto-rematch for multi-match modes — skip the stats overlay and restart immediately. */
+export interface AutoRematchMessage {
+  type: "auto_rematch";
+  /** The NEXT match number (1-based). */
+  matchNumber: number;
+  /** Total matches in the series (3 for XL, 5 for Fighter). */
+  totalMatches: number;
+}
+
 export type ClientMessage =
   | InitMessage
   | JoinMessage
@@ -70,7 +79,8 @@ export type ClientMessage =
   | RematchRequestMessage
   | RematchAcceptMessage
   | RematchDeclineMessage
-  | StopDuelMessage;
+  | StopDuelMessage
+  | AutoRematchMessage;
 
 export interface StatusMessage {
   type: "status";
@@ -146,6 +156,9 @@ export interface MatchEndMessage {
   /** Rounds won per character (charId → win count), for the end-match overlay tally. */
   p1CharWins?: Record<number, number>;
   p2CharWins?: Record<number, number>;
+  /** SNES/cursor-tracked character names (when RAM-based detection is unavailable). */
+  p1CharName?: string;
+  p2CharName?: string;
 }
 
 /** Rematch requested by opponent — show accept/decline UI. */
@@ -180,6 +193,15 @@ export interface SessionClosedMessage {
   type: "session_closed";
 }
 
+/** Auto-rematch is starting — skip the stats overlay and roll to the next match. */
+export interface AutoRematchServerMessage {
+  type: "auto_rematch";
+  /** The NEXT match number (1-based). */
+  matchNumber: number;
+  /** Total matches in the series. */
+  totalMatches: number;
+}
+
 /** Live in-match state pushed ~every 500ms so the browser HUD updates during a match. */
 export interface MatchStateMessage {
   type: "match_state";
@@ -199,6 +221,44 @@ export interface MatchStateMessage {
   matchFlag: number;
 }
 
+/** Duel pause: a player paused the game. Both clients show the countdown overlay. */
+export interface PausedMessage {
+  type: "paused";
+  /** Which player initiated the pause (1 or 2). */
+  player: 1 | 2;
+  /** Initial countdown value in seconds (typically 30). */
+  countdown: number;
+}
+
+/** Duel resume: the game is resuming after a pause. */
+export interface ResumedMessage {
+  type: "resumed";
+  /** Who triggered the resume: 1 or 2 = player-initiated, 0 = auto (timeout). */
+  initiator: 1 | 2 | 0;
+}
+
+/** Character select phase has started — show the character select UI overlay. */
+export interface CharSelectStartMessage {
+  type: "char_select_start";
+  /** Timeout in ms before auto-locking current cursor position. */
+  timeout: number;
+}
+
+/** A player has selected their character. */
+export interface CharSelectedMessage {
+  type: "char_selected";
+  /** Which player selected (1 or 2). */
+  player: number;
+  /** Internal character ID (0x00-0x11 for SFA2). */
+  charId: number;
+  /** Display name (e.g. "Ryu"). */
+  charName: string;
+  /** Cursor row position. */
+  row: number;
+  /** Cursor column position. */
+  col: number;
+}
+
 export type ServerMessage =
   | StatusMessage
   | ReadyMessage
@@ -213,7 +273,12 @@ export type ServerMessage =
   | RematchDeclinedMessage
   | RematchStartingMessage
   | SessionClosedMessage
-  | MatchStateMessage;
+  | MatchStateMessage
+  | AutoRematchServerMessage
+  | PausedMessage
+  | ResumedMessage
+  | CharSelectStartMessage
+  | CharSelectedMessage;
 
 /** Binary frame header: 0x01 + width(u16) + height(u16) + frameId(u32) + nalLength(u32) + H.264 NAL data */
 export const FRAME_MAGIC = 0x01;

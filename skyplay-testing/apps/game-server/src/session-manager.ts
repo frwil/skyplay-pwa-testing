@@ -22,6 +22,30 @@ export interface Session {
   fps: number;
   /** setTimeout handle for idle timeout */
   idleTimer: ReturnType<typeof setTimeout> | null;
+  /** setTimeout handle for pause auto-resume (30s countdown). */
+  pauseTimer?: ReturnType<typeof setTimeout> | null;
+  /** Which player initiated the pause (1 or 2). */
+  pauseInitiator?: 1 | 2;
+  /** Cached codec config descriptors so late-joining P2 can get them. */
+  codecVideoDesc?: Uint8Array;
+  codecAudioDesc?: Uint8Array;
+  /** Whether the game is currently at the character select screen. */
+  charSelectActive: boolean;
+  /** Cursor positions during character select (row, col in the grid). */
+  p1CursorRow: number;
+  p1CursorCol: number;
+  p2CursorRow: number;
+  p2CursorCol: number;
+  /** Whether each player has locked in their character selection. */
+  p1CharLocked: boolean;
+  p2CharLocked: boolean;
+  /** The character each player selected (ID + display name). */
+  p1SelectedCharId: number;
+  p2SelectedCharId: number;
+  p1SelectedCharName: string;
+  p2SelectedCharName: string;
+  /** Timer handle for character select timeout (auto-locks after N seconds). */
+  charSelectTimer: ReturnType<typeof setTimeout> | null;
 }
 
 const sessions = new Map<string, Session>();
@@ -47,6 +71,18 @@ export function createSession(
     frameCount: 0,
     fps: 0,
     idleTimer: null,
+    charSelectActive: false,
+    p1CursorRow: 0,
+    p1CursorCol: 0,
+    p2CursorRow: 0,
+    p2CursorCol: 0,
+    p1CharLocked: false,
+    p2CharLocked: false,
+    p1SelectedCharId: -1,
+    p2SelectedCharId: -1,
+    p1SelectedCharName: "",
+    p2SelectedCharName: "",
+    charSelectTimer: null,
   };
   sessions.set(id, session);
   console.log(`[session] Created session ${id} (${system} / ${rom}), total: ${sessions.size}`);
