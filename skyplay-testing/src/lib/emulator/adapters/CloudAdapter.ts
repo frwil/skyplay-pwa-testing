@@ -40,16 +40,8 @@ export class CloudAdapter implements EmulatorAdapter {
   private lastDecoderInitConfig: { codec: string; width: number; height: number; framerate: number } | null = null;
   /** Whether the codec config had extradata (SPS/PPS in description). */
   private hasConfigExtradata = false;
-  /** Pending config waiting for SPS+PPS before decoder creation. */
+  /** Config received before we have SPS+PPS+IDR — defer decoder creation. */
   private pendingVideoConfig: { codec: string; width: number; height: number; framerate: number } | null = null;
-  /** Timer for deferred decoder creation (fired when SPS/PPS not yet available). */
-  private deferredDecoderTimer: ReturnType<typeof setTimeout> | null = null;
-  /** Most recent SPS NAL unit (with Annex B start code). */
-  private latestSpsNal: Uint8Array | null = null;
-  /** Most recent PPS NAL unit (with Annex B start code). */
-  private latestPpsNal: Uint8Array | null = null;
-  /** Set when deferred timer fires — skip deferral to break the infinite loop. */
-  private deferredTimedOut = false;
   private streamWidth = 320;
   private streamHeight = 224;
   private frameCount = 0;
@@ -274,108 +266,95 @@ export class CloudAdapter implements EmulatorAdapter {
       this.streamWidth = config.width;
       this.streamHeight = config.height;
 
-      // Extract SPS/PPS from pending chunks to build AVCDecoderConfigurationRecord.
-      // Chrome's VideoDecoder requires extradata for H.264 — without it, configure()
-      // triggers an async EncodingError even before any frames are fed.
-      let description: Uint8Array | undefined;
-      for (const p of this.pendingVideoChunks) {
-        if (p.nalType === 7 && !this.latestSpsNal) this.latestSpsNal = p.nalData;
-        if (p.nalType === 8 && !this.latestPpsNal) this.latestPpsNal = p.nalData;
-        if (this.latestSpsNal && this.latestPpsNal) break;
-      }
-      if (this.latestSpsNal && this.latestPpsNal) {
-        description = this.buildAvccRecord(this.latestSpsNal, this.latestPpsNal);
-        console.log(`[Cloud:${this.systemType}] 📦 Built AVCDecoderConfigurationRecord from SPS/PPS ` +
-          `(${this.extractNalPayload(this.latestSpsNal).length}+${this.extractNalPayload(this.latestPpsNal).length} bytes)`);
-      } else if (this.deferredTimedOut) {
-        // Deferred timer already fired — create without extradata to break the cycle
-        console.warn(`[Cloud:${this.systemType}] ⚠️ Deferred timed out — creating without extradata`);
-        this.deferredTimedOut = false;
+      // Check: do we have SPS + PPS + IDR buffered?
+      const hasSps = this.pendingVideoChunks.some(p => p.nalType === 7);
+      const hasPps = this.pendingVideoChunks.some(p => p.nalType === 8);
+      const idrEntry = this.pendingVideoChunks.find(p => p.nalType === 5);
+
+      if (hasSps && hasPps && idrEntry) {
+        // Complete cold-start data available — create decoder and feed immediately.
+        // This mirrors P1's startup path where SPS+PPS+IDR arrive together.
+        await this.createAndPrimeDecoder(config, idrEntry.chunk);
       } else {
-        // No SPS/PPS yet — defer decoder creation. handleBinaryMessage will trigger
-        // it when both SPS and PPS arrive, with a 3s timer fallback.
-        console.log(`[Cloud:${this.systemType}] ⏳ No SPS/PPS yet — deferring VideoDecoder creation`);
+        // Missing initialization data — defer. handleBinaryMessage will trigger
+        // creation when SPS+PPS+IDR are all buffered.
+        console.log(`[Cloud:${this.systemType}] ⏳ Deferring decoder — need SPS+PPS+IDR ` +
+          `(have: SPS=${hasSps} PPS=${hasPps} IDR=${!!idrEntry}, buffered=${this.pendingVideoChunks.length})`);
         this.pendingVideoConfig = config;
-        this.deferredDecoderTimer = setTimeout(() => {
-          if (!this.pendingVideoConfig) return; // already created by handleBinaryMessage
-          console.warn(`[Cloud:${this.systemType}] ⏰ Deferred timeout after 3s — creating decoder without extradata`);
-          const cfg = this.pendingVideoConfig;
-          this.pendingVideoConfig = null;
-          this.deferredDecoderTimer = null;
-          this.deferredTimedOut = true;
-          this.initVideoDecoder(cfg);
-        }, 3000);
-        return;
       }
-
-      const init: VideoDecoderInit = {
-        output: (frame: VideoFrame) => {
-          if (this.latestFrame) this.latestFrame.close();
-          this.latestFrame = frame;
-
-          this.frameCount++;
-          const now = performance.now();
-          if (now - this.lastFpsTime >= 5000) {
-            console.log(`[Video] FPS: ${Math.round(this.frameCount / 5)}`);
-            this.frameCount = 0;
-            this.lastFpsTime = now;
-          }
-        },
-        error: (err) => {
-          console.warn(`[Cloud:${this.systemType}] VideoDecoder error — recreating:`, err);
-          this.videoNeedsKeyframe = true;
-          try { this.videoDecoder?.close(); } catch {}
-          this.videoDecoder = null;
-          this.videoDecoderReady = false;
-          queueMicrotask(() => {
-            if (!this.lastDecoderInitConfig) {
-              console.warn(`[Cloud:${this.systemType}] No saved config — waiting for next codec config`);
-              return;
-            }
-            this.initVideoDecoder(this.lastDecoderInitConfig).catch(e => {
-              console.error(`[Cloud:${this.systemType}] Decoder re-creation failed:`, e);
-            });
-          });
-        },
-      };
-
-      // Build config WITH extradata if we have it
-      const checkConfig: VideoDecoderConfig = {
-        codec: config.codec,
-        codedWidth: config.width,
-        codedHeight: config.height,
-      };
-      if (description) {
-        checkConfig.description = description as BufferSource;
-      }
-
-      const support = await VideoDecoder.isConfigSupported(checkConfig);
-
-      if (!support.supported) {
-        console.warn(`[Cloud:${this.systemType}] H.264 codec not supported`);
-        return;
-      }
-
-      this.videoDecoder = new VideoDecoder(init);
-      this.videoDecoder.configure(support.config!);
-      this.lastVideoDecoderConfig = support.config!;
-      this.hasConfigExtradata = !!(support.config?.description &&
-        (support.config.description as AllowSharedBufferSource).byteLength > 0);
-      this.videoDecoderReady = true;
-      this.videoNeedsKeyframe = true;
-      this.startPaintLoop();
-
-      // Discard delta frames from the buffer (they reference unknown frames).
-      // Keep only recent SPS/PPS so handleBinaryMessage can feed them ahead of
-      // the first keyframe when extradata wasn't available.
-      this.pendingVideoChunks = this.pendingVideoChunks.filter(p =>
-        p.nalType === 7 || p.nalType === 8
-      ).slice(-8);
-      console.log(`[Cloud:${this.systemType}] VideoDecoder ready: ${config.codec} ${config.width}x${config.height}` +
-        ` extradata=${this.hasConfigExtradata} (${this.pendingVideoChunks.length} SPS/PPS kept)`);
     } catch (err) {
       console.error(`[Cloud:${this.systemType}] Failed to init VideoDecoder:`, err);
     }
+  }
+
+  /** Create the VideoDecoder and immediately feed SPS → PPS → IDR. */
+  private async createAndPrimeDecoder(
+    config: { codec: string; width: number; height: number; framerate: number },
+    idrChunk: EncodedVideoChunk,
+  ): Promise<void> {
+    const init: VideoDecoderInit = {
+      output: (frame: VideoFrame) => {
+        if (this.latestFrame) this.latestFrame.close();
+        this.latestFrame = frame;
+
+        this.frameCount++;
+        const now = performance.now();
+        if (now - this.lastFpsTime >= 5000) {
+          console.log(`[Video] FPS: ${Math.round(this.frameCount / 5)}`);
+          this.frameCount = 0;
+          this.lastFpsTime = now;
+        }
+      },
+      error: (err) => {
+        console.warn(`[Cloud:${this.systemType}] VideoDecoder error — recreating:`, err);
+        this.videoNeedsKeyframe = true;
+        try { this.videoDecoder?.close(); } catch {}
+        this.videoDecoder = null;
+        this.videoDecoderReady = false;
+        queueMicrotask(() => {
+          if (!this.lastDecoderInitConfig) {
+            console.warn(`[Cloud:${this.systemType}] No saved config — waiting for next codec config`);
+            return;
+          }
+          this.initVideoDecoder(this.lastDecoderInitConfig).catch(e => {
+            console.error(`[Cloud:${this.systemType}] Decoder re-creation failed:`, e);
+          });
+        });
+      },
+    };
+
+    const support = await VideoDecoder.isConfigSupported({
+      codec: config.codec,
+      codedWidth: config.width,
+      codedHeight: config.height,
+    });
+
+    if (!support.supported) {
+      console.warn(`[Cloud:${this.systemType}] H.264 codec not supported`);
+      return;
+    }
+
+    this.videoDecoder = new VideoDecoder(init);
+    this.videoDecoder.configure(support.config!);
+    this.lastVideoDecoderConfig = support.config!;
+    this.hasConfigExtradata = false;
+    this.videoDecoderReady = true;
+    this.videoNeedsKeyframe = false; // we're feeding SPS+PPS+IDR right now
+    this.startPaintLoop();
+
+    // Feed SPS + PPS from buffer, then the IDR keyframe
+    const spsPps = this.pendingVideoChunks.filter(p => p.nalType === 7 || p.nalType === 8);
+    let fed = 0;
+    for (const p of spsPps) {
+      try { this.videoDecoder.decode(p.chunk); fed++; } catch { break; }
+    }
+    try { this.videoDecoder.decode(idrChunk); fed++; } catch { /* ok */ }
+
+    // Clear all buffered frames — we've started from a clean keyframe
+    this.pendingVideoChunks = [];
+
+    console.log(`[Cloud:${this.systemType}] 🎬 VideoDecoder primed: ${config.codec} ${config.width}x${config.height}` +
+      ` (fed ${fed} chunks: ${spsPps.length} SPS/PPS + IDR)`);
   }
 
   /** Extract the NAL unit payload without the Annex B start code (00 00 00 01 or 00 00 01). */
@@ -396,8 +375,8 @@ export class CloudAdapter implements EmulatorAdapter {
     const sps = this.extractNalPayload(spsNal);
     const pps = this.extractNalPayload(ppsNal);
 
-    // 7 bytes header + SPS + 2 bytes PPS header + PPS
-    const totalSize = 7 + sps.length + 2 + pps.length;
+    // 8 bytes (header + SPS length) + SPS + 3 bytes (PPS count + PPS length) + PPS
+    const totalSize = 8 + sps.length + 3 + pps.length;
     const buf = new Uint8Array(totalSize);
     let o = 0;
 
@@ -641,14 +620,7 @@ export class CloudAdapter implements EmulatorAdapter {
     this.audioFrameCount = 0;
     this.audioNextTime = 0;
     this.frameCount = 0;
-    this.latestSpsNal = null;
-    this.latestPpsNal = null;
-    if (this.deferredDecoderTimer) {
-      clearTimeout(this.deferredDecoderTimer);
-      this.deferredDecoderTimer = null;
-    }
     this.pendingVideoConfig = null;
-    this.deferredTimedOut = false;
     if (this.audioCtx) {
       this.audioCtx.close().catch(() => {});
       this.audioCtx = null;
@@ -796,23 +768,6 @@ export class CloudAdapter implements EmulatorAdapter {
       const nalData = new Uint8Array(data, FRAME_HEADER_SIZE, nalLength);
       const nalUnitType = this.getNalUnitType(nalData);
 
-      // Always track latest SPS/PPS for AVCDecoderConfigurationRecord building
-      if (nalUnitType === 7) this.latestSpsNal = nalData;
-      if (nalUnitType === 8) this.latestPpsNal = nalData;
-
-      // Deferred decoder creation: codec config arrived before SPS/PPS.
-      // Now that we have both, build extradata and create the decoder.
-      if (this.latestSpsNal && this.latestPpsNal && this.pendingVideoConfig && !this.videoDecoder) {
-        const cfg = this.pendingVideoConfig;
-        this.pendingVideoConfig = null;
-        if (this.deferredDecoderTimer) { clearTimeout(this.deferredDecoderTimer); this.deferredDecoderTimer = null; }
-        console.log(`[Cloud:${this.systemType}] 🎯 SPS+PPS received — creating deferred VideoDecoder`);
-        this.initVideoDecoder(cfg);
-        // Don't feed this frame — it'll be a delta; let initVideoDecoder set up the decoder
-        // and handleBinaryMessage will feed the next keyframe.
-        return;
-      }
-
       const chunkType: EncodedVideoChunkType = nalUnitType === 5 ? "key" : "delta";
 
       const chunk = new EncodedVideoChunk({
@@ -825,12 +780,12 @@ export class CloudAdapter implements EmulatorAdapter {
       if (this.videoDecoderReady && this.videoDecoder) {
         if (this.videoNeedsKeyframe) {
           if (nalUnitType === 5) {
-            // Feed buffered SPS/PPS only if the codec config had no extradata
-            if (!this.hasConfigExtradata) {
-              const pendingSpsPps = this.pendingVideoChunks.filter(p => p.nalType === 7 || p.nalType === 8);
-              for (const p of pendingSpsPps) {
-                try { this.videoDecoder.decode(p.chunk); } catch { /* decoder closed */ }
-              }
+            // Always feed buffered SPS/PPS before the first keyframe.
+            // Chrome needs in-band parameter sets even when AVCDecoderConfigurationRecord
+            // (extradata) was provided in configure().
+            const pendingSpsPps = this.pendingVideoChunks.filter(p => p.nalType === 7 || p.nalType === 8);
+            for (const p of pendingSpsPps) {
+              try { this.videoDecoder.decode(p.chunk); } catch { /* decoder closed */ }
             }
             try { this.videoDecoder.decode(chunk); } catch { /* decoder closed */ }
             this.videoNeedsKeyframe = false;
@@ -849,6 +804,20 @@ export class CloudAdapter implements EmulatorAdapter {
         this.pendingVideoChunks.push({ chunk, nalType: nalUnitType, nalData });
         if (this.pendingVideoChunks.length > 300) {
           this.pendingVideoChunks.shift();
+        }
+
+        // Deferred decoder creation: we have a pending config and now have
+        // SPS+PPS+IDR — create and prime the decoder immediately.
+        if (this.pendingVideoConfig && !this.videoDecoder) {
+          const hasSps = this.pendingVideoChunks.some(p => p.nalType === 7);
+          const hasPps = this.pendingVideoChunks.some(p => p.nalType === 8);
+          const idrEntry = this.pendingVideoChunks.find(p => p.nalType === 5);
+          if (hasSps && hasPps && idrEntry) {
+            const cfg = this.pendingVideoConfig;
+            this.pendingVideoConfig = null;
+            console.log(`[Cloud:${this.systemType}] 🎯 SPS+PPS+IDR buffered — creating primed decoder`);
+            this.createAndPrimeDecoder(cfg, idrEntry.chunk);
+          }
         }
       }
 
