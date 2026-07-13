@@ -325,42 +325,16 @@ export class CloudAdapter implements EmulatorAdapter {
       this.videoNeedsKeyframe = true;
       this.startPaintLoop();
 
-      // === Feed buffered frames to the new decoder ===
-      // If the codec config included extradata (AVCDecoderConfigurationRecord with
-      // SPS/PPS in the `description` field), skip in-band SPS/PPS — feeding them
-      // on top of the config SPS/PPS can confuse some browser decoders.
-      const firstKeyIdx = this.pendingVideoChunks.findIndex(p => p.nalType === 5);
-
-      if (firstKeyIdx >= 0) {
-        if (!this.hasConfigExtradata) {
-          // No extradata in config → feed in-band SPS/PPS before the keyframe
-          for (let i = 0; i < firstKeyIdx; i++) {
-            const p = this.pendingVideoChunks[i];
-            if (p.nalType === 7 || p.nalType === 8) {
-              try { this.videoDecoder.decode(p.chunk); } catch { /* decoder closed */ }
-            }
-          }
-        }
-        // Feed the keyframe (SPS/PPS from config description will be used if present)
-        this.videoDecoder.decode(this.pendingVideoChunks[firstKeyIdx].chunk);
-        this.videoNeedsKeyframe = false;
-
-        // Process remaining frames after the keyframe
-        for (let i = firstKeyIdx + 1; i < this.pendingVideoChunks.length; i++) {
-          if (this.videoDecoder.decodeQueueSize < MAX_DECODE_QUEUE) {
-            this.videoDecoder.decode(this.pendingVideoChunks[i].chunk);
-          }
-        }
-
-        this.pendingVideoChunks = [];
-        console.log(`[Cloud:${this.systemType}] VideoDecoder ready: ${config.codec} ${config.width}x${config.height}${this.hasConfigExtradata ? ' (extradata)' : ''}`);
-      } else {
-        // No keyframe yet — keep only SPS/PPS + any keyframes, drop deltas
-        this.pendingVideoChunks = this.pendingVideoChunks.filter(p =>
-          p.nalType === 5 || p.nalType === 7 || p.nalType === 8
-        );
-        console.log(`[Cloud:${this.systemType}] VideoDecoder ready (awaiting keyframe, ${this.pendingVideoChunks.length} SPS/PPS queued)`);
-      }
+      // Never feed buffered frames — they may contain an incomplete GOP (missing SPS/PPS
+      // or referencing unknown frames). Instead, wait for the next natural keyframe from
+      // the live stream. handleBinaryMessage will feed SPS/PPS + keyframe when they arrive,
+      // exactly like P1's cold-start path.
+      // Keep only recent SPS/PPS from the buffer (discard everything else) so that when
+      // the next keyframe arrives, handleBinaryMessage can feed the SPS/PPS first.
+      this.pendingVideoChunks = this.pendingVideoChunks.filter(p =>
+        p.nalType === 7 || p.nalType === 8
+      ).slice(-8); // keep at most 4 SPS + 4 PPS (2 full parameter sets)
+      console.log(`[Cloud:${this.systemType}] VideoDecoder ready: ${config.codec} ${config.width}x${config.height} (awaiting fresh keyframe, ${this.pendingVideoChunks.length} SPS/PPS kept)`);
     } catch (err) {
       console.error(`[Cloud:${this.systemType}] Failed to init VideoDecoder:`, err);
     }
