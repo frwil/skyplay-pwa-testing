@@ -3,9 +3,11 @@ import GlowBackground from "@/components/GlowBackground";
 import SubmissionFormWrapper from "@/components/SubmissionFormWrapper";
 import CampaignBanner from "@/components/CampaignBanner";
 import LanguageSwitcher from "@/components/LanguageSwitcher";
+import HeaderAuth from "@/components/HeaderAuth";
 import { Activity, Trophy, Users } from "lucide-react";
 import { cookies } from "next/headers";
 import { getDictionary } from "@/lib/i18n/server";
+import { verifyToken } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -103,6 +105,28 @@ export default async function HomePage() {
   const localeCookie = cookieStore.get("skyplay-locale")?.value;
   const dict = getDictionary(localeCookie === "en" ? "en" : "fr");
 
+  // Server-side auth detection
+  const authToken = cookieStore.get("auth_token")?.value;
+  const authPayload = authToken ? await verifyToken(authToken) : null;
+  let authUsername: string | null = null;
+  if (authPayload) {
+    try {
+      const userRs = await db.execute({
+        sql: "SELECT username FROM users WHERE id = ?",
+        args: [authPayload.userId],
+      });
+      const userRow = userRs.rows[0] as unknown as { username: string } | undefined;
+      authUsername = userRow?.username ?? null;
+    } catch {
+      // DB lookup failed — fall back to no username
+    }
+  }
+
+  const MAIN_PLATFORM_URL =
+    process.env.NODE_ENV === "development"
+      ? "http://localhost:3000"
+      : "https://sky-play-platform-gamma.vercel.app";
+
   return (
     <main className="relative min-h-screen">
       <GlowBackground />
@@ -151,11 +175,19 @@ export default async function HomePage() {
               ⚔️ Duel
             </a>
             <a
-              href="/login"
-              className="text-xs text-white/40 hover:text-white transition font-medium"
+              href={MAIN_PLATFORM_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="px-3 py-1 rounded-full text-xs font-bold border transition"
+              style={{
+                color: "#00c8ff",
+                borderColor: "rgba(0,200,255,0.3)",
+                backgroundColor: "rgba(0,200,255,0.08)",
+              }}
             >
-              Connexion
+              Plateforme ↗
             </a>
+            <HeaderAuth username={authUsername} />
             <a
               href="/admin"
               className="text-xs text-white/40 hover:text-white transition font-medium"

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getAuthFromRequest } from "@/lib/auth";
-import { getBalance, ENTRY_FEE } from "@/lib/duel/wallet";
+import { getBalance, DEFAULT_ENTRY_FEE } from "@/lib/duel/wallet";
 
 async function getUserId(req: NextRequest): Promise<number | null> {
   const auth = await getAuthFromRequest(req);
@@ -31,7 +31,7 @@ export async function GET(req: NextRequest) {
   return NextResponse.json({
     balance: unlimited ? null : balance,
     unlimitedSky: unlimited,
-    entryFee: ENTRY_FEE,
-    canPlay: unlimited || balance >= ENTRY_FEE,
+    entryFee: DEFAULT_ENTRY_FEE,
+    canPlay: unlimited || balance >= DEFAULT_ENTRY_FEE,
   });
 }

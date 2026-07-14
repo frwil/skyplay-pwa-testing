@@ -207,21 +207,30 @@ export function useDuelLobby({
           const items: DuelNotification[] = data.notifications || [];
 
           for (const n of items) {
-            if (n.id > lastNotifIdRef.current) lastNotifIdRef.current = n.id;
+            // ── Track highest seen notification id — but do NOT advance for
+            //     duel_accepted until the session is successfully fetched.
+            //     This ensures failed fetches are retried on the next poll
+            //     instead of being silently dropped.
+            const advanceNotif = () => {
+              if (n.id > lastNotifIdRef.current) lastNotifIdRef.current = n.id;
+            };
 
             // Handle incoming challenge — validate it's still pending first
             if (n.type === "duel_challenge" && !pendingRef.current) {
               const isValid = await validateChallengeStatus(n.duelChallengeId, devId, devName);
               if (isValid && mountedRef.current) {
+                advanceNotif();
                 setPendingChallenge(n);
               } else if (!isValid && mountedRef.current) {
                 // Challenge no longer pending — mark notification as read
+                advanceNotif();
                 await markNotificationRead(n.id, devId, devName);
               }
             }
 
             // Handle rules_pending (both players must confirm rules)
             if (n.type === "duel_rules_pending") {
+              advanceNotif();
               if (mountedRef.current) {
                 setRulesPendingChallenge(n);
                 // Fully clear the outgoing challenge — the flow is now in "rules"
@@ -240,12 +249,15 @@ export function useDuelLobby({
               if (outgoingRef.current?.challengeId === n.duelChallengeId) {
                 fetchChallengeSession(n.duelChallengeId, devId, devName).then((session) => {
                   if (session && mountedRef.current) {
+                    advanceNotif();
                     setDuelSession(session);
                     setRulesPendingChallenge(null); // dismiss rules overlay for the waiting player
                     setOutgoingChallenge((prev) =>
                       prev ? { ...prev, status: "accepted", session } : null,
                     );
                   }
+                  // If session is null (fetch failed), do NOT advance lastNotifIdRef.
+                  // The notification will be retried on the next poll.
                 });
               } else if (!outgoingRef.current) {
                 // P2 (target) or rules_pending flow: no outgoing challenge, but the session
@@ -254,18 +266,22 @@ export function useDuelLobby({
                 // already set directly by handleRulesAccept, or it's genuinely stale.
                 fetchChallengeSession(n.duelChallengeId, devId, devName).then((session) => {
                   if (session && mountedRef.current) {
+                    advanceNotif();
                     setDuelSession(session);
                     setRulesPendingChallenge(null); // dismiss rules overlay for P2 as well
                   }
+                  // If session is null, do NOT advance — retry on next poll.
                 });
               } else {
                 // Stale accepted notification (different challenge) — mark as read
+                advanceNotif();
                 await markNotificationRead(n.id, devId, devName);
               }
             }
 
             // Handle declined response
             if (n.type === "duel_declined") {
+              advanceNotif();
               if (outgoingRef.current?.challengeId === n.duelChallengeId) {
                 setOutgoingChallenge((prev) =>
                   prev ? { ...prev, status: "declined" } : null,
@@ -279,6 +295,7 @@ export function useDuelLobby({
 
             // Handle expired challenge (30s timeout — cancels on both sides)
             if (n.type === "duel_challenge_expired") {
+              advanceNotif();
               // P2 (target): clear pending challenge
               if (pendingRef.current?.duelChallengeId === n.duelChallengeId) {
                 setPendingChallenge(null);
@@ -304,6 +321,56 @@ export function useDuelLobby({
 
     poll();
     pollTimerRef.current = setInterval(poll, 2000);
+
+    // ── Recovery: after joining the lobby, check if the player has an
+    //     active challenge they got disconnected from (lost notification,
+    //     page refresh, etc.). If found, resume the flow automatically.
+    let recoveryRan = false;
+    const recoveryCheck = async () => {
+      if (recoveryRan) return;
+      recoveryRan = true;
+      const devId2 = isDevModeRef.current ? userIdRef.current : 0;
+      const devName2 = usernameRef.current || "";
+      try {
+        let url = "/api/duel/challenge?findActive=1";
+        if (devId2) url = addDevQuery(url, devId2, devName2);
+        const res = await fetch(url, { credentials: "include" });
+        if (!res.ok) return;
+        const data = await res.json();
+        const c = data?.challenge;
+        if (!c || !mountedRef.current) return;
+
+        if (c.status === "accepted" && c.session) {
+          // Game is running — connect immediately
+          console.log("[Duel] ✅ Recovery: found accepted challenge %d, reconnecting — wsUrl=%s room=%s",
+            c.id, c.session.wsUrl, c.session.roomCode);
+          setDuelSession({
+            sessionId: c.session.sessionId,
+            wsUrl: c.session.wsUrl,
+            roomCode: c.session.roomCode,
+            player1Id: c.session.player1Id,
+            player2Id: c.session.player2Id,
+            challengeId: c.session.challengeId || c.id,
+          });
+        } else if (c.status === "rules_pending") {
+          // Rules phase in progress — show the overlay
+          console.log("[Duel] ✅ Recovery: found rules_pending challenge %d, resuming...", c.id);
+          setRulesPendingChallenge({
+            id: 0,
+            duelChallengeId: c.id,
+            fromUsername: "",
+            message: "",
+            fromUserId: 0,
+            type: "duel_rules_pending",
+            challengeId: c.id,
+            read: false,
+            createdAt: c.createdAt || new Date().toISOString(),
+          });
+        }
+      } catch { /* silent */ }
+    };
+    // Run recovery after a short delay (let the first poll complete first)
+    setTimeout(recoveryCheck, 1500);
 
     return () => {
       if (pollTimerRef.current) {

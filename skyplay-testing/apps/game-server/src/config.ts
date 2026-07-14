@@ -54,9 +54,36 @@ export const PS1_BUTTON_TO_RETROARCH: Record<number, string> = {
   13: "right",
 };
 
+/**
+ * SNES layout (snes9x): B=0, Y=1, SELECT=2, START=3, UP=4, DOWN=5, LEFT=6, RIGHT=7, A=8, X=9, L=10, R=11
+ *
+ * The RetroArch snes9x core uses the same config key names (a/b/x/y/l/r) as the
+ * default Neo Geo layout, but the button indices differ — e.g. SNES index 0 is B
+ * (not A), index 8 is A (not LEFT). This mapping translates SNES button indices
+ * to the correct RetroArch config key.
+ */
+export const SNES_BUTTON_TO_RETROARCH: Record<number, string> = {
+  // Face buttons
+  0: "b",
+  1: "y",
+  2: "select",
+  3: "start",
+  // D-Pad
+  4: "up",
+  5: "down",
+  6: "left",
+  7: "right",
+  // A / X / L / R (higher indices)
+  8: "a",
+  9: "x",
+  10: "l",
+  11: "r",
+};
+
 /** Return the correct BUTTON_TO_RETROARCH for a given system. */
 export function getButtonToRetroarch(system: string): Record<number, string> {
   if (system === "ps1") return PS1_BUTTON_TO_RETROARCH;
+  if (system === "snes") return SNES_BUTTON_TO_RETROARCH;
   return BUTTON_TO_RETROARCH;
 }
 
@@ -139,12 +166,14 @@ function xdotoolToRetroarchKey(xdo: string): string | null {
 export const SYSTEM_CORES: Record<string, string> = {
   neogeo: "fbneo_libretro.so",
   ps1: "pcsx_rearmed_libretro.so",
+  snes: "snes9x_libretro.so",
 };
 
 /** System display resolution. */
 export const SYSTEM_RESOLUTIONS: Record<string, { w: number; h: number }> = {
   neogeo: { w: 320, h: 224 },
   ps1: { w: 640, h: 480 },
+  snes: { w: 256, h: 224 },
 };
 
 /** 3x upscale for the display (Xvfb screen size). */

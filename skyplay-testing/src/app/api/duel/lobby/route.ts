@@ -77,26 +77,42 @@ export async function POST(req: NextRequest) {
       args: [user.userId, system, rom],
     });
 
-    // Clean up any stale pending challenges for this user
-    // (happens on page reload — cancels challenges that may have been left hanging)
+    // Clean up any stale challenges for this user — only if the OTHER player
+    // is no longer in the lobby (heartbeat > 30s stale). This prevents
+    // cancelling active challenges when one player refreshes the page.
+    // Covers: pending, accepted, rules_pending.
     const cancelledRs = await db.execute({
-      sql: `UPDATE duel_challenges
-            SET status = 'cancelled'
-            WHERE (challenger_id = ? OR target_id = ?)
-            AND status IN ('pending', 'accepted')
+      sql: `UPDATE duel_challenges SET status = 'cancelled'
+            WHERE id IN (
+              SELECT dc.id FROM duel_challenges dc
+              WHERE (dc.challenger_id = ? OR dc.target_id = ?)
+                AND dc.status IN ('pending', 'accepted', 'rules_pending')
+                AND (
+                  -- Other player not in lobby (stale or never joined)
+                  NOT EXISTS (
+                    SELECT 1 FROM duel_lobby dl
+                    WHERE dl.user_id = CASE WHEN dc.challenger_id = ? THEN dc.target_id ELSE dc.challenger_id END
+                      AND dl.last_heartbeat > datetime('now', '-30 seconds')
+                  )
+                )
+            )
             RETURNING id`,
-      args: [user.userId, user.userId],
+      args: [user.userId, user.userId, user.userId],
     });
     if (cancelledRs.rows.length > 0) {
       console.log(`[duel/lobby] Cleaned ${cancelledRs.rows.length} stale challenge(s) for user ${user.userId}`);
     }
 
-    // Also mark any unread duel notifications as read (stale)
+    // Mark stale duel notifications as read on join, but PRESERVE active
+    // flow notifications (rules_pending / accepted) so a page refresh doesn't
+    // strand a player mid-flow. Only mark terminal notifications as read:
+    // duel_challenge (stale incoming), duel_declined, duel_challenge_expired.
     await db.execute("PRAGMA foreign_keys = OFF");
     try {
       await db.execute({
         sql: `UPDATE netplay_notifications SET read = 1
-              WHERE user_id = ? AND type LIKE 'duel_%' AND read = 0`,
+              WHERE user_id = ? AND read = 0
+                AND type IN ('duel_challenge', 'duel_declined', 'duel_challenge_expired')`,
         args: [user.userId],
       });
     } finally {

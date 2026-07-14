@@ -1,10 +1,12 @@
 "use client";
 
 import { Swords, X, Loader2 } from "lucide-react";
+import { useTranslation } from "@/lib/i18n/TranslationContext";
 
 interface DuelNotificationProps {
   fromUsername: string;
   message: string;
+  gameLabel?: string;
   onAccept: () => void;
   onDecline: () => void;
   isAccepting: boolean;
@@ -14,17 +16,18 @@ interface DuelNotificationProps {
 
 /**
  * Modal overlay shown when a player receives a duel challenge.
- * Shows "Player X vous a défié en duel KOF '98!" with Accept/Decline buttons.
  */
 export default function DuelNotification({
   fromUsername,
   message,
+  gameLabel,
   onAccept,
   onDecline,
   isAccepting,
   isDeclining,
   error,
 }: DuelNotificationProps) {
+  const { t } = useTranslation();
   const busy = isAccepting || isDeclining;
 
   return (
@@ -52,12 +55,12 @@ export default function DuelNotification({
         </div>
 
         {/* Title */}
-        <h2 className="text-xl font-black text-white mb-1">Duel Request!</h2>
+        <h2 className="text-xl font-black text-white mb-1">{t.duel.notifTitle}</h2>
         <p className="text-sm mb-6" style={{ color: "rgba(255,255,255,0.5)" }}>
           <span className="font-bold" style={{ color: "#f15bb5" }}>
             {fromUsername}
           </span>{" "}
-          challenges you to a KOF &apos;98 duel!
+          {t.duel.notifChallenge(gameLabel ?? "KOF '98")}
         </p>
 
         {message && (
@@ -93,12 +96,12 @@ export default function DuelNotification({
             {isDeclining ? (
               <span className="flex items-center justify-center gap-2">
                 <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                Declining...
+                {t.duel.declining}
               </span>
             ) : (
               <span className="flex items-center justify-center gap-2">
                 <X className="w-3.5 h-3.5" />
-                Decline
+                {t.duel.decline}
               </span>
             )}
           </button>
@@ -116,12 +119,12 @@ export default function DuelNotification({
             {isAccepting ? (
               <span className="flex items-center justify-center gap-2">
                 <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                Accepting...
+                {t.duel.accepting}
               </span>
             ) : (
               <span className="flex items-center justify-center gap-2">
                 <Swords className="w-3.5 h-3.5" />
-                Accept Duel
+                {t.duel.accept}
               </span>
             )}
           </button>

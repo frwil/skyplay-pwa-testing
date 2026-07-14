@@ -101,6 +101,10 @@ export function useEmulator(system: SystemType = "nes") {
   // Side (1|2) of the opponent who disconnected mid-match. Drives the client-side forfeit flow
   // in page.tsx (only the server can set this via a player_disconnected message → can't be forged).
   const [opponentAbandoned, setOpponentAbandoned] = useState<number | null>(null);
+  // Auto-rematch info for multi-match modes (XL/Fighter). Set when server sends auto_rematch.
+  const [autoRematch, setAutoRematch] = useState<{ matchNumber: number; totalMatches: number } | null>(null);
+  // Duel pause state: who paused + remaining countdown. null when not paused.
+  const [pauseState, setPauseState] = useState<{ pausedBy: 1 | 2; countdown: number } | null>(null);
 
   // ── Duel callbacks (stable refs) ──────────────────────────────────
   const duelCallbacksRef = useRef({
@@ -179,6 +183,25 @@ export function useEmulator(system: SystemType = "nes") {
         // Reconnect within the grace window cancels a pending forfeit.
         setOpponentAbandoned(null);
       }
+    },
+    onAutoRematch: (matchNumber: number, totalMatches: number) => {
+      console.log(`[useEmulator] 🔄 Auto-rematch ${matchNumber}/${totalMatches} — resetting for next match`);
+      setAutoRematch({ matchNumber, totalMatches });
+      setDuelRoundResult(null);
+      setDuelMatchResult(null);
+      setRematchRequested(false);
+      setRematchDeclined(false);
+      setOpponentAbandoned(null);
+      setMatchState(null);
+      setStatus("running");
+    },
+    onPaused: (player: 1 | 2, countdown: number) => {
+      console.log(`[useEmulator] ⏸ Paused by P${player} — ${countdown}s`);
+      setPauseState({ pausedBy: player, countdown });
+    },
+    onResumed: () => {
+      console.log("[useEmulator] ▶ Resumed");
+      setPauseState(null);
     },
   });
 
@@ -460,8 +483,27 @@ export function useEmulator(system: SystemType = "nes") {
   const createAdapter = useCallback((): EmulatorAdapter | null => {
     if (isNes) return null;
     switch (system) {
-      case "snes":
+      case "snes": {
+        const cfg = SYSTEM_CONFIGS.snes;
+        if (cfg.cloud) {
+          return new CloudAdapter("snes", {
+            onStatusChange: setStatus,
+            onRoundResult: duelCallbacksRef.current.onRoundResult,
+            onMatchEnd: duelCallbacksRef.current.onMatchEnd,
+            onMatchState: duelCallbacksRef.current.onMatchState,
+            onRematchStarting: duelCallbacksRef.current.onRematchStarting,
+            onSessionClosed: duelCallbacksRef.current.onSessionClosed,
+            onRematchRequested: duelCallbacksRef.current.onRematchRequested,
+            onRematchAccepted: duelCallbacksRef.current.onRematchAccepted,
+            onRematchDeclined: duelCallbacksRef.current.onRematchDeclined,
+            onPlayerEvent: duelCallbacksRef.current.onPlayerEvent,
+            onAutoRematch: duelCallbacksRef.current.onAutoRematch,
+            onPaused: duelCallbacksRef.current.onPaused,
+            onResumed: duelCallbacksRef.current.onResumed,
+          });
+        }
         return new SnesEmulatorAdapter({ onStatusChange: setStatus });
+      }
       case "gb":
       case "gbc":
         return new GbEmulatorAdapter(system, { onStatusChange: setStatus });
@@ -482,6 +524,9 @@ export function useEmulator(system: SystemType = "nes") {
             onRematchAccepted: duelCallbacksRef.current.onRematchAccepted,
             onRematchDeclined: duelCallbacksRef.current.onRematchDeclined,
             onPlayerEvent: duelCallbacksRef.current.onPlayerEvent,
+            onAutoRematch: duelCallbacksRef.current.onAutoRematch,
+            onPaused: duelCallbacksRef.current.onPaused,
+            onResumed: duelCallbacksRef.current.onResumed,
           });
         }
         return new NeoGeoEmulatorAdapter({ onStatusChange: setStatus });
@@ -498,6 +543,9 @@ export function useEmulator(system: SystemType = "nes") {
             onRematchAccepted: duelCallbacksRef.current.onRematchAccepted,
             onRematchDeclined: duelCallbacksRef.current.onRematchDeclined,
             onPlayerEvent: duelCallbacksRef.current.onPlayerEvent,
+            onAutoRematch: duelCallbacksRef.current.onAutoRematch,
+            onPaused: duelCallbacksRef.current.onPaused,
+            onResumed: duelCallbacksRef.current.onResumed,
         });
       default:
         return null;
@@ -751,7 +799,7 @@ export function useEmulator(system: SystemType = "nes") {
     let adapter = adapterRef.current;
     if (!(adapter instanceof CloudAdapter)) {
       adapterRef.current?.exit();
-      adapter = new CloudAdapter(system as "neogeo" | "ps1", {
+      adapter = new CloudAdapter(system as "neogeo" | "ps1" | "snes", {
         onStatusChange: setStatus,
         onRoundResult: duelCallbacksRef.current.onRoundResult,
         onMatchEnd: duelCallbacksRef.current.onMatchEnd,
@@ -762,6 +810,9 @@ export function useEmulator(system: SystemType = "nes") {
             onRematchAccepted: duelCallbacksRef.current.onRematchAccepted,
             onRematchDeclined: duelCallbacksRef.current.onRematchDeclined,
             onPlayerEvent: duelCallbacksRef.current.onPlayerEvent,
+            onAutoRematch: duelCallbacksRef.current.onAutoRematch,
+            onPaused: duelCallbacksRef.current.onPaused,
+            onResumed: duelCallbacksRef.current.onResumed,
       });
       adapterRef.current = adapter;
       const canvas = canvasRef.current;
@@ -776,7 +827,7 @@ export function useEmulator(system: SystemType = "nes") {
     let adapter = adapterRef.current;
     if (!(adapter instanceof CloudAdapter)) {
       adapterRef.current?.exit();
-      adapter = new CloudAdapter(system as "neogeo" | "ps1", {
+      adapter = new CloudAdapter(system as "neogeo" | "ps1" | "snes", {
         onStatusChange: setStatus,
         onRoundResult: duelCallbacksRef.current.onRoundResult,
         onMatchEnd: duelCallbacksRef.current.onMatchEnd,
@@ -787,6 +838,9 @@ export function useEmulator(system: SystemType = "nes") {
             onRematchAccepted: duelCallbacksRef.current.onRematchAccepted,
             onRematchDeclined: duelCallbacksRef.current.onRematchDeclined,
             onPlayerEvent: duelCallbacksRef.current.onPlayerEvent,
+            onAutoRematch: duelCallbacksRef.current.onAutoRematch,
+            onPaused: duelCallbacksRef.current.onPaused,
+            onResumed: duelCallbacksRef.current.onResumed,
       });
       adapterRef.current = adapter;
       const canvas = canvasRef.current;
@@ -868,6 +922,8 @@ export function useEmulator(system: SystemType = "nes") {
     matchState,
     duelRematchSessionId,
     opponentAbandoned,
+    autoRematch,
+    pauseState,
     clearOpponentAbandoned: useCallback(() => setOpponentAbandoned(null), []),
     stopDuel: useCallback(() => {
       const adapter = adapterRef.current;
@@ -891,6 +947,12 @@ export function useEmulator(system: SystemType = "nes") {
       const adapter = adapterRef.current;
       if (adapter instanceof CloudAdapter) {
         adapter.declineRematch();
+      }
+    }, []),
+    requestAutoRematch: useCallback((matchNumber: number, totalMatches: number) => {
+      const adapter = adapterRef.current;
+      if (adapter instanceof CloudAdapter) {
+        adapter.autoRematch(matchNumber, totalMatches);
       }
     }, []),
     injectKeyEvent: (player: 1 | 2, button: number, pressed: boolean) => {

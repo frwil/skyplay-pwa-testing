@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getDb, ensureUser } from "@/lib/db";
 import { getAuthFromRequest } from "@/lib/auth";
 import { setRoomCode, generateRoomCode } from "@/app/api/cloud-session/room-codes";
-import { assertEntryAffordable, InsufficientFunds } from "@/lib/duel/wallet";
+import { assertEntryAffordable, InsufficientFunds, DEFAULT_ENTRY_FEE } from "@/lib/duel/wallet";
 
 async function getUserId(req: NextRequest, body?: Record<string, unknown>): Promise<{ userId: number; username: string } | null> {
   // Try JWT first (works in all environments — production AND local dev)
@@ -91,36 +91,33 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: true, accepted: false });
     }
 
-    // ── Accept: Create cloud session ──────────────────────────
-    const sessionId = `sess-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    // ── Accept: Rules confirmation flow ──────────────────────────
+    // Instead of creating the session immediately, we set status to "rules_pending"
+    // and notify BOTH players. Each must confirm the rules via
+    // POST /api/duel/challenge/confirm-rules. Only when both have confirmed does
+    // the cloud session get created and the match begin.
 
-    let wsUrl: string;
-    if (process.env.NORTHFLANK_API_KEY && process.env.NORTHFLANK_GAME_SERVICE_ID) {
-      wsUrl = `wss://<northflank>?sessionId=${sessionId}`;
-    } else if (process.env.GAME_SERVER_PUBLIC_URL) {
-      const base = process.env.GAME_SERVER_PUBLIC_URL.replace(/^﻿/, "").replace(/[\r\n]+/g, "").trim();
-      wsUrl = `${base}?sessionId=${sessionId}`;
-    } else {
-      const localHost = process.env.GAME_SERVER_HOST || "localhost";
-      const localPort = process.env.GAME_SERVER_PORT || "8080";
-      wsUrl = `ws://${localHost}:${localPort}?sessionId=${sessionId}`;
-    }
-
-    const roomCode = generateRoomCode();
-    await setRoomCode(roomCode, sessionId);
-
-    // ── Duel stake: funds barrier ONLY — no debit here ──
-    // The real debit (open escrow chamber + charge both players) happens later, when the
-    // fight actually starts (client detects combat via matchFlag → POST /api/duel/wager/charge).
-    // This avoids debiting players when the platform bugs before a match ever runs. We still
-    // gate: a non-admin who can't cover the stake aborts the accept with 402 (nothing persisted,
-    // challenge stays 'pending', lobby unchanged). Admins pass (unlimited SKY).
+    // ── Duel participation gate: funds barrier ONLY — no debit here ──
+    let respondEntryFee = DEFAULT_ENTRY_FEE;
+    let respondMatchCount = 1;
     try {
-      await assertEntryAffordable(Number(row.challenger_id), user.userId);
+      if (row.mode_id) {
+        const modeRs = await db.execute({ sql: "SELECT entry_fee, match_count FROM duel_game_modes WHERE id = ? LIMIT 1", args: [row.mode_id] });
+        if (modeRs.rows.length > 0) {
+          respondEntryFee = Number(modeRs.rows[0].entry_fee ?? DEFAULT_ENTRY_FEE);
+          respondMatchCount = Number(modeRs.rows[0].match_count ?? 1);
+        }
+      } else {
+        const feeRs = await db.execute({ sql: "SELECT entry_fee FROM duel_games WHERE system = ? AND rom = ? LIMIT 1", args: [row.system, row.rom] });
+        if (feeRs.rows.length > 0) respondEntryFee = Number(feeRs.rows[0].entry_fee ?? DEFAULT_ENTRY_FEE);
+      }
+    } catch { /* fall back to default */ }
+    try {
+      await assertEntryAffordable(Number(row.challenger_id), user.userId, respondEntryFee);
     } catch (e) {
       if (e instanceof InsufficientFunds) {
         return NextResponse.json(
-          { error: "SKY insuffisant pour la mise de ce duel", code: "insufficient_sky", userId: e.userId },
+          { error: `SKY insuffisant pour la participation à ce duel (${respondEntryFee} SKY requis)`, code: "insufficient_sky", userId: e.userId },
           { status: 402 },
         );
       }
@@ -128,29 +125,44 @@ export async function POST(req: NextRequest) {
       throw e;
     }
 
-    console.log("[respond] accept: challengeId=%d sessionId=%s roomCode=%s wsUrl=%s", challengeId, sessionId, roomCode, wsUrl);
-    try { await db.execute({ sql: `UPDATE duel_challenges SET status = 'accepted', session_id = ?, room_code = ?, ws_url = ? WHERE id = ?`, args: [sessionId, roomCode, wsUrl, challengeId] }); }
-    catch (e) { console.error("[respond] ❌ UPDATE duel_challenges (accept):", e); throw e; }
-    try { await db.execute({ sql: "UPDATE duel_lobby SET status = 'in_game' WHERE user_id IN (?, ?)", args: [row.challenger_id, row.target_id] }); }
-    catch (e) { console.error("[respond] ❌ UPDATE duel_lobby (accept):", e); throw e; }
+    console.log("[respond] rules_pending: challengeId=%d modeId=%s matchCount=%d", challengeId, row.mode_id, respondMatchCount);
+    try { await db.execute({ sql: `UPDATE duel_challenges SET status = 'rules_pending', challenger_rules_accepted = 0, target_rules_accepted = 0 WHERE id = ?`, args: [challengeId] }); }
+    catch (e) { console.error("[respond] ❌ UPDATE duel_challenges (rules_pending):", e); throw e; }
+
+    // We do NOT update duel_lobby yet — players stay visible but marked as "in negotiation"
 
     const acceptorName = await getDisplayName(db, user.userId, isLocalDev);
-    try { await db.execute("PRAGMA foreign_keys = OFF"); } catch (e) { console.error("[respond] ❌ PRAGMA OFF (accept):", e); throw e; }
+    // Notify BOTH players that rules are pending
+    try { await db.execute("PRAGMA foreign_keys = OFF"); } catch {}
     try {
+      // Notify challenger
       await db.execute({
         sql: `INSERT INTO netplay_notifications (session_id, user_id, from_user_id, from_username, type, challenge_id, message)
-              VALUES (?, ?, ?, ?, 'duel_accepted', ?, ?)`,
+              VALUES (?, ?, ?, ?, 'duel_rules_pending', ?, ?)`,
         args: [challengeId, row.challenger_id, user.userId, acceptorName, challengeId,
-          `${acceptorName} a accepté votre défi ! Le combat commence !`],
+          `${acceptorName} a accepté votre défi ! Veuillez confirmer les règles du duel.`],
       });
-    } catch (e) { console.error("[respond] ❌ INSERT notification (accept):", e); throw e; }
+      // Notify target (acceptor) themselves
+      await db.execute({
+        sql: `INSERT INTO netplay_notifications (session_id, user_id, from_user_id, from_username, type, challenge_id, message)
+              VALUES (?, ?, ?, ?, 'duel_rules_pending', ?, ?)`,
+        args: [challengeId, user.userId, row.challenger_id, acceptorName, challengeId,
+          `Vous avez accepté le défi ! Veuillez confirmer les règles du duel.`],
+      });
+    } catch (e) { console.error("[respond] ❌ INSERT notifications (rules_pending):", e); }
     finally {
-      try { await db.execute("PRAGMA foreign_keys = ON"); } catch (e) { console.error("[respond] ❌ PRAGMA ON (accept):", e); }
+      try { await db.execute("PRAGMA foreign_keys = ON"); } catch {}
     }
 
     return NextResponse.json({
       success: true, accepted: true,
-      session: { sessionId, wsUrl, roomCode, player1Id: row.challenger_id, player2Id: user.userId, challengeId },
+      rulesPending: true,
+      challengeId,
+      modeId: row.mode_id as string | null,
+      matchCount: respondMatchCount,
+      entryFee: respondEntryFee,
+      challengerId: row.challenger_id as number,
+      targetId: user.userId,
     });
   } catch (error) {
     console.error("POST /api/duel/challenge/respond error:", error);

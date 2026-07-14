@@ -21,6 +21,7 @@ services:
       - RETROARCH_CORES_DIR=/usr/lib/libretro
       - ROMS_DIR=/roms
       - FRAME_ENCODE_QUALITY=5
+      - DEBUG_RAM=1
       # Use Xdummy for environments without /dev/fb (CI, some cloud)
       - USE_XDUMMY=0
       # Session token — disabled for local dev (no JWT needed on localhost)
@@ -35,6 +36,9 @@ services:
       - RECORDING_ENABLED=0
       - STREAMING_ENABLED=1
       - RECORDINGS_DIR=/recordings
+      # Turso DB (game config: RAM addresses, controls, enabled games)
+      - TURSO_DATABASE_URL=${TURSO_DATABASE_URL:-}
+      - TURSO_AUTH_TOKEN=${TURSO_AUTH_TOKEN:-}
     # Needed for Xvfb
     stdin_open: true
     tty: true

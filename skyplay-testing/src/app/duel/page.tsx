@@ -12,6 +12,7 @@ import { useDuelGames, type ResolvedDuelGame } from "@/lib/duel/useDuelGames";
 import DuelLobby from "@/components/duel/DuelLobby";
 import DuelNotification from "@/components/duel/DuelNotification";
 import { KofMatchHUD } from "@/components/play/KofMatchHUD";
+import DuelScoreHUD from "@/components/duel/DuelScoreHUD";
 import DuelEndOverlay, { type RevengePhase, type BalanceMove } from "@/components/duel/DuelEndOverlay";
 import DuelAbandonOverlay from "@/components/duel/DuelAbandonOverlay";
 import DuelRulesOverlay from "@/components/duel/DuelRulesOverlay";
@@ -254,6 +255,17 @@ export default function DuelPage() {
       .then((data) => {
         if (!data?.challenge) return;
         const c = data.challenge;
+        // Guard: only show the rules overlay for active challenges.
+        // If the challenge was cancelled (other player abandoned) or already
+        // accepted (session created), clear the pending state — the flow is
+        // either over or the game is already connecting.
+        if (c.status !== "rules_pending") {
+          console.log("[Duel] rules_pending challenge %d has status '%s' — clearing overlay", c.id, c.status);
+          lobby.clearRulesPending();
+          setRulesChallenge(null);
+          setRulesWaitingOpponent(false);
+          return;
+        }
         // Determine opponent
         const isChallenger = c.challengerId === currentUserId;
         const oppId = isChallenger ? c.targetId : c.challengerId;
@@ -1297,6 +1309,25 @@ export default function DuelPage() {
               }}
             />
           )}
+
+          {/* Duel score HUD — player names + match wins (visible in fullscreen) */}
+          {gameActive && lobby.duelSession && (() => {
+            const isP1 = lobby.duelSession.player1Id === currentUserId;
+            const p1Name = isP1
+              ? (currentUsername ?? t.duel.you)
+              : (duelProfiles[lobby.duelSession.player1Id]?.username ?? "P1");
+            const p2Name = isP1
+              ? (duelProfiles[lobby.duelSession.player2Id]?.username ?? "P2")
+              : (currentUsername ?? t.duel.you);
+            return (
+              <DuelScoreHUD
+                matchHistory={emu.duelMatchHistory}
+                totalMatches={duelFormat?.matchCount ?? 1}
+                player1Name={p1Name}
+                player2Name={p2Name}
+              />
+            );
+          })()}
 
           {/* Live in-match HUD: teams + active char + gauge mode */}
           {gameActive && <KofMatchHUD state={emu.matchState} />}

@@ -107,6 +107,7 @@ export const SYSTEM_CONFIGS: Record<SystemType, SystemConfig> = {
     coreName: "snes9x",
     romExtensions: [".sfc", ".smc", ".swc", ".fig"],
     touchLayout: "snes",
+    cloud: true,
   },
   gb: {
     type: "gb",

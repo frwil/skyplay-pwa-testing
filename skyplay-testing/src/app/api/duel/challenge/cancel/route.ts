@@ -53,15 +53,27 @@ export async function POST(req: NextRequest) {
     }
 
     const row = rs.rows[0];
-    if (row.challenger_id !== user.userId) {
+    // For pending challenges: only the challenger can cancel.
+    // For rules_pending / accepted: either player can cancel (session may be dead).
+    if (row.status === "pending" && row.challenger_id !== user.userId) {
       return NextResponse.json({ error: "Seul le challenger peut annuler ce défi" }, { status: 403 });
     }
-    if (row.status !== "pending") {
+    if (row.status !== "pending" && row.challenger_id !== user.userId && row.target_id !== user.userId) {
+      return NextResponse.json({ error: "Vous n'êtes pas participant à ce défi" }, { status: 403 });
+    }
+    if (!["pending", "rules_pending", "accepted"].includes(row.status as string)) {
       return NextResponse.json({ error: "Ce défi a déjà été traité" }, { status: 400 });
     }
 
     // Cancel the challenge
     await db.execute({ sql: "UPDATE duel_challenges SET status = 'cancelled' WHERE id = ?", args: [challengeId] });
+
+    // Clean up room code mapping if a session was created
+    if (row.session_id) {
+      try {
+        await db.execute({ sql: "DELETE FROM cloud_rooms WHERE session_id = ?", args: [row.session_id as string] });
+      } catch { /* best effort */ }
+    }
 
     // Reset both players' lobby status
     await db.execute({

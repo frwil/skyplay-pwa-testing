@@ -509,13 +509,16 @@ export interface Dictionary {
   };
   duel: {
     lobbyTitle: string;
-    lobbySubtitle: string;
+    lobbySubtitle: (gameLabel: string) => string;
     lobbyPlayers: (count: number) => string;
     lobbyNotJoined: string;
     lobbyJoin: string;
     lobbyJoinAction: string;
     lobbyWaiting: string;
     lobbyWaitingHint: string;
+    lobbyPasteInvite: string;
+    lobbyFilterPlaceholder: string;
+    lobbyNoMatch: string;
     lobbyChallenge: string;
     intro: string;
     fightPrompt: string;
@@ -540,6 +543,30 @@ export interface Dictionary {
     opponentWantsRevenge: string;
     accept: string;
     decline: string;
+    accepting: string;
+    rules: {
+      title: string;
+      vs: string;
+      participation: string;
+      perPlayer: string;
+      victoryRule: string;
+      drawRule: string;
+      debitRule: string;
+      disputeRule: string;
+      checkbox: string;
+      accept: string;
+      decline: string;
+    };
+    pause: {
+      title: string;
+      pausedByYou: string;
+      pausedByOpponent: string;
+      resume: string;
+      autoResume: string;
+    };
+    declining: string;
+    notifTitle: string;
+    notifChallenge: (gameLabel: string) => string;
     revengeDeclined: string;
     redirectingIn: (seconds: number) => string;
     // Abandon / forfeit (opponent left the match mid-combat)
@@ -570,9 +597,25 @@ export interface Dictionary {
       link: string;
       summary: (wins: number, losses: number) => string;
     };
+    // ─── Wizard (3-step pre-game flow) ─────────────────────────
+    wizard: {
+      stepGame: string;
+      stepMode: string;
+      stepArena: string;
+      continue: string;
+      back: string;
+    };
+    // ─── Mode cards (Standard / XL / Fighter) ──────────────────
+    mode: {
+      standard: string;
+      xl: string;
+      fighter: string;
+      matches: (count: number) => string;
+      entryFee: (fee: number) => string;
+    };
     // Duel page shell (header, states, post-game, controls)
     page: {
-      arenaTitle: string;
+      arenaTitle: (gameLabel: string) => string;
       logout: string;
       login: string;
       backToPlay: string;
@@ -582,7 +625,7 @@ export interface Dictionary {
       declinedYourChallenge: (name: string) => string;
       goToPlaySignIn: string;
       joiningGame: string;
-      startingDuel: string;
+      startingDuel: (gameLabel: string) => string;
       failedToStart: string;
       checkServer: string;
       toastWinMatch: (who: string, p1: number, p2: number) => string;
@@ -606,11 +649,23 @@ export interface Dictionary {
       p1Controls: string;
       p2Controls: string;
       ctrlMove: string;
+      ctrlAPunch: string;
+      ctrlBKick: string;
+      ctrlCStrongPunch: string;
+      ctrlDStrongKick: string;
+      ctrlLightPunch: string;
+      ctrlMedPunch: string;
+      ctrlHeavyPunch: string;
+      ctrlLightKick: string;
+      ctrlMedKick: string;
+      ctrlHeavyKick: string;
       ctrlCoin: string;
       ctrlStart: string;
       p1Note: string;
       p2Note: string;
       paused: string;
+      selectGame: string;
+      selectMode: string;
     };
   };
   profile: {

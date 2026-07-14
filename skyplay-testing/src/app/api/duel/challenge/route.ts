@@ -33,21 +33,39 @@ export async function GET(req: NextRequest) {
     }
 
     const challengeId = parseInt(req.nextUrl.searchParams.get("challengeId") || "0", 10);
-    if (!challengeId) {
-      return NextResponse.json({ error: "challengeId requis (query param)" }, { status: 400 });
+    const findActive = req.nextUrl.searchParams.get("findActive") === "1";
+
+    if (!challengeId && !findActive) {
+      return NextResponse.json({ error: "challengeId or findActive=1 required" }, { status: 400 });
     }
 
     const db = await getDb();
-    const rs = await db.execute({
-      sql: "SELECT * FROM duel_challenges WHERE id = ?", args: [challengeId],
-    });
-    if (rs.rows.length === 0) {
-      return NextResponse.json({ error: "Défi introuvable" }, { status: 404 });
-    }
 
-    const row = rs.rows[0];
-    if (row.challenger_id !== user.userId && row.target_id !== user.userId) {
-      return NextResponse.json({ error: "Accès non autorisé" }, { status: 403 });
+    let row: any;
+    if (challengeId) {
+      const rs = await db.execute({
+        sql: "SELECT * FROM duel_challenges WHERE id = ?", args: [challengeId],
+      });
+      if (rs.rows.length === 0) {
+        return NextResponse.json({ error: "Défi introuvable" }, { status: 404 });
+      }
+      row = rs.rows[0];
+      if (row.challenger_id !== user.userId && row.target_id !== user.userId) {
+        return NextResponse.json({ error: "Accès non autorisé" }, { status: 403 });
+      }
+    } else {
+      // findActive: return the user's active challenge (accepted or rules_pending)
+      const rs = await db.execute({
+        sql: `SELECT * FROM duel_challenges
+              WHERE (challenger_id = ? OR target_id = ?)
+                AND status IN ('rules_pending', 'accepted')
+              ORDER BY created_at DESC LIMIT 1`,
+        args: [user.userId, user.userId],
+      });
+      if (rs.rows.length === 0) {
+        return NextResponse.json({ activeChallenge: null });
+      }
+      row = rs.rows[0];
     }
 
     const challenge: Record<string, unknown> = {
@@ -62,11 +80,25 @@ export async function GET(req: NextRequest) {
       matchCount: (row.match_count as number) ?? 1,
     };
 
-    // Include session info if accepted
+    // Include session info if accepted.
+    // IMPORTANT: regenerate the WebSocket URL from current environment config
+    // instead of using the stored URL (which may point to a dead tunnel).
     if (row.status === "accepted" && row.session_id) {
+      const sid = row.session_id as string;
+      let wsUrl: string;
+      if (process.env.NORTHFLANK_API_KEY && process.env.NORTHFLANK_GAME_SERVICE_ID) {
+        wsUrl = `wss://<northflank>?sessionId=${sid}`;
+      } else if (process.env.GAME_SERVER_PUBLIC_URL) {
+        const base = process.env.GAME_SERVER_PUBLIC_URL.replace(/^﻿/, "").replace(/[\r\n]+/g, "").trim();
+        wsUrl = `${base}?sessionId=${sid}`;
+      } else {
+        const localHost = process.env.GAME_SERVER_HOST || "localhost";
+        const localPort = process.env.GAME_SERVER_PORT || "8080";
+        wsUrl = `ws://${localHost}:${localPort}?sessionId=${sid}`;
+      }
       challenge.session = {
-        sessionId: row.session_id as string,
-        wsUrl: row.ws_url as string,
+        sessionId: sid,
+        wsUrl,
         roomCode: row.room_code as string,
         player1Id: row.challenger_id as number,
         player2Id: row.target_id as number,

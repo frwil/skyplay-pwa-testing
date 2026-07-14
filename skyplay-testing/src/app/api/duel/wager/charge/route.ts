@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getAuthFromRequest } from "@/lib/auth";
-import { chargeEntryFees, InsufficientFunds, type PlayerBalance } from "@/lib/duel/wallet";
+import { getDb } from "@/lib/db";
+import { chargeEntryFees, InsufficientFunds, DEFAULT_ENTRY_FEE, type PlayerBalance } from "@/lib/duel/wallet";
 
 async function getUserId(req: NextRequest, body?: Record<string, unknown>): Promise<{ userId: number } | null> {
   const auth = await getAuthFromRequest(req);
@@ -54,12 +55,38 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Non participant à ce duel" }, { status: 403 });
     }
 
+    // Look up game-specific entry fee from the challenge → game or mode
+    let wagerEntryFee = DEFAULT_ENTRY_FEE;
+    let wagerSystem = "neogeo";
+    let wagerRom = "kof98.zip";
+    let wagerMatchCount = 1;
+    try {
+      const db = await getDb();
+      const chalRs = await db.execute({ sql: "SELECT system, rom, mode_id, match_count FROM duel_challenges WHERE id = ?", args: [challengeId] });
+      if (chalRs.rows.length > 0) {
+        wagerSystem = (chalRs.rows[0].system as string) ?? "neogeo";
+        wagerRom = (chalRs.rows[0].rom as string) ?? "kof98.zip";
+        wagerMatchCount = (chalRs.rows[0].match_count as number) ?? 1;
+        const modeId = chalRs.rows[0].mode_id as string | null;
+        if (modeId) {
+          const modeRs = await db.execute({ sql: "SELECT entry_fee FROM duel_game_modes WHERE id = ? LIMIT 1", args: [modeId] });
+          if (modeRs.rows.length > 0) wagerEntryFee = Number(modeRs.rows[0].entry_fee ?? DEFAULT_ENTRY_FEE);
+        } else {
+          const feeRs = await db.execute({ sql: "SELECT entry_fee FROM duel_games WHERE system = ? AND rom = ? LIMIT 1", args: [wagerSystem, wagerRom] });
+          if (feeRs.rows.length > 0) wagerEntryFee = Number(feeRs.rows[0].entry_fee ?? DEFAULT_ENTRY_FEE);
+        }
+      }
+    } catch { /* fall back to default */ }
+
     try {
       const result = await chargeEntryFees({
         challengeId,
         sessionId,
         playerAId: player1Id,
         playerBId: player2Id,
+        system: wagerSystem,
+        rom: wagerRom,
+        entryFee: wagerEntryFee,
       });
       return NextResponse.json({
         success: true,
@@ -69,7 +96,7 @@ export async function POST(req: NextRequest) {
     } catch (e) {
       if (e instanceof InsufficientFunds) {
         return NextResponse.json(
-          { error: "SKY insuffisant pour la mise de la revanche", code: "insufficient_sky", userId: e.userId },
+          { error: "SKY insuffisant pour la participation à la revanche", code: "insufficient_sky", userId: e.userId },
           { status: 402 },
         );
       }

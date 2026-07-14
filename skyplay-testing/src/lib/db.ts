@@ -340,6 +340,229 @@ async function initializeSchema(): Promise<void> {
   // perfect_ko_count column on duel_results (added post-migration)
   try { await getClient().execute("ALTER TABLE duel_results ADD COLUMN perfect_ko_count INTEGER NOT NULL DEFAULT 0"); } catch { /* column already exists */ }
 
+  // ── Duel modes & multi-match columns (added post-migration) ──
+  try { await getClient().execute("ALTER TABLE duel_challenges ADD COLUMN mode_id TEXT DEFAULT NULL"); } catch { /* column already exists */ }
+  try { await getClient().execute("ALTER TABLE duel_challenges ADD COLUMN match_count INTEGER NOT NULL DEFAULT 1"); } catch { /* column already exists */ }
+  try { await getClient().execute("ALTER TABLE duel_challenges ADD COLUMN match_number INTEGER NOT NULL DEFAULT 0"); } catch { /* column already exists */ }
+  try { await getClient().execute("ALTER TABLE duel_challenges ADD COLUMN challenger_rules_accepted INTEGER NOT NULL DEFAULT 0"); } catch { /* column already exists */ }
+  try { await getClient().execute("ALTER TABLE duel_challenges ADD COLUMN target_rules_accepted INTEGER NOT NULL DEFAULT 0"); } catch { /* column already exists */ }
+
+  // ─── Duel game registry (controls which ROMs are playable in duels) ───
+  await getClient().execute(`
+    CREATE TABLE IF NOT EXISTS duel_games (
+      id TEXT PRIMARY KEY,
+      label TEXT NOT NULL,
+      system TEXT NOT NULL,
+      rom TEXT NOT NULL,
+      mode TEXT NOT NULL DEFAULT 'fighting',
+      entry_fee INTEGER NOT NULL DEFAULT 1000,
+      ram_config TEXT DEFAULT NULL,
+      enabled INTEGER NOT NULL DEFAULT 1
+    )
+  `);
+  // Idempotent ALTER TABLE for columns that may be missing on older DB instances
+  try { await getClient().execute("ALTER TABLE duel_games ADD COLUMN entry_fee INTEGER NOT NULL DEFAULT 1000"); } catch {}
+  try { await getClient().execute("ALTER TABLE duel_games ADD COLUMN ram_config TEXT DEFAULT NULL"); } catch {}
+  try { await getClient().execute("ALTER TABLE duel_games ADD COLUMN category TEXT DEFAULT 'fighting'"); } catch {}
+  try { await getClient().execute("ALTER TABLE duel_games ADD COLUMN cover_image TEXT DEFAULT NULL"); } catch {}
+  try { await getClient().execute("ALTER TABLE duel_games ADD COLUMN description TEXT DEFAULT NULL"); } catch {}
+  await getClient().execute(`
+    CREATE TABLE IF NOT EXISTS duel_game_controls (
+      game_id TEXT NOT NULL REFERENCES duel_games(id),
+      player INTEGER NOT NULL CHECK(player IN (1, 2)),
+      action_key TEXT NOT NULL,
+      label_key TEXT NOT NULL,
+      default_keys TEXT NOT NULL,
+      PRIMARY KEY (game_id, player, action_key)
+    )
+  `);
+  // ─── Config version history (git-like: every config change creates a new version) ───
+  await getClient().execute(`
+    CREATE TABLE IF NOT EXISTS duel_game_config_versions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      game_id TEXT NOT NULL REFERENCES duel_games(id),
+      version INTEGER NOT NULL,
+      ram_config TEXT,
+      controls TEXT,
+      label TEXT,
+      is_active INTEGER NOT NULL DEFAULT 0,
+      is_default INTEGER NOT NULL DEFAULT 0,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(game_id, version)
+    )
+  `);
+  // ─── Duel game modes (Standard / XL / Fighter) ───
+  await getClient().execute(`
+    CREATE TABLE IF NOT EXISTS duel_game_modes (
+      id TEXT PRIMARY KEY,
+      game_id TEXT NOT NULL REFERENCES duel_games(id),
+      mode_key TEXT NOT NULL,
+      label TEXT NOT NULL,
+      match_count INTEGER NOT NULL,
+      entry_fee INTEGER NOT NULL,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      UNIQUE(game_id, mode_key)
+    )
+  `);
+  try { await getClient().execute("ALTER TABLE duel_game_modes ADD COLUMN rules TEXT DEFAULT NULL"); } catch { /* column already exists */ }
+
+  // Seed default duel games (idempotent — INSERT OR IGNORE)
+  // category: fighting, versus, puzzle, sports, etc.
+  // cover_image: URL or null (CSS gradient fallback used when null)
+  // description: short game description (English, used as fallback; i18n preferred)
+  try { await getClient().execute("INSERT OR IGNORE INTO duel_games (id, label, system, rom, mode, category, cover_image, description) VALUES ('kof98', 'KOF ''98', 'neogeo', 'kof98.zip', 'fighting', 'fighting', 'https://upload.wikimedia.org/wikipedia/en/1/18/The_King_of_Fighters_%2798_arcade_flyer.jpg', 'The legendary Neo Geo fighting game. 3v3 team battles, advanced gauge system, and a roster of 38 iconic characters.')"); } catch {}
+  try { await getClient().execute("INSERT OR IGNORE INTO duel_games (id, label, system, rom, mode, category, cover_image, description) VALUES ('sf2', 'Street Fighter 2', 'snes', 'Street Fighter 5 (Hack).smc', 'fighting', 'fighting', 'https://upload.wikimedia.org/wikipedia/en/1/1d/SF2_JPN_flyer.jpg', 'The classic that defined the genre. Pick your world warrior and fight through 1v1 matches with unique special moves and combos.')"); } catch {}
+  try { await getClient().execute("INSERT OR IGNORE INTO duel_games (id, label, system, rom, mode, category, cover_image, description) VALUES ('kof2002', 'KOF 2002', 'neogeo', 'kof2002.zip', 'fighting', 'fighting', 'https://upload.wikimedia.org/wikipedia/en/3/3b/The_King_of_Fighters_2002_arcade_flyer.jpg', 'The ultimate KOF dream match. Refined 3v3 mechanics, massive character roster, and the fan-favorite MAX mode system.')"); } catch {}
+  try { await getClient().execute("INSERT OR IGNORE INTO duel_games (id, label, system, rom, mode, category, cover_image, description) VALUES ('sfa2', 'Street Fighter Alpha 2', 'snes', 'Street Fighter Alpha 2 (Europe).sfc', 'fighting', 'fighting', 'https://upload.wikimedia.org/wikipedia/en/3/3f/Street_Fighter_Alpha_2_flyer.png', 'The Alpha series on SNES. Expanded roster with custom combos, alpha counters, and a dramatic battle system.')"); } catch {}
+
+  // Update existing rows that were seeded before category/description/cover_image columns existed
+  try { await getClient().execute({ sql: "UPDATE duel_games SET category = 'fighting', cover_image = 'https://upload.wikimedia.org/wikipedia/en/1/18/The_King_of_Fighters_%2798_arcade_flyer.jpg', description = 'The legendary Neo Geo fighting game. 3v3 team battles, advanced gauge system, and a roster of 38 iconic characters.' WHERE id = 'kof98' AND (category IS NULL OR cover_image IS NULL)" }); } catch {}
+  try { await getClient().execute({ sql: "UPDATE duel_games SET category = 'fighting', cover_image = 'https://upload.wikimedia.org/wikipedia/en/1/1d/SF2_JPN_flyer.jpg', description = 'The classic that defined the genre. Pick your world warrior and fight through 1v1 matches with unique special moves and combos.' WHERE id = 'sf2' AND (category IS NULL OR cover_image IS NULL)" }); } catch {}
+  try { await getClient().execute({ sql: "UPDATE duel_games SET category = 'fighting', cover_image = 'https://upload.wikimedia.org/wikipedia/en/3/3b/The_King_of_Fighters_2002_arcade_flyer.jpg', description = 'The ultimate KOF dream match. Refined 3v3 mechanics, massive character roster, and the fan-favorite MAX mode system.' WHERE id = 'kof2002' AND (category IS NULL OR cover_image IS NULL)" }); } catch {}
+  try { await getClient().execute({ sql: "UPDATE duel_games SET category = 'fighting', cover_image = 'https://upload.wikimedia.org/wikipedia/en/3/3f/Street_Fighter_Alpha_2_flyer.png', description = 'The Alpha series on SNES. Expanded roster with custom combos, alpha counters, and a dramatic battle system.' WHERE id = 'sfa2' AND (category IS NULL OR cover_image IS NULL)" }); } catch {}
+
+  // Seed default modes for each game (idempotent)
+  const GAME_MODES = [
+    { id: "kof98_standard", game_id: "kof98", mode_key: "standard", label: "KOF '98 — Standard", match_count: 1, entry_fee: 1000 },
+    { id: "kof98_xl", game_id: "kof98", mode_key: "xl", label: "KOF '98 — XL", match_count: 3, entry_fee: 2500 },
+    { id: "kof98_fighter", game_id: "kof98", mode_key: "fighter", label: "KOF '98 — Fighter", match_count: 5, entry_fee: 4000 },
+    { id: "sf2_standard", game_id: "sf2", mode_key: "standard", label: "Street Fighter 2 — Standard", match_count: 1, entry_fee: 1000 },
+    { id: "sf2_xl", game_id: "sf2", mode_key: "xl", label: "Street Fighter 2 — XL", match_count: 3, entry_fee: 2500 },
+    { id: "sf2_fighter", game_id: "sf2", mode_key: "fighter", label: "Street Fighter 2 — Fighter", match_count: 5, entry_fee: 4000 },
+    { id: "kof2002_standard", game_id: "kof2002", mode_key: "standard", label: "KOF 2002 — Standard", match_count: 1, entry_fee: 1000 },
+    { id: "kof2002_xl", game_id: "kof2002", mode_key: "xl", label: "KOF 2002 — XL", match_count: 3, entry_fee: 2500 },
+    { id: "kof2002_fighter", game_id: "kof2002", mode_key: "fighter", label: "KOF 2002 — Fighter", match_count: 5, entry_fee: 4000 },
+    { id: "sfa2_standard", game_id: "sfa2", mode_key: "standard", label: "Street Fighter Alpha 2 — Standard", match_count: 1, entry_fee: 1000 },
+    { id: "sfa2_xl", game_id: "sfa2", mode_key: "xl", label: "Street Fighter Alpha 2 — XL", match_count: 3, entry_fee: 2500 },
+    { id: "sfa2_fighter", game_id: "sfa2", mode_key: "fighter", label: "Street Fighter Alpha 2 — Fighter", match_count: 5, entry_fee: 4000 },
+  ];
+
+  // Build multilingual rules JSON for a mode
+  function buildModeRules(matchCount: number): string {
+    return JSON.stringify({
+      fr: {
+        victoryRule: `Le gagnant est celui qui remporte le plus de matchs sur ${matchCount}`,
+        drawRule: "En cas d'égalité parfaite, les 2 joueurs perdent leur participation",
+        debitRule: "La participation est débitée uniquement quand le combat commence réellement",
+        disputeRule: "En cas de litige, vous pouvez ouvrir une réclamation depuis l'historique",
+      },
+      en: {
+        victoryRule: `The winner is the one who wins the most matches out of ${matchCount}`,
+        drawRule: "In case of a perfect tie, both players lose their entry fee",
+        debitRule: "The entry fee is only deducted when the fight actually starts",
+        disputeRule: "In case of a dispute, you can open a claim from the history",
+      },
+    });
+  }
+
+  for (const m of GAME_MODES) {
+    const rules = buildModeRules(m.match_count);
+    try { await getClient().execute({
+      sql: "INSERT OR IGNORE INTO duel_game_modes (id, game_id, mode_key, label, match_count, entry_fee, rules) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      args: [m.id, m.game_id, m.mode_key, m.label, m.match_count, m.entry_fee, rules],
+    }); } catch {}
+    // Update rules for existing rows that were seeded before the column existed
+    try { await getClient().execute({ sql: "UPDATE duel_game_modes SET rules = ? WHERE id = ? AND rules IS NULL", args: [rules, m.id] }); } catch {}
+  }
+
+  // Set ram_config for KOF98 (idempotent — UPDATE after INSERT OR IGNORE)
+  try {
+    await getClient().execute({
+      sql: "UPDATE duel_games SET ram_config = ? WHERE id = 'kof98' AND ram_config IS NULL",
+      args: [JSON.stringify({
+        p1: 0x8238, p2: 0x8438, size: 1, maxHealth: 0x67,
+        timer: 0xA83A, timerAlt: 0x85D2,
+        p1Char: 0x823F, p2Char: 0x843F,
+        p1Mode: 0x821E, p2Mode: 0x841E,
+        p1TeamBase: 0xA84E, p2TeamBase: 0xA85E,
+        p1TeamOffsets: [0, 1, 3], p2TeamOffsets: [0, 2, 3],
+        p1Active: 0x8256, p2Active: 0x8456,
+        matchFlag: 0xA840,
+        p1Lost: 0xA859, p2Lost: 0xA868,
+        p1PickOrder: [0x15CB, 0x15CA, 0x15CD],
+        p2PickOrder: [0x17CB, 0x17CA, 0x17CD],
+      })],
+    });
+  } catch {}
+
+  // Set ram_config for KOF2002 (idempotent — basic health/timer/mode only, team/loss/pick order TBD)
+  try {
+    await getClient().execute({
+      sql: "UPDATE duel_games SET ram_config = ? WHERE id = 'kof2002' AND ram_config IS NULL",
+      args: [JSON.stringify({
+        p1: 0x8238, p2: 0x8438, size: 1, maxHealth: 0x67,
+        timer: 0xA83A, timerAlt: 0x85D2,
+        p1Char: 0x823F, p2Char: 0x843F,
+        p1Mode: 0x81F0, p2Mode: 0x83F0,
+      })],
+    });
+  } catch {}
+  // KOF98 controls
+  const kofControls = [
+    ["ctrlMove","W A S D",1],["ctrlAPunch","Z",1],["ctrlBKick","X",1],["ctrlCStrongPunch","C",1],["ctrlDStrongKick","V",1],["ctrlCoin","Space",1],["ctrlStart","Enter",1],
+    ["ctrlMove","↑ ↓ ← →",2],["ctrlAPunch","I",2],["ctrlBKick","O",2],["ctrlCStrongPunch","K",2],["ctrlDStrongKick","L",2],["ctrlCoin","Shift",2],["ctrlStart","Ctrl",2],
+  ];
+  for (const [action, keys, player] of kofControls) {
+    try { await getClient().execute({ sql: "INSERT OR IGNORE INTO duel_game_controls (game_id, player, action_key, label_key, default_keys) VALUES (?,?,?,?,?)", args: ["kof98", player, action, action, keys] }); } catch {}
+  }
+  // SF2 controls
+  const sf2Controls = [
+    ["ctrlMove","W A S D",1],["ctrlLightPunch","Z",1],["ctrlMedPunch","X",1],["ctrlHeavyPunch","C",1],["ctrlLightKick","A",1],["ctrlMedKick","S",1],["ctrlHeavyKick","D",1],["ctrlStart","Enter",1],
+    ["ctrlMove","↑ ↓ ← →",2],["ctrlLightPunch","I",2],["ctrlMedPunch","O",2],["ctrlHeavyPunch","K",2],["ctrlLightKick","J",2],["ctrlMedKick","L",2],["ctrlHeavyKick",";",2],["ctrlStart","Ctrl",2],
+  ];
+  for (const [action, keys, player] of sf2Controls) {
+    try { await getClient().execute({ sql: "INSERT OR IGNORE INTO duel_game_controls (game_id, player, action_key, label_key, default_keys) VALUES (?,?,?,?,?)", args: ["sf2", player, action, action, keys] }); } catch {}
+  }
+
+  // ─── Seed config version 1 for each game (idempotent) ───
+  // Each game gets v1 as both active and default, capturing the initial ram_config + controls.
+  const seedVersion1 = async (gameId: string, label: string, ramConfig: unknown, controls: unknown[]) => {
+    try {
+      const existing = await getClient().execute({
+        sql: "SELECT id FROM duel_game_config_versions WHERE game_id = ? AND version = 1",
+        args: [gameId],
+      });
+      if (existing.rows.length === 0) {
+        await getClient().execute({
+          sql: `INSERT INTO duel_game_config_versions (game_id, version, ram_config, controls, label, is_active, is_default)
+                VALUES (?, 1, ?, ?, ?, 1, 1)`,
+          args: [gameId, JSON.stringify(ramConfig), JSON.stringify(controls), label],
+        });
+        console.log(`[db] Seeded config v1 for ${gameId}`);
+      }
+    } catch (err) {
+      console.warn(`[db] Failed to seed config v1 for ${gameId}:`, err);
+    }
+  };
+
+  // KOF98 v1: full RAM config + controls
+  const kof98RamConfig = {
+    p1: 0x8238, p2: 0x8438, size: 1, maxHealth: 0x67,
+    timer: 0xA83A, timerAlt: 0x85D2,
+    p1Char: 0x823F, p2Char: 0x843F,
+    p1Mode: 0x821E, p2Mode: 0x841E,
+    p1TeamBase: 0xA84E, p2TeamBase: 0xA85E,
+    p1TeamOffsets: [0, 1, 3], p2TeamOffsets: [0, 2, 3],
+    p1Active: 0x8256, p2Active: 0x8456,
+    matchFlag: 0xA840,
+    p1Lost: 0xA859, p2Lost: 0xA868,
+    p1PickOrder: [0x15CB, 0x15CA, 0x15CD],
+    p2PickOrder: [0x17CB, 0x17CA, 0x17CD],
+  };
+  await seedVersion1("kof98", "v1 — RAM + contrôles initiaux", kof98RamConfig, kofControls.map(([action, keys, player]) => ({ player, actionKey: action, labelKey: action, defaultKeys: keys })));
+
+  // KOF2002 v1: basic health/timer/mode (team/loss/pick order TBD via RAM scan)
+  const kof2002RamConfig = {
+    p1: 0x8238, p2: 0x8438, size: 1, maxHealth: 0x67,
+    timer: 0xA83A, timerAlt: 0x85D2,
+    p1Char: 0x823F, p2Char: 0x843F,
+    p1Mode: 0x81F0, p2Mode: 0x83F0,
+  };
+  await seedVersion1("kof2002", "v1 — santé + timer + mode (détection basique)", kof2002RamConfig, kofControls.map(([action, keys, player]) => ({ player, actionKey: action, labelKey: action, defaultKeys: keys })));
+
+  // SF2 v1: no RAM config yet (pixel-based detection), controls only
+  await seedVersion1("sf2", "v1 — contrôles uniquement (détection pixel)", null, sf2Controls.map(([action, keys, player]) => ({ player, actionKey: action, labelKey: action, defaultKeys: keys })));
+
   // ─── Duel SKY economy (wagering) ───
   // Player ledger: every movement that affects a player's spendable balance.
   // A player's balance = computed earned SKY (approved rewards + bonus) + SUM(amount here).

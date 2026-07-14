@@ -17,7 +17,7 @@ import { getDb } from "@/lib/db";
  * credited, always pass the gates. Their stake never enters the pot.
  */
 
-export const ENTRY_FEE = 1000;
+export const DEFAULT_ENTRY_FEE = 1000;
 export const WINNER_SHARE = 0.75;
 
 /** Thrown by chargeEntryFees when a non-admin player lacks the entry fee. */
@@ -91,9 +91,13 @@ export async function getBalance(userId: number): Promise<number> {
  * No writes, no chamber — used at accept time to gate a duel WITHOUT debiting (the real
  * debit happens later, when the fight actually starts). Admins pass (getBalance = Infinity).
  */
-export async function assertEntryAffordable(playerAId: number, playerBId: number): Promise<void> {
+export async function assertEntryAffordable(
+  playerAId: number,
+  playerBId: number,
+  entryFee: number = DEFAULT_ENTRY_FEE,
+): Promise<void> {
   for (const id of [playerAId, playerBId]) {
-    if ((await getBalance(id)) < ENTRY_FEE) throw new InsufficientFunds(id);
+    if ((await getBalance(id)) < entryFee) throw new InsufficientFunds(id);
   }
 }
 
@@ -138,8 +142,9 @@ export async function chargeEntryFees(opts: {
   playerBId: number;
   system?: string;
   rom?: string;
+  entryFee?: number;
 }): Promise<ChargeResult> {
-  const { challengeId, sessionId, playerAId, playerBId, system = "neogeo", rom = "kof98.zip" } = opts;
+  const { challengeId, sessionId, playerAId, playerBId, system = "neogeo", rom = "kof98.zip", entryFee = DEFAULT_ENTRY_FEE } = opts;
   const db = await getDb();
 
   const adminA = await isAdmin(playerAId);
@@ -163,22 +168,22 @@ export async function chargeEntryFees(opts: {
   }
 
   // Verify funds for each non-admin BEFORE writing anything.
-  if (!adminA && (await getBalance(playerAId)) < ENTRY_FEE) throw new InsufficientFunds(playerAId);
-  if (!adminB && (await getBalance(playerBId)) < ENTRY_FEE) throw new InsufficientFunds(playerBId);
+  if (!adminA && (await getBalance(playerAId)) < entryFee) throw new InsufficientFunds(playerAId);
+  if (!adminB && (await getBalance(playerBId)) < entryFee) throw new InsufficientFunds(playerBId);
 
-  const pot = (adminA ? 0 : ENTRY_FEE) + (adminB ? 0 : ENTRY_FEE);
+  const pot = (adminA ? 0 : entryFee) + (adminB ? 0 : entryFee);
 
   const stmts: { sql: string; args: (string | number)[] }[] = [];
   if (!adminA) {
     stmts.push({
       sql: "INSERT INTO sky_transactions (user_id, amount, kind, challenge_id, session_id) VALUES (?, ?, 'entry_fee', ?, ?)",
-      args: [playerAId, -ENTRY_FEE, challengeId, sessionId],
+      args: [playerAId, -entryFee, challengeId, sessionId],
     });
   }
   if (!adminB) {
     stmts.push({
       sql: "INSERT INTO sky_transactions (user_id, amount, kind, challenge_id, session_id) VALUES (?, ?, 'entry_fee', ?, ?)",
-      args: [playerBId, -ENTRY_FEE, challengeId, sessionId],
+      args: [playerBId, -entryFee, challengeId, sessionId],
     });
   }
   stmts.push({
@@ -451,8 +456,14 @@ export async function resolveDispute(
 
   if (action === "refund_both") {
     // Return each non-admin's stake; the collected pot equals the sum of non-admin stakes → bank 0.
-    c1 = a1 ? 0 : ENTRY_FEE;
-    c2 = a2 ? 0 : ENTRY_FEE;
+    // Look up the per-game entry fee, falling back to the default.
+    let gameEntryFee = DEFAULT_ENTRY_FEE;
+    try {
+      const feeRs = await db.execute({ sql: "SELECT entry_fee FROM duel_games WHERE system = ? AND rom = ? LIMIT 1", args: [system, rom] });
+      if (feeRs.rows.length > 0) gameEntryFee = Number(feeRs.rows[0].entry_fee ?? DEFAULT_ENTRY_FEE);
+    } catch { /* use default */ }
+    c1 = a1 ? 0 : gameEntryFee;
+    c2 = a2 ? 0 : gameEntryFee;
   } else if (action === "award_winner") {
     winnerId = Number(params.winnerId ?? 0);
     if (winnerId !== p1 && winnerId !== p2) throw new Error("winnerId must be one of the participants");

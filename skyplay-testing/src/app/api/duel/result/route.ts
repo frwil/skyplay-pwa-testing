@@ -72,6 +72,12 @@ export async function POST(req: NextRequest) {
     const system = (chRs.rows[0]?.system as string) || "neogeo";
     const rom = (chRs.rows[0]?.rom as string) || "kof98.zip";
 
+    // Increment match_number for multi-match tracking (idempotent — increments on every result POST)
+    await db.execute({
+      sql: "UPDATE duel_challenges SET match_number = match_number + 1 WHERE id = ?",
+      args: [challengeId],
+    });
+
     // Record a win/loss row only for a decisive match (real winner + loser). A draw or a
     // manual stop (winnerId/loserId = 0) is not a win/loss row — it is still settled
     // economically below (platform keeps the pot) but not counted in the win/loss history.

@@ -437,6 +437,8 @@ export default function SubmissionFormWrapper({
         <button
           onClick={async () => {
             await fetch("/api/auth/logout", { method: "POST", credentials: "include" });
+            // Prevent dev identity fallback
+            try { sessionStorage.setItem("skyplay_logged_out", "1"); } catch { /* ignore */ }
             setUserId(null);
             setUsername("");
             setEmail("");

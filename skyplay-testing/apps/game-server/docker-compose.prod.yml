@@ -41,6 +41,9 @@ services:
       - STREAMING_ENABLED=0
       # Verbose per-frame / per-input RAM tracing OFF (set 1 only to debug detection).
       - DEBUG_RAM=0
+      # Turso DB (game config: RAM addresses, controls, enabled games)
+      - TURSO_DATABASE_URL=${TURSO_DATABASE_URL:-}
+      - TURSO_AUTH_TOKEN=${TURSO_AUTH_TOKEN:-}
     # Xvfb needs a tty allocated.
     stdin_open: true
     tty: true

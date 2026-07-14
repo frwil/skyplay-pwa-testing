@@ -648,6 +648,8 @@ export default function PlayPage() {
                   try {
                     await fetch("/api/auth/logout", { method: "POST", credentials: "include" });
                   } catch { /* ignore */ }
+                  // Prevent dev identity fallback on reload
+                  try { sessionStorage.setItem("skyplay_logged_out", "1"); } catch { /* ignore */ }
                   window.location.reload();
                 }}
                 className="text-xs text-white/40 hover:text-white transition font-medium flex items-center gap-1"
@@ -675,6 +677,25 @@ export default function PlayPage() {
               className="text-xs text-white/40 hover:text-white transition font-medium"
             >
               {t.common.faq}
+            </a>
+            <a
+              href="/duel"
+              className="text-xs text-white/40 hover:text-white transition font-medium flex items-center gap-1"
+            >
+              ⚔️ Duel
+            </a>
+            <a
+              href={process.env.NODE_ENV === "development" ? "http://localhost:3000" : "https://sky-play-platform-gamma.vercel.app"}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="px-3 py-1 rounded-full text-xs font-bold border transition"
+              style={{
+                color: "#00c8ff",
+                borderColor: "rgba(0,200,255,0.3)",
+                backgroundColor: "rgba(0,200,255,0.08)",
+              }}
+            >
+              Plateforme ↗
             </a>
             <a
               href="/admin"
