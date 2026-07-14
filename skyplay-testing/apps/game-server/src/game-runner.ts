@@ -7,6 +7,9 @@ import { join } from "path";
 import { SYSTEM_CORES, SYSTEM_RESOLUTIONS, UPSCALE, XDOTOOL_KEY_MAP, XDOTOOL_KEY_MAP_P2, getButtonToRetroarch, buildRetroarchKeyConfig } from "./config.js";
 import { isRecordingEnabled, isStreamingEnabled, recordingDir, recorderFfmpegArgs, streamerFfmpegArgs, uploadRecording } from "./recording.js";
 import type { RamConfig } from "./game-config.js";
+import { getPixelConfig } from "./pixel/pixel-game-config.js";
+import { PixelMatchAnalyzer, GamePhase, type RoundResultEvent, type MatchEndEvent } from "./pixel/pixel-match-analyzer.js";
+export { GamePhase } from "./pixel/pixel-match-analyzer.js";
 
 // Verbose per-frame / per-input RAM-detection tracing. OFF by default: those logs fire
 // dozens of times per second during a live round and each console.log to the Docker
@@ -69,84 +72,6 @@ const HEALTH_MEMORY_MAP: Record<string, { p1: number; p2: number; size: number; 
   "kof2002.zip": { p1: 0x8238, p2: 0x8438, size: 1, maxHealth: 0x67, timer: 0xA83A, timerAlt: 0x85D2, p1Char: 0x823F, p2Char: 0x843F, p1Mode: 0x81F0, p2Mode: 0x83F0 },
 };
 
-// ── Per-game pixel-based health + timer detection config ────────────
-// Every ROM gets its OWN config entry. Adding a new game = adding one entry here.
-// The detection engine (state machine, column scan, template matching) stays the same.
-//
-// Lookup: matched by ROM basename (stripped of path + extension), same as HEALTH_MEMORY_MAP.
-
-/** Full pixel-detection configuration for a single game ROM. */
-interface PixelGameConfig {
-  // ── Health bar stripe (ffmpeg capture region) ──
-  /** Y offset of the health bar stripe from the top of Xvfb. */
-  stripeY: number;
-  /** Height of the captured stripe in pixels. */
-  stripeH: number;
-  // ── Health bar X regions (within the stripe, at display width) ──
-  p1StartX: number;
-  p1EndX: number;
-  p2StartX: number;
-  p2EndX: number;
-  // ── Round / match rules ──
-  /** Number of rounds needed to win the match (2 = best-of-3, 3 = best-of-5). */
-  winsNeeded: number;
-  // ── Timer digit recognition (absent → no pixel timer for this ROM) ──
-  timer?: {
-    /** 10 digit templates, each 12 rows × 8 bits (MSB=left). */
-    digits: number[][];
-    /** Left digit X position in the health bar stripe. */
-    leftDigitX: number;
-    /** Right digit X position in the health bar stripe. */
-    rightDigitX: number;
-    /** Width of each digit in pixels. */
-    digitW: number;
-    /** Height of each digit in pixels. */
-    digitH: number;
-    /** Minimum bright pixel ratio to consider the region readable. */
-    minBrightRatio: number;
-  };
-}
-
-const PIXEL_GAME_CONFIGS: Record<string, PixelGameConfig> = {
-  // ── Street Fighter Alpha 2 (SNES) ──────────────────────────────────
-  "Street Fighter Alpha 2 (Europe).sfc": {
-    stripeY: 110, stripeH: 24,
-    p1StartX: 70, p1EndX: 310,
-    p2StartX: 450, p2EndX: 768,
-    winsNeeded: 2,
-    timer: {
-      // Arcade-style bold white digits on dark background, ~22×24px each at 3x upscale.
-      // Timer sits between P1 health (ends 310) and P2 health (starts 450).
-      digits: [
-        [0b00111100,0b01100110,0b01100110,0b01100110,0b01100110,0b01100110,0b01100110,0b01100110,0b01100110,0b01100110,0b01100110,0b00111100], // 0
-        [0b00011000,0b00111000,0b00011000,0b00011000,0b00011000,0b00011000,0b00011000,0b00011000,0b00011000,0b00011000,0b00011000,0b01111110], // 1
-        [0b00111100,0b01100110,0b00000110,0b00000110,0b00000110,0b00001100,0b00011000,0b00110000,0b01100000,0b01100000,0b01111110,0b01111110], // 2
-        [0b00111100,0b01100110,0b00000110,0b00000110,0b00001100,0b00111100,0b00000110,0b00000110,0b00000110,0b00000110,0b01100110,0b00111100], // 3
-        [0b00001100,0b00011100,0b00111100,0b01101100,0b11001100,0b11001100,0b11111110,0b11111110,0b00001100,0b00001100,0b00001100,0b00001100], // 4
-        [0b01111110,0b01100000,0b01100000,0b01100000,0b01111100,0b00000110,0b00000110,0b00000110,0b00000110,0b00000110,0b01100110,0b00111100], // 5
-        [0b00011100,0b00110000,0b01100000,0b01100000,0b01111100,0b01100110,0b01100110,0b01100110,0b01100110,0b01100110,0b01100110,0b00111100], // 6
-        [0b01111110,0b01111110,0b00000110,0b00000110,0b00001100,0b00011000,0b00011000,0b00110000,0b00110000,0b01100000,0b01100000,0b01100000], // 7
-        [0b00111100,0b01100110,0b01100110,0b01100110,0b00111100,0b01100110,0b01100110,0b01100110,0b01100110,0b01100110,0b01100110,0b00111100], // 8
-        [0b00111100,0b01100110,0b01100110,0b01100110,0b01100110,0b01100110,0b00111110,0b00000110,0b00000110,0b00000110,0b00001100,0b01111000], // 9
-      ],
-      leftDigitX: 338, rightDigitX: 362, digitW: 22, digitH: 24, minBrightRatio: 0.15,
-    },
-  },
-};
-
-/** Template dimensions (all digit templates are 8×12 bitmaps). */
-const DIGIT_TEMPLATE_W = 8;
-const DIGIT_TEMPLATE_H = 12;
-
-/** Look up the pixel config for a ROM. Returns null if the game uses RAM-based detection. */
-function getPixelConfig(rom: string): PixelGameConfig | null {
-  const romKey = rom.split("/").pop()?.replace(/\.(zip|sfc|smc|nes|gb|gbc|gba)$/i, "") ?? rom;
-  const entry = Object.entries(PIXEL_GAME_CONFIGS).find(([k]) =>
-    k.replace(/\.(zip|sfc|smc|nes|gb|gbc|gba)$/i, "") === romKey
-  );
-  return entry?.[1] ?? null;
-}
-
 /** KOF '98 character ID → name mapping. */
 const KOF98_CHARACTERS: Record<number, string> = {
   0x00: "Kyo Kusanagi",     0x01: "Benimaru Nikaido",  0x02: "Goro Daimon",
@@ -177,18 +102,6 @@ const KOF98_CHARACTERS: Record<number, string> = {
  * Video uses H.264 baseline profile (WebCodecs-compatible).
  * Audio uses Opus 32kbps mono.
  */
-/** Pixel-based health detection state machine.
- *  Replaces implicit boolean-flag state with explicit phases so every
- *  transition requires multi-frame evidence — no single-frame false positives. */
-enum GamePhase {
-  WARMUP       = "WARMUP",        // collecting calibration frames, no KO detection
-  PLAYING      = "PLAYING",       // active KO detection
-  KO_PENDING   = "KO_PENDING",    // potential KO — confirming over N frames
-  KO_CONFIRMED = "KO_CONFIRMED",  // KO confirmed, waiting for new round
-  NEW_ROUND    = "NEW_ROUND",     // health bars back, transitioning to next round
-  MATCH_END    = "MATCH_END",     // match is over
-}
-
 export class GameRunner extends EventEmitter {
   private xvfb: ChildProcess | null = null;
   private retroarch: ChildProcess | null = null;
@@ -217,7 +130,7 @@ export class GameRunner extends EventEmitter {
   private retroarchWindowId: string | null = null;
   private configPath: string | null = null;
 
-  // ── Round win/loss detection via screenshot pixel analysis (health bars) ──
+  // ── Round win/loss detection (shared between RAM + pixel paths) ──
   private healthFfmpeg: ChildProcess | null = null;
   private healthPollTimer: ReturnType<typeof setInterval> | null = null; // debug log timer (10s)
   private healthReadTimer: ReturnType<typeof setInterval> | null = null; // health polling timer (250ms)
@@ -230,11 +143,6 @@ export class GameRunner extends EventEmitter {
   private p1Losses = 0;
   private p2Losses = 0;
   private matchEnded = false;
-  private healthStableFrames = 0; // total frames collected during warmup
-  private healthStableFramesHealthy = 0; // how many were healthy
-  private healthDetectionArmed = false; // KO detection enabled after warmup
-  private lastKoTimestamp = 0; // prevent double-triggers within cooldown window
-  private koCooldownFrames = 0; // countdown after KO before re-arming detection
   /** Width of the upscaled display (set when game starts). */
   private displayW = 0;
   private displayH = 0;
@@ -251,43 +159,17 @@ export class GameRunner extends EventEmitter {
   private roundTimerHitZero = false;
   /** processLossCounters-local previous 16-bit timer, to detect the >0 → 0 (TIME OVER) transition. */
   private lcPrevTimer16 = -1;
-  /** Calibrated "full health" pixel counts — set during warmup, used to normalize readings to 0-100%. */
-  private p1MaxPixels = 0;
-  private p2MaxPixels = 0;
   /** After auto-continue, use a shorter warmup since we already validated the readings. */
   private fastWarmup = false;
-  // ── State-machine pixel detection (per-ROM config) ──
-  /** Pixel-game config for the current ROM (null = RAM-based detection). */
-  private pixelConfig: PixelGameConfig | null = null;
-  private gamePhase: GamePhase = GamePhase.WARMUP;
-  /** Rolling health history ring buffers (smoothed via median). */
-  private healthHistoryP1: number[] = [];
-  private healthHistoryP2: number[] = [];
-  private readonly HEALTH_HISTORY_SIZE = 5;
-  /** Calibrated full-bar width in columns (set once during WARMUP). */
-  private p1FullBarWidth = 0;
-  private p2FullBarWidth = 0;
-  // ── Timer digit recognition (template matching) ──
-  /** Last recognized timer value (-1 = unknown). */
-  private lastTimerValue = -1;
-  /** How many frames the timer has been at the same value. */
-  private timerStableFrames = 0;
-  /** Emit timer value only after this many stable frames. */
-  private readonly TIMER_STABLE_REQUIRED = 3;
-
-  /** Grace period after entering PLAYING — ignore KOs during screen transitions. */
-  private playingFrameCount = 0;
-  private readonly PLAYING_GRACE_FRAMES = 16; // ~4s at 4 reads/sec — skips FIGHT! overlay
-  /** KO confirmation: how many consecutive frames the loser stayed ≤ KO_THRESHOLD. */
-  private koConfirmFrames = 0;
-  private readonly KO_CONFIRM_REQUIRED = 4;  // ~2s at 2 fps
-  /** New-round confirmation: how many consecutive frames both bars stayed > 80%. */
-  private newRoundConfirmFrames = 0;
-  private readonly NEW_ROUND_CONFIRM_REQUIRED = 5;  // ~2.5s at 2 fps
-  /** Time-over confirmation: how many consecutive frames the OCR timer stayed at 0
-   *  while both players are alive. Prevents false positives from OCR flicker. */
-  private timeOverConfirmFrames = 0;
-  private readonly TIME_OVER_CONFIRM_REQUIRED = 3;  // ~1.5s at 2 fps
+  /** Fallback health-heuristic warmup (non-loss-counter RAM games). */
+  private healthDetectionArmed = false;
+  private healthStableFrames = 0;
+  private healthStableFramesHealthy = 0;
+  /** KO cooldown frames for the fallback health heuristic. */
+  private koCooldownFrames = 0;
+  // ── Pixel-based detection (SFA2, SNES, etc.) ──
+  /** Pixel-match analyzer for the current ROM (null = RAM-based detection). */
+  private pixelAnalyzer: PixelMatchAnalyzer | null = null;
   /** UDP socket for reading health directly from RetroArch core memory via READ_CORE_RAM. */
   private healthUdp: Socket | null = null;
   /** Pending GET_STATUS resolvers, settled by the healthUdp message handler when RetroArch
@@ -443,9 +325,10 @@ export class GameRunner extends EventEmitter {
       this.healthMemMap = ramConfig;
     }
     // Look up the per-ROM pixel detection config (only used when no RAM map available).
-    this.pixelConfig = getPixelConfig(this.rom);
-    if (this.pixelConfig) {
-      console.log(`[game-runner] 🎯 Pixel config loaded for ${this.rom}: P1 x=${this.pixelConfig.p1StartX}-${this.pixelConfig.p1EndX} P2 x=${this.pixelConfig.p2StartX}-${this.pixelConfig.p2EndX} wins=${this.pixelConfig.winsNeeded} stripe y=${this.pixelConfig.stripeY} h=${this.pixelConfig.stripeH}${this.pixelConfig.timer ? " ⏱️timer" : ""}`);
+    const pixelConfig = getPixelConfig(this.rom);
+    if (pixelConfig) {
+      this.pixelAnalyzer = new PixelMatchAnalyzer(pixelConfig);
+      console.log(`[game-runner] 🎯 Pixel analyzer initialized for ${this.rom}: P1 x=${pixelConfig.p1StartX}-${pixelConfig.p1EndX} P2 x=${pixelConfig.p2StartX}-${pixelConfig.p2EndX} wins=${pixelConfig.winsNeeded} stripe y=${pixelConfig.stripeY} h=${pixelConfig.stripeH}${pixelConfig.timer ? " ⏱️timer" : ""}`);
     }
   }
 
@@ -522,9 +405,32 @@ export class GameRunner extends EventEmitter {
     }
     if (this.healthMemMap) {
       this.startMemoryHealthReader();
-    } else {
+    } else if (this.pixelAnalyzer) {
       console.log(`[game-runner] 🧠 No memory map for ${this.rom}, using pixel analysis`);
+
+      // Proxy events from PixelMatchAnalyzer → GameRunner, augmenting with char info.
+      this.pixelAnalyzer.on("roundResult", (evt: RoundResultEvent) => {
+        // Sync shared state from the analyzer's event
+        this.p1Losses = evt.p1Losses;
+        this.p2Losses = evt.p2Losses;
+        this.koDetected = true;
+        // Re-emit with any available char info (empty for pixel-only games like SFA2)
+        this.emit("roundResult", { ...evt, ...this.charInfo() });
+      });
+
+      this.pixelAnalyzer.on("matchEnd", (evt: MatchEndEvent) => {
+        this.p1Losses = evt.p1Losses;
+        this.p2Losses = evt.p2Losses;
+        this.matchEnded = true;
+        this.matchNumber = evt.matchNumber;
+        this.roundNumber = evt.totalRounds;
+        this.matchPerfectKos = evt.perfectKos;
+        this.emit("matchEnd", { ...evt, ...this.charInfo(), ...this.matchMeta() });
+      });
+
       this.startHealthBarCapture();
+    } else {
+      console.log(`[game-runner] 🧠 No detection method available for ${this.rom}`);
     }
 
     return { width: resolution.w, height: resolution.h };
@@ -536,16 +442,18 @@ export class GameRunner extends EventEmitter {
 
   /**
    * Start an ffmpeg process that captures a thin horizontal stripe at the
-   * top of the screen (where KOF '98 health bars are) at 2 fps.
-   * Raw RGB24 pixels are parsed to detect health bar presence/absence.
+   * top of the screen (where health bars are) at 2 fps.
+   * Raw RGB24 pixels are forwarded to PixelMatchAnalyzer for processing.
    */
   private startHealthBarCapture(): void {
+    const pixelConfig = getPixelConfig(this.rom);
+    if (!pixelConfig) return;
+
     this.displayW = (SYSTEM_RESOLUTIONS[this.system]?.w ?? 320) * UPSCALE;
     this.displayH = (SYSTEM_RESOLUTIONS[this.system]?.h ?? 224) * UPSCALE;
 
-    // Capture a stripe where health bars are (from per-ROM config or system fallback).
-    const stripeY = this.pixelConfig?.stripeY ?? (this.system === "snes" ? 110 : Math.floor(this.displayH * 0.04));
-    const stripeH = this.pixelConfig?.stripeH ?? (this.system === "snes" ? 24 : 10);
+    const stripeY = pixelConfig.stripeY;
+    const stripeH = pixelConfig.stripeH;
 
     try {
       this.healthFfmpeg = spawn("ffmpeg", [
@@ -568,7 +476,7 @@ export class GameRunner extends EventEmitter {
         while (this.healthFrameBuf.length >= frameSize) {
           const frame = this.healthFrameBuf.subarray(0, frameSize);
           this.healthFrameBuf = this.healthFrameBuf.subarray(frameSize);
-          this.analyzeHealthFrame(frame, this.displayW, stripeH);
+          this.pixelAnalyzer?.processFrame(frame, this.displayW, stripeH);
         }
         // Safety: prevent unbounded buffer growth
         if (this.healthFrameBuf.length > frameSize * 3) {
@@ -581,6 +489,7 @@ export class GameRunner extends EventEmitter {
           console.warn("[game-runner] 🧠 Health bar ffmpeg error:", err.message);
         }
         this.healthPollErrorCount++;
+        this.pixelAnalyzer?.signalError();
       });
 
       console.log(`[game-runner] 🧠 Health bar capture started: ${this.displayW}x${stripeH} at y=${stripeY}`);
@@ -1684,7 +1593,7 @@ export class GameRunner extends EventEmitter {
 
     // ── Check match end ─────────────────────────────────────────
     // Wins needed: per-ROM config, system default, or 3 as ultimate fallback.
-    const winsNeeded = this.pixelConfig?.winsNeeded ?? (this.system === "snes" ? 2 : 3);
+    const winsNeeded = getPixelConfig(this.rom)?.winsNeeded ?? (this.system === "snes" ? 2 : 3);
     if (!this.matchEnded && (this.p1Losses >= winsNeeded || this.p2Losses >= winsNeeded)) {
       this.matchEnded = true;
       this.matchNumber++;
@@ -1710,493 +1619,16 @@ export class GameRunner extends EventEmitter {
     this.previousP2Health = p2Health;
   }
 
-  // ── Rolling average helper (median of last N readings) ────────
-  /** Median of the health history ring buffer — robust to outlier frames
-   *  (hit flashes, visual effects) that would otherwise cause false KOs. */
-  private getSmoothedHealth(history: number[]): number {
-    if (history.length === 0) return 0;
-    const sorted = [...history].sort((a, b) => a - b);
-    const mid = Math.floor(sorted.length / 2);
-    return sorted.length % 2 === 0
-      ? (sorted[mid - 1] + sorted[mid]) / 2
-      : sorted[mid];
-  }
-
-  /** Analyze a raw RGB24 frame of the health bar stripe.
-   *
-   *  Refactored (2026-07-13) with four robustness improvements:
-   *  1. Color-saturation detection instead of raw brightness (R+G+B > 240)
-   *  2. Column-scan bar-length measurement instead of pixel counting
-   *  3. Formal GamePhase state machine — every transition needs multi-frame evidence
-   *  4. Median-of-5 rolling average to filter hit flashes */
-  private analyzeHealthFrame(frame: Buffer, width: number, height: number): void {
-    if (!this.running || this.matchEnded) return;
-    if (this.healthPollErrorCount >= 10) return;
-    this.healthPollErrorCount = 0;
-
-    // ── Define P1/P2 health bar regions (from per-ROM config, or system fallback) ──
-    let p1StartX: number, p1EndX: number, p2StartX: number, p2EndX: number;
-    if (this.pixelConfig) {
-      p1StartX = this.pixelConfig.p1StartX; p1EndX = this.pixelConfig.p1EndX;
-      p2StartX = this.pixelConfig.p2StartX; p2EndX = this.pixelConfig.p2EndX;
-    } else if (this.system === "snes") {
-      p1StartX = 70;  p1EndX = 310;
-      p2StartX = 450; p2EndX = 768;
-    } else {
-      p1StartX = 0;                   p1EndX = Math.floor(width / 2);
-      p2StartX = Math.floor(width / 2); p2EndX = width;
-    }
-
-    // ── Measure bar extent (column scan) then normalize ──────────
-    const p1BarEnd = this.measureBarEndX(frame, width, p1StartX, 0, p1EndX - p1StartX, height);
-    const p2BarEnd = this.measureBarEndX(frame, width, p2StartX, 0, p2EndX - p2StartX, height);
-
-    const regionW1 = p1EndX - p1StartX;
-    const regionW2 = p2EndX - p2StartX;
-    // Use calibrated full-bar width if available, else fall back to region width.
-    // During WARMUP, fullBarWidth is 0 so we use region width as a rough approximation.
-    const p1FullW = this.p1FullBarWidth > 0 ? this.p1FullBarWidth : regionW1;
-    const p2FullW = this.p2FullBarWidth > 0 ? this.p2FullBarWidth : regionW2;
-
-    const rawP1 = Math.min(100, Math.round(((p1BarEnd - p1StartX) / Math.max(1, p1FullW)) * 100));
-    const rawP2 = Math.min(100, Math.round(((p2BarEnd - p2StartX) / Math.max(1, p2FullW)) * 100));
-
-    // ── Rolling average ──────────────────────────────────────────
-    this.healthHistoryP1.push(rawP1);
-    this.healthHistoryP2.push(rawP2);
-    if (this.healthHistoryP1.length > this.HEALTH_HISTORY_SIZE) this.healthHistoryP1.shift();
-    if (this.healthHistoryP2.length > this.HEALTH_HISTORY_SIZE) this.healthHistoryP2.shift();
-
-    const p1Health = Math.round(this.getSmoothedHealth(this.healthHistoryP1));
-    const p2Health = Math.round(this.getSmoothedHealth(this.healthHistoryP2));
-
-    // ── Track round min health (for perfect KO detection) ─────────
-    if (this.gamePhase === GamePhase.PLAYING) {
-      if (p1Health > 0) this.roundP1MinHealth = Math.min(this.roundP1MinHealth, p1Health);
-      if (p2Health > 0) this.roundP2MinHealth = Math.min(this.roundP2MinHealth, p2Health);
-    }
-
-    // ── Timer digit recognition (only if this ROM has timer templates) ──
-    if (this.pixelConfig?.timer && this.gamePhase !== GamePhase.WARMUP) {
-      const timerValue = this.readTimerFromFrame(frame, width, height);
-      this.processTimerValue(timerValue);
-    }
-
-    // ── State machine ────────────────────────────────────────────
-    const KO_THRESHOLD = 2;       // health ≤ this = KO'd
-    const KO_RECOVERY = 5;        // health > this after KO_PENDING = false alarm
-    const NEW_ROUND_HEALTH = 80;  // both bars ≥ this = new round
-    const WARMUP_HEALTHY = 65;    // health ≥ this = "healthy" for warmup counting
-    const WARMUP_FRAMES = this.fastWarmup ? 8 : 24;
-    const WARMUP_MIN_RATIO = 0.65;
-    const PERFECT_HEALTH = 95;
-
-    switch (this.gamePhase) {
-
-      case GamePhase.WARMUP: {
-        // Calibrate full-bar width: track the max measured bar extent.
-        // We do this during warmup when both players should be at full health.
-        const p1Extent = p1BarEnd - p1StartX;
-        const p2Extent = p2BarEnd - p2StartX;
-        if (p1Extent > this.p1FullBarWidth) this.p1FullBarWidth = p1Extent;
-        if (p2Extent > this.p2FullBarWidth) this.p2FullBarWidth = p2Extent;
-
-        // Count healthy frames for the warmup window
-        this.healthStableFrames++;
-        if (rawP1 >= WARMUP_HEALTHY && rawP2 >= WARMUP_HEALTHY) {
-          this.healthStableFramesHealthy++;
-        }
-
-        if (this.healthStableFrames >= WARMUP_FRAMES) {
-          const ratio = this.healthStableFramesHealthy / this.healthStableFrames;
-          if (ratio >= WARMUP_MIN_RATIO) {
-            this.gamePhase = GamePhase.PLAYING;
-            this.playingFrameCount = 0; // reset grace period
-            this.healthDetectionArmed = true;
-            this.fastWarmup = false;
-            console.log(`[game-runner] ${this.readerTag} 🎮 Phase: WARMUP → PLAYING (${this.healthStableFramesHealthy}/${this.healthStableFrames} healthy, ${(ratio * 100).toFixed(0)}%, fullBarW P1=${this.p1FullBarWidth} P2=${this.p2FullBarWidth})`);
-            if (!this.rosterScanned) { this.rosterScanned = true; this.scanTeamRoster(); }
-          } else {
-            // Slide the window: keep oldest 50%
-            const keep = Math.floor(WARMUP_FRAMES * 0.5);
-            this.healthStableFrames = keep;
-            this.healthStableFramesHealthy = Math.floor(this.healthStableFramesHealthy * (keep / (WARMUP_FRAMES + 1)));
-            console.log(`[game-runner] ${this.readerTag} 🎮 Warmup: ${(ratio * 100).toFixed(0)}% < ${(WARMUP_MIN_RATIO * 100).toFixed(0)}% — sliding window`);
-          }
-        } else if (this.healthStableFrames > 0 && this.healthStableFrames % 8 === 0) {
-          console.log(`[game-runner] ${this.readerTag} 🎮 Warmup: ${this.healthStableFrames}/${WARMUP_FRAMES} (${this.healthStableFramesHealthy} healthy, barW P1=${this.p1FullBarWidth} P2=${this.p2FullBarWidth})`);
-        }
-        break;
-      }
-
-      case GamePhase.PLAYING: {
-        this.playingFrameCount++;
-
-        // ── Grace period: ignore all KO/time-over signals for the first N frames ──
-        // The "FIGHT!" overlay + round-start screen transition can cause both
-        // health bars to momentarily read as 0%. A real KO can't happen before
-        // any damage has been dealt — skip this window entirely.
-        if (this.playingFrameCount <= this.PLAYING_GRACE_FRAMES) break;
-
-        const p1Down = p1Health <= KO_THRESHOLD;
-        const p2Down = p2Health <= KO_THRESHOLD;
-
-        // ── Simultaneous double-drop guard ──
-        // Both players hitting 0% at the exact same time is a screen transition
-        // (e.g. "ROUND 2" banner, super-freeze flash), never a real double KO.
-        // In actual play, only ONE player's bar empties at a time.
-        if (p1Down && p2Down) break;
-
-        // ── Time-over detection (timer expired with both players alive) ──
-        // When the OCR timer reads a stable 0 and neither player is KO'd,
-        // the round ended by time-out. Compare remaining health: higher wins,
-        // equal = draw. Multi-frame confirmation prevents OCR flicker false-
-        // positives (the timer digit can briefly read 0 during screen flash).
-        if (!p1Down && !p2Down && this.lastTimerValue === 0) {
-          this.timeOverConfirmFrames++;
-          if (this.timeOverConfirmFrames >= this.TIME_OVER_CONFIRM_REQUIRED) {
-            // TIME OVER confirmed — determine winner by remaining health
-            if (p1Health > p2Health) {
-              this.p2Losses++;
-              this.roundNumber++;
-              console.log(`[game-runner] ${this.readerTag} ⏱️ TIME OVER! P1 wins (health P1=${p1Health}% > P2=${p2Health}%). Score: P1=${this.p1Losses} P2=${this.p2Losses}`);
-              this.emit("roundResult", { loser: 2, winner: 1, p1Losses: this.p1Losses, p2Losses: this.p2Losses, koType: "timeout", ...this.charInfo() });
-            } else if (p2Health > p1Health) {
-              this.p1Losses++;
-              this.roundNumber++;
-              console.log(`[game-runner] ${this.readerTag} ⏱️ TIME OVER! P2 wins (health P2=${p2Health}% > P1=${p1Health}%). Score: P1=${this.p1Losses} P2=${this.p2Losses}`);
-              this.emit("roundResult", { loser: 1, winner: 2, p1Losses: this.p1Losses, p2Losses: this.p2Losses, koType: "timeout", ...this.charInfo() });
-            } else {
-              // Equal remaining health → DRAW
-              this.p1Losses++;
-              this.p2Losses++;
-              this.roundNumber++;
-              console.log(`[game-runner] ${this.readerTag} ⏱️ TIME OVER DRAW! Equal health (P1=${p1Health}% P2=${p2Health}%). Score: P1=${this.p1Losses} P2=${this.p2Losses}`);
-              this.emit("roundResult", { loser: 0, winner: 0, p1Losses: this.p1Losses, p2Losses: this.p2Losses, koType: "draw", ...this.charInfo() });
-            }
-            this.gamePhase = GamePhase.KO_CONFIRMED;
-            this.koDetected = true;
-            this.newRoundConfirmFrames = 0;
-            break;
-          }
-        } else {
-          this.timeOverConfirmFrames = 0;
-        }
-
-        if (p1Down || p2Down) {
-          this.gamePhase = GamePhase.KO_PENDING;
-          this.koConfirmFrames = 1;
-          console.log(`[game-runner] ${this.readerTag} 🎮 Phase: PLAYING → KO_PENDING (P1=${p1Health}% P2=${p2Health}%)`);
-        }
-        break;
-      }
-
-      case GamePhase.KO_PENDING: {
-        const p1Down = p1Health <= KO_THRESHOLD;
-        const p2Down = p2Health <= KO_THRESHOLD;
-
-        if (p1Down || p2Down) {
-          this.koConfirmFrames++;
-          if (this.koConfirmFrames >= this.KO_CONFIRM_REQUIRED) {
-            // KO confirmed — determine winner
-            const p1Lost = p1Down && !p2Down;  // P1 KO'd alone
-            const p2Lost = p2Down && !p1Down;  // P2 KO'd alone
-            const draw = p1Down && p2Down;      // both KO'd
-            const p1WinsRound = p2Lost || (draw && this.previousP1Health > this.previousP2Health);
-            const p2WinsRound = p1Lost || (draw && this.previousP2Health > this.previousP1Health);
-
-            this.gamePhase = GamePhase.KO_CONFIRMED;
-            this.koDetected = true;
-            this.newRoundConfirmFrames = 0;
-
-            if (draw && !p1WinsRound && !p2WinsRound) {
-              // True draw — both eliminated simultaneously with equal health
-              this.p1Losses++;
-              this.p2Losses++;
-              this.roundNumber++;
-              console.log(`[game-runner] ${this.readerTag} 🎮 KO_CONFIRMED: DRAW! P1=${p1Health}% P2=${p2Health}% Score: P1=${this.p1Losses} P2=${this.p2Losses}`);
-              this.emit("roundResult", { loser: 0, winner: 0, p1Losses: this.p1Losses, p2Losses: this.p2Losses, koType: "draw", ...this.charInfo() });
-            } else if (p1WinsRound) {
-              this.p2Losses++;
-              this.roundNumber++;
-              const koType = (this.roundP1MinHealth >= PERFECT_HEALTH) ? "perfect" : "normal";
-              if (koType === "perfect") this.matchPerfectKos++;
-              this.creditRoundWin(1);
-              console.log(`[game-runner] ${this.readerTag} 🎮 KO_CONFIRMED: P2 KO'd! P1 wins (${koType}). P1=${p1Health}% P2=${p2Health}% minP1=${this.roundP1MinHealth}% Score: P1=${this.p1Losses} P2=${this.p2Losses}`);
-              this.emit("roundResult", { loser: 2, winner: 1, p1Losses: this.p1Losses, p2Losses: this.p2Losses, koType, ...this.charInfo() });
-            } else if (p2WinsRound) {
-              this.p1Losses++;
-              this.roundNumber++;
-              const koType = (this.roundP2MinHealth >= PERFECT_HEALTH) ? "perfect" : "normal";
-              if (koType === "perfect") this.matchPerfectKos++;
-              this.creditRoundWin(2);
-              console.log(`[game-runner] ${this.readerTag} 🎮 KO_CONFIRMED: P1 KO'd! P2 wins (${koType}). P1=${p1Health}% P2=${p2Health}% minP2=${this.roundP2MinHealth}% Score: P1=${this.p1Losses} P2=${this.p2Losses}`);
-              this.emit("roundResult", { loser: 1, winner: 2, p1Losses: this.p1Losses, p2Losses: this.p2Losses, koType, ...this.charInfo() });
-            }
-          } else {
-            console.log(`[game-runner] ${this.readerTag} 🎮 KO_PENDING: ${this.koConfirmFrames}/${this.KO_CONFIRM_REQUIRED} (P1=${p1Health}% P2=${p2Health}%)`);
-          }
-        } else {
-          // Both recovered — false alarm (hit flash, visual effect)
-          console.log(`[game-runner] ${this.readerTag} 🎮 Phase: KO_PENDING → PLAYING (false alarm — P1=${p1Health}% P2=${p2Health}%)`);
-          this.gamePhase = GamePhase.PLAYING;
-          this.koConfirmFrames = 0;
-        }
-        break;
-      }
-
-      case GamePhase.KO_CONFIRMED: {
-        // Wait for both health bars to come back (new round)
-        const winsNeeded = this.pixelConfig?.winsNeeded ?? (this.system === "snes" ? 2 : 3);
-        if (this.p1Losses >= winsNeeded || this.p2Losses >= winsNeeded) {
-          this.gamePhase = GamePhase.MATCH_END;
-          this.matchEnded = true;
-          this.matchNumber++;
-          const winner = this.p1Losses >= winsNeeded ? 2 : 1;
-          const loser = winner === 1 ? 2 : 1;
-          console.log(`[game-runner] ${this.readerTag} 🎮 Phase: KO_CONFIRMED → MATCH_END. Winner: P${winner} Score: P1=${this.p1Losses} P2=${this.p2Losses}`);
-          this.emit("matchEnd", { winner, loser, p1Losses: this.p1Losses, p2Losses: this.p2Losses, matchNumber: this.matchNumber, totalRounds: this.roundNumber, perfectKos: this.matchPerfectKos, ...this.charInfo(), ...this.matchMeta() });
-          break;
-        }
-
-        if (p1Health >= NEW_ROUND_HEALTH && p2Health >= NEW_ROUND_HEALTH) {
-          this.newRoundConfirmFrames++;
-          if (this.newRoundConfirmFrames >= this.NEW_ROUND_CONFIRM_REQUIRED) {
-            this.gamePhase = GamePhase.PLAYING;
-            this.playingFrameCount = 0; // reset grace period for new round
-            this.koDetected = false;
-            this.koConfirmFrames = 0;
-            this.newRoundConfirmFrames = 0;
-            this.roundP1MinHealth = 100;
-            this.roundP2MinHealth = 100;
-            console.log(`[game-runner] ${this.readerTag} 🎮 Phase: KO_CONFIRMED → PLAYING (new round). P1=${p1Health}% P2=${p2Health}% Score: P1=${this.p1Losses} P2=${this.p2Losses}`);
-          }
-        } else {
-          this.newRoundConfirmFrames = 0; // reset if bars drop again
-        }
-        break;
-      }
-
-      case GamePhase.MATCH_END:
-        // Nothing to do — matchEnd already emitted
-        break;
-    }
-
-    // Update previous values for the next frame
-    this.previousP1Health = p1Health;
-    this.previousP2Health = p2Health;
-  }
-
-    /** Check if a pixel belongs to a health bar by saturation, not raw brightness.
-   *  Health bars are colored (yellow/green/red) — they have significant
-   *  channel variance. Gray/white UI text, timer digits, and dark background
-   *  all have low saturation. This is robust to shaders, gamma, and bloom. */
-  private isHealthPixel(r: number, g: number, b: number): boolean {
-    const maxC = Math.max(r, g, b);
-    const minC = Math.min(r, g, b);
-    return (maxC - minC) > 30   // has color saturation (not gray/white UI)
-        && maxC > 80;           // not too dark
-  }
-
-  /**
-   * Measure the health bar extent by scanning columns left-to-right.
-   * Returns the X position of the rightmost column that still has enough
-   * health-colored pixels.
-   *
-   * This directly answers "how long is the bar?" — no pixel counting,
-   * no dynamic calibration, no brightness threshold fragility.
-   */
-  private measureBarEndX(
-    frame: Buffer, frameWidth: number,
-    startX: number, startY: number, regionW: number, regionH: number,
-  ): number {
-    const MIN_COL_PIXELS = Math.ceil(regionH * 0.33); // ~8 out of 24 for SNES
-    let lastFilledX = startX; // default to bar-start if nothing found
-
-    for (let x = startX; x < startX + regionW; x++) {
-      let colCount = 0;
-      for (let y = startY; y < startY + regionH; y++) {
-        const idx = (y * frameWidth + x) * 3;
-        const r = frame[idx] ?? 0;
-        const g = frame[idx + 1] ?? 0;
-        const b = frame[idx + 2] ?? 0;
-        if (this.isHealthPixel(r, g, b)) colCount++;
-      }
-      if (colCount >= MIN_COL_PIXELS) {
-        lastFilledX = x;
-      }
-    }
-    return lastFilledX;
-  }
-
-  /** Recognize a single timer digit from a cropped region of the frame.
-   *  Downsamples the region to DIGIT_TEMPLATE_W×DIGIT_TEMPLATE_H,
-   *  binarizes via threshold, then compares against each template via
-   *  Hamming distance (XOR popcount). Returns the best-match digit 0-9.
-   *  @param templates — 10×12 digit bitmaps from the per-ROM config. */
-  private recognizeDigit(
-    frame: Buffer, frameWidth: number,
-    x: number, y: number, w: number, h: number,
-    templates: number[][],
-  ): number {
-    // Step 1: determine brightness threshold (median of the region)
-    const samples: number[] = [];
-    for (let row = 0; row < h; row += 4) {
-      for (let col = 0; col < w; col += 4) {
-        const idx = ((y + row) * frameWidth + (x + col)) * 3;
-        const r = frame[idx] ?? 0, g = frame[idx + 1] ?? 0, b = frame[idx + 2] ?? 0;
-        samples.push((r + g + b) / 3);
-      }
-    }
-    samples.sort((a, b) => a - b);
-    const threshold = samples[Math.floor(samples.length * 0.6)] + 20; // upper 40% are "lit"
-
-    // Step 2: downsample to template size
-    const cellW = w / DIGIT_TEMPLATE_W;
-    const cellH = h / DIGIT_TEMPLATE_H;
-    const bits: number[] = [];
-    for (let tr = 0; tr < DIGIT_TEMPLATE_H; tr++) {
-      let rowBits = 0;
-      for (let tc = 0; tc < DIGIT_TEMPLATE_W; tc++) {
-        // Average brightness of this cell
-        let sum = 0, count = 0;
-        const sx = Math.round(x + tc * cellW);
-        const sy = Math.round(y + tr * cellH);
-        const ex = Math.round(x + (tc + 1) * cellW);
-        const ey = Math.round(y + (tr + 1) * cellH);
-        for (let py = sy; py < ey && py < y + h; py++) {
-          for (let px = sx; px < ex && px < x + w; px++) {
-            const idx = (py * frameWidth + px) * 3;
-            sum += (frame[idx] ?? 0) + (frame[idx + 1] ?? 0) + (frame[idx + 2] ?? 0);
-            count += 3;
-          }
-        }
-        const avg = count > 0 ? sum / count : 0;
-        if (avg > threshold) rowBits |= (1 << (7 - tc));
-      }
-      bits.push(rowBits);
-    }
-
-    // Step 3: Hamming distance against each template
-    let bestDigit = 0;
-    let bestDist = Infinity;
-    for (let d = 0; d < 10; d++) {
-      const tmpl = templates[d];
-      if (!tmpl) continue;
-      let dist = 0;
-      for (let r = 0; r < DIGIT_TEMPLATE_H; r++) {
-        const xor = (bits[r] ?? 0) ^ (tmpl[r] ?? 0);
-        // popcount
-        let v = xor;
-        while (v) { dist++; v &= v - 1; }
-      }
-      if (dist < bestDist) { bestDist = dist; bestDigit = d; }
-    }
-    return bestDigit;
-  }
-
-  /**
-   * Extract and recognize the two timer digits from the health bar stripe.
-   * Uses the per-ROM PixelGameConfig.timer for coordinates and templates.
-   * Returns the timer value (0-99) or -1 if unrecognizable.
-   */
-  private readTimerFromFrame(frame: Buffer, width: number, height: number): number {
-    const t = this.pixelConfig?.timer;
-    if (!t) return -1;
-
-    const DIGIT_W = t.digitW;
-    const DIGIT_H = t.digitH;
-    const leftX = t.leftDigitX;
-    const rightX = t.rightDigitX;
-    const y = Math.max(0, Math.floor((height - DIGIT_H) / 2)); // center vertically in stripe
-    const minRatio = t.minBrightRatio;
-
-    // Basic guard: check if the region has enough bright pixels
-    const checkBright = (cx: number): boolean => {
-      let bright = 0, total = 0;
-      for (let row = 0; row < DIGIT_H && (y + row) < height; row++) {
-        for (let col = 0; col < DIGIT_W && (cx + col) < width; col++) {
-          const idx = ((y + row) * width + (cx + col)) * 3;
-          const r = frame[idx] ?? 0, g = frame[idx + 1] ?? 0, b = frame[idx + 2] ?? 0;
-          if ((r + g + b) / 3 > 80) bright++;
-          total++;
-        }
-      }
-      return total > 0 && bright / total > minRatio;
-    };
-
-    if (!checkBright(leftX) || !checkBright(rightX)) return -1;
-
-    const left = this.recognizeDigit(frame, width, leftX, y, DIGIT_W, DIGIT_H, t.digits);
-    const right = this.recognizeDigit(frame, width, rightX, y, DIGIT_W, DIGIT_H, t.digits);
-    return left * 10 + right;
-  }
-
-  // ── Timer temporal validation ──────────────────────────────────
-  /** Process a new timer reading. Only emits on stable, valid transitions. */
-  private processTimerValue(rawValue: number): void {
-    if (rawValue < 0 || rawValue > 99) {
-      this.timerStableFrames = 0;
-      return;
-    }
-
-    if (rawValue === this.lastTimerValue) {
-      this.timerStableFrames++;
-      return; // already reported
-    }
-
-    // New value — validate temporal constraints
-    // Timer only decreases by 1 (or resets to 99 for new round)
-    const isValidDecrease = rawValue === this.lastTimerValue - 1 && this.lastTimerValue >= 0;
-    const isNewRoundReset = rawValue === 99 && this.lastTimerValue >= 0;
-
-    if (isValidDecrease || isNewRoundReset || this.lastTimerValue < 0) {
-      this.timerStableFrames++;
-      if (this.timerStableFrames >= this.TIMER_STABLE_REQUIRED) {
-        const prevTimer = this.lastTimerValue;
-        this.lastTimerValue = rawValue;
-        this.timerStableFrames = 0;
-        if (rawValue === 99 && prevTimer !== 99) {
-          console.log(`[game-runner] ${this.readerTag} ⏱️ Timer: ${rawValue} (new round reset, was ${prevTimer})`);
-        }
-        // Emit timer value for round time tracking
-        // (can be used later for time-over detection)
-      }
-    } else {
-      // Invalid transition — ignore (blinking, visual artifact)
-      this.timerStableFrames = 0;
-    }
-  }
-
-  /** Reset health bar warmup counters. Call when combat actually starts so the warmup
-   *  only sees combat frames (not title/menu/char-select garbage). */
+  /** Reset health bar warmup counters. Delegates to PixelMatchAnalyzer for pixel-based games.
+   *  For KOF98 (RAM-based), this is a no-op — the memory reader handles its own state. */
   resetHealthWarmup(): void {
-    this.healthDetectionArmed = false;
-    this.healthStableFrames = 0;
-    this.healthStableFramesHealthy = 0;
     this.healthPollErrorCount = 0;
-    // Reset pixel baseline: the previous calibration happened during char select /
-    // menu screens whose stripe has different (usually brighter) content than the
-    // real health bars. Recalibrating on actual combat frames gives correct ~100%
-    // readings for full health, instead of the ~66% we saw before this fix.
-    this.p1MaxPixels = 0;
-    this.p2MaxPixels = 0;
-    // Reset state-machine pixel detection (SFA2 / SNES)
-    this.gamePhase = GamePhase.WARMUP;
-    this.playingFrameCount = 0;
-    this.p1FullBarWidth = 0;
-    this.p2FullBarWidth = 0;
-    this.healthHistoryP1 = [];
-    this.healthHistoryP2 = [];
-    this.koConfirmFrames = 0;
-    this.newRoundConfirmFrames = 0;
-    this.timeOverConfirmFrames = 0;
-    // Fast warmup: shorter window since we already validated the stripe is readable.
     this.fastWarmup = true;
-    // Reset timer tracking
-    this.lastTimerValue = -1;
-    this.timerStableFrames = 0;
-    console.log("[game-runner] 🧠 Health warmup reset (combat starting, pixel baseline cleared)");
+    // Delegate to pixel analyzer for state-machine games (SFA2, SNES, etc.)
+    if (this.pixelAnalyzer) {
+      this.pixelAnalyzer.reset(true);
+    }
+    console.log("[game-runner] 🧠 Health warmup reset (combat starting)");
   }
 
   /** Start the debug health log timer. Actual detection runs continuously via TCP health reader.
@@ -2218,7 +1650,8 @@ export class GameRunner extends EventEmitter {
       if (this.previousP1Health >= 0) {
         const p1Name = KOF98_CHARACTERS[this.memP1Char] || "?";
         const p2Name = KOF98_CHARACTERS[this.memP2Char] || "?";
-        const pixelTimer = this.lastTimerValue >= 0 ? ` ⏱️pix=${this.lastTimerValue}` : "";
+        const lastTimer = this.pixelAnalyzer?.getTimerValue() ?? -1;
+        const pixelTimer = lastTimer >= 0 ? ` ⏱️pix=${lastTimer}` : "";
         console.log(`[game-runner] 🧠 Health: P1=${this.previousP1Health}% ${p1Name} P2=${this.previousP2Health}% ${p2Name} ⏱️A83A=${this.memTimer}(16b=${this.memTimer16}) 85D2=${this.memTimerAlt}${pixelTimer} ko=${this.koDetected} losses: P1=${this.p1Losses} P2=${this.p2Losses}`);
       }
     }, 10000);
@@ -2961,15 +2394,8 @@ export class GameRunner extends EventEmitter {
     this.healthStableFrames = 0;
     this.healthStableFramesHealthy = 0;
     this.fastWarmup = true;
-    // Reset state-machine pixel detection
-    this.gamePhase = GamePhase.WARMUP;
-    this.playingFrameCount = 0;
-    this.p1FullBarWidth = 0;
-    this.p2FullBarWidth = 0;
-    this.healthHistoryP1 = [];
-    this.healthHistoryP2 = [];
-    this.koConfirmFrames = 0;
-    this.newRoundConfirmFrames = 0;
+    // Reset pixel state-machine detection (delegates to PixelMatchAnalyzer)
+    this.pixelAnalyzer?.reset(true);
     // Resume LAST, once all scoring/team state is clean and re-armed. Await convergence so
     // callers (ws-handler) know the game is actually running before injecting coin/START.
     await this.resume();
