@@ -27,3 +27,15 @@
 - Turso (libsql) for serverless DB
 - JWT auth via `jose` + `bcryptjs`
 - PWA via `@ducanh2912/next-pwa`
+
+## 📝 Documentation & Memory (CRITICAL)
+
+**À chaque modification confirmée** (que le code soit commité/pushé ou non) :
+
+1. **Mettre à jour `D:\Skyplay\SKYPLAY-PROJECT-STATUS.md`** — le document d'état global du projet. Chaque section doit refléter l'état réel actuel (✅ fait / 🔧 en cours / ❌ restant).
+
+2. **Mettre à jour les fichiers mémoire** dans `C:\Users\MOUTEN\.claude\projects\D--Skyplay\memory\` — un fichier par sujet (KOF98 RAM, SFA2, hosting, etc.). Corriger les adresses, statuts, et supprimer les doublons.
+
+3. **Mettre à jour `MEMORY.md`** (l'index) si un nouveau fichier mémoire est créé ou si le résumé d'un fichier existant change.
+
+**Règle :** ne pas attendre le push git. La doc et la mémoire doivent être à jour en permanence, même en local avec du code non commité.
