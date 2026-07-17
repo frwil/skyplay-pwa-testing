@@ -1,0 +1,484 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; max-width: 960px; margin: 0 auto; padding: 48px 32px; color: #1a1a2e; line-height: 1.7; background: #fafafa; }
+  h1 { color: #1a1a2e; border-bottom: 4px solid #2563eb; padding-bottom: 12px; font-size: 2.2em; margin-top: 0; }
+  h2 { color: #2563eb; border-bottom: 2px solid #e2e8f0; padding-bottom: 6px; margin-top: 40px; font-size: 1.5em; }
+  h3 { color: #374151; margin-top: 28px; font-size: 1.15em; }
+  h4 { color: #4b5563; margin-top: 20px; }
+  p { margin: 8px 0; }
+  code { background: #f1f5f9; padding: 2px 6px; border-radius: 4px; font-size: 0.88em; color: #1e293b; }
+  pre { background: #1e293b; color: #e2e8f0; padding: 16px 20px; border-radius: 8px; overflow-x: auto; font-size: 0.82em; line-height: 1.5; }
+  pre code { background: none; padding: 0; color: inherit; }
+  table { border-collapse: collapse; width: 100%; margin: 16px 0; font-size: 0.92em; }
+  th, td { border: 1px solid #d1d5db; padding: 7px 12px; text-align: left; vertical-align: top; }
+  th { background: #f0f4ff; font-weight: 600; color: #1e3a5f; }
+  tr:nth-child(even) td { background: #f8fafc; }
+  ul, ol { padding-left: 24px; margin: 8px 0; }
+  li { margin: 3px 0; }
+  hr { border: none; border-top: 2px solid #e2e8f0; margin: 32px 0; }
+  strong { color: #1e3a5f; }
+  a { color: #2563eb; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  blockquote { border-left: 4px solid #2563eb; margin: 16px 0; padding: 8px 20px; background: #f0f4ff; border-radius: 0 8px 8px 0; }
+  .header { text-align: center; margin-bottom: 40px; }
+  .header h1 { border: none; margin-bottom: 4px; }
+  .header p { color: #6b7280; font-size: 0.95em; }
+  .summary-grid { display: flex; gap: 12px; flex-wrap: wrap; margin: 16px 0; }
+  .summary-box { flex: 1; min-width: 180px; padding: 16px; border-radius: 10px; border: 1px solid #e2e8f0; }
+  .summary-box h3 { margin: 0 0 8px; font-size: 0.95em; }
+  .summary-box .count { font-size: 2em; font-weight: 700; }
+  .box-committed { background: #f0fdf4; border-color: #bbf7d0; } .box-committed .count { color: #16a34a; }
+  .box-wip { background: #fffbeb; border-color: #fde68a; } .box-wip .count { color: #d97706; }
+  .box-todo { background: #fef2f2; border-color: #fecaca; } .box-todo .count { color: #dc2626; }
+  .box-docs { background: #f0f4ff; border-color: #bfdbfe; } .box-docs .count { color: #2563eb; }
+</style>
+</head>
+<body>
+<div class="header">
+<h1>SKY PLAY — État d&rsquo;avancement complet</h1>
+<p>2026-07-14 &middot; Branche <code>main</code> &middot; 27 fichiers modifi&eacute;s, 20+ nouveaux</p>
+</div>
+
+<div class="summary-grid">
+<div class="summary-box box-committed">
+<h3>&#x2705; Commités</h3>
+<div class="count">85+</div>
+<div>commits depuis juin</div>
+</div>
+<div class="summary-box box-wip">
+<h3>&#x1F527; En cours (WD)</h3>
+<div class="count">~30</div>
+<div>fichiers modifiés/nouveaux</div>
+</div>
+<div class="summary-box box-todo">
+<h3>&#x274C; Reste à faire</h3>
+<div class="count">~10</div>
+<div>tâches identifiées</div>
+</div>
+<div class="summary-box box-docs">
+<h3>&#x1F4C4; Docs</h3>
+<div class="count">14</div>
+<div>memory files + status</div>
+</div>
+</div>
+
+<h1>SKY PLAY — État d'avancement complet</h1>
+
+<p><strong>Date</strong> : 2026-07-17</p>
+<p><strong>Branche</strong> : <code>main</code> — working tree en cours de commit (détection SFA2 + duel UI + DB)</p>
+<p><strong>Dernier commit</strong> : <code>170d791</code> — refactor(gameserver): extract pixel detection into separate classes</p>
+
+<hr>
+
+<h2>1. Plateforme principale (Vercel + Next.js)</h2>
+
+<p><strong>URL production</strong> : https://skyplay-testing.vercel.app</p>
+<p><strong>Projet Vercel</strong> : <code>fohom-tagne-william-franciss-projects/skyplay-testing</code></p>
+
+<h3>✅ Fait</h3>
+
+<table>
+<thead><tr><th>Composant</th><th>Statut</th><th>Description</th></tr></thead>
+<tbody>
+<tr><td>Homepage</td><td>✅ Live</td><td>Landing page avec GlowBackground, sélecteur de jeu, i18n</td></tr>
+<tr><td>Page Play</td><td>✅ Live</td><td>Émulateur NES/SNES/NeoGeo, authentification, contrôles</td></tr>
+<tr><td>Page Duel</td><td>✅ Live</td><td>Lobby, défis, combat cloud</td></tr>
+<tr><td>Page Admin</td><td>✅ Live</td><td>Administration (users, duels, settings)</td></tr>
+<tr><td>Auth JWT</td><td>✅ Live</td><td><code>jose</code> + <code>bcryptjs</code>, cookies sécurisés, fallback dev local</td></tr>
+<tr><td>Auth serveur-side (homepage)</td><td>🔧 <strong>WD</strong></td><td><code>HeaderAuth</code> + vérification JWT + lookup username — non commité</td></tr>
+<tr><td>Logout avec sessionStorage</td><td>🔧 <strong>WD</strong></td><td><code>skyplay_logged_out</code> flag — non commité</td></tr>
+</tbody></table>
+
+<h3>🔧 En cours (non commité)</h3>
+
+<ul>
+<li>HeaderAuth component sur la homepage</li>
+<li>Liens "Plateforme ↗" vers <code>sky-play-platform-gamma.vercel.app</code></li>
+<li>Logout avec garde contre le fallback dev identity</li>
+</ul>
+
+<hr>
+
+<h2>2. Système de duel</h2>
+
+<h3>2.1 Lobby & Matchmaking ✅ (commité)</h3>
+
+<table>
+<thead><tr><th>Fonctionnalité</th><th>Statut</th><th>Commit</th></tr></thead>
+<tbody>
+<tr><td>Lobby temps réel (WebSocket polling 2s)</td><td>✅</td><td><code>3c9e0a9</code></td></tr>
+<tr><td>Heartbeat + nettoyage stale entries</td><td>✅</td><td><code>3115646</code></td></tr>
+<tr><td>Un seul défi par joueur (FIFO)</td><td>✅</td><td><code>919a1fb</code></td></tr>
+<tr><td>Résolution défi mutuel (auto-accept)</td><td>✅</td><td><code>c3fe573</code></td></tr>
+<tr><td>Timeout défi 30s + auto-cancel</td><td>✅</td><td><code>cc70b69</code></td></tr>
+<tr><td>3 types de défi : Standard / XL / Fighter</td><td>✅</td><td><code>6e5819d</code></td></tr>
+<tr><td>Règles multilingues FR/EN</td><td>✅</td><td><code>6e5819d</code></td></tr>
+<tr><td>WSS URL régénérée (pas d'URL de tunnel morte)</td><td>🔧 <strong>WD</strong></td><td>Non commité</td></tr>
+<tr><td>Recovery après refresh (findActive=1)</td><td>🔧 <strong>WD</strong></td><td>Non commité</td></tr>
+<tr><td>Nettoyage intelligent (vérifie heartbeat adverse)</td><td>🔧 <strong>WD</strong></td><td>Non commité</td></tr>
+<tr><td>Filtre joueurs par pseudo</td><td>🔧 <strong>WD</strong></td><td>Non commité</td></tr>
+<tr><td>Lien d'invitation partageable</td><td>🔧 <strong>WD</strong></td><td>Non commité</td></tr>
+<tr><td>Champ "coller un lien d'invitation"</td><td>🔧 <strong>WD</strong></td><td>Non commité</td></tr>
+</tbody></table>
+
+<h3>2.2 Flow de règles ✅→🔧 (partiellement commité)</h3>
+
+<table>
+<thead><tr><th>Fonctionnalité</th><th>Statut</th><th>Notes</th></tr></thead>
+<tbody>
+<tr><td>Accept → rules_pending (ne crée plus la session)</td><td>🔧 <strong>WD</strong></td><td>Route <code>respond</code> modifiée</td></tr>
+<tr><td>Route confirm-rules</td><td>🔧 <strong>WD</strong></td><td>Nouveau fichier untracked</td></tr>
+<tr><td>Overlay règles avec checkbox</td><td>✅ Commité</td><td><code>DuelRulesOverlay.tsx</code> commit <code>821b7af</code></td></tr>
+<tr><td>Waiting opponent pour 1er confirmateur</td><td>✅ Commité</td><td>Commit <code>821b7af</code></td></tr>
+<tr><td>Notifications duel_rules_pending aux deux joueurs</td><td>🔧 <strong>WD</strong></td><td>Non commité</td></tr>
+<tr><td>Colonnes BDD (challenger/target_rules_accepted)</td><td>🔧 <strong>WD</strong></td><td>Non commité</td></tr>
+</tbody></table>
+
+<h3>2.3 Combat & Streaming vidéo</h3>
+
+<table>
+<thead><tr><th>Fonctionnalité</th><th>Statut</th><th>Notes</th></tr></thead>
+<tbody>
+<tr><td>H.264 + Opus streaming (WebCodecs)</td><td>✅</td><td><code>46ff3d6</code></td></tr>
+<tr><td>CloudAdapter (P2 cold-start, SPS/PPS/IDR)</td><td>✅</td><td>4 commits fix cloud</td></tr>
+<tr><td>VideoDecoder recreation on error (vs reset)</td><td>✅</td><td><code>60fc8b4</code></td></tr>
+<tr><td>AVCDecoderConfigurationRecord pour Chrome</td><td>✅</td><td><code>ce3ad04</code></td></tr>
+<tr><td>GOP priming (P1/P2 parity)</td><td>✅</td><td><code>59d2268</code></td></tr>
+<tr><td>vsync-synced video paint (rAF)</td><td>✅</td><td><code>2f68fbf</code></td></tr>
+<tr><td>Pause système (overlay + countdown)</td><td>🔧 <strong>WD</strong></td><td><code>DuelPauseOverlay.tsx</code> + callbacks</td></tr>
+<tr><td>Auto-rematch multi-matchs (XL/Fighter)</td><td>🔧 <strong>WD</strong></td><td><code>onAutoRematch</code>, <code>DuelScoreHUD</code></td></tr>
+<tr><td>Duel score HUD (plein écran)</td><td>🔧 <strong>WD</strong></td><td><code>DuelScoreHUD.tsx</code></td></tr>
+</tbody></table>
+
+<h3>2.4 DuelEnd & Post-match</h3>
+
+<table>
+<thead><tr><th>Fonctionnalité</th><th>Statut</th><th>Notes</th></tr></thead>
+<tbody>
+<tr><td>Abandon/forfeit (Plan B)</td><td>✅</td><td><code>6e5819d</code></td></tr>
+<tr><td>Revanche</td><td>✅</td><td><code>cc70b69</code></td></tr>
+<tr><td>Historique des duels</td><td>✅</td><td><code>c6dcf04</code></td></tr>
+<tr><td>Animations AnimatedNumber</td><td>✅</td><td><code>DuelEndOverlay</code></td></tr>
+<tr><td>Wallet privé (cache balance adverse)</td><td>✅</td><td><code>3395538</code></td></tr>
+</tbody></table>
+
+<h3>2.5 UI & Wizard</h3>
+
+<table>
+<thead><tr><th>Fonctionnalité</th><th>Statut</th><th>Notes</th></tr></thead>
+<tbody>
+<tr><td>DuelGameSelector (grille/liste)</td><td>✅ Commité</td><td><code>467400a</code></td></tr>
+<tr><td>DuelWizardStepper (3 étapes)</td><td>🔧 <strong>WD</strong></td><td>Nouveau composant</td></tr>
+<tr><td>DuelModeSelector</td><td>🔧 <strong>WD</strong></td><td>Nouveau composant</td></tr>
+<tr><td>i18n wizard/mode/controls étendu</td><td>🔧 <strong>WD</strong></td><td>Sections rules, pause, wizard, mode</td></tr>
+</tbody></table>
+
+<hr>
+
+<h2>3. Game-server (Docker RetroArch)</h2>
+
+<h3>3.1 Support système</h3>
+
+<table>
+<thead><tr><th>Système</th><th>Core</th><th>Résolution</th><th>Statut</th></tr></thead>
+<tbody>
+<tr><td>Neo Geo</td><td>fbneo_libretro.so</td><td>320×224 (3x=960×672)</td><td>✅ Stable</td></tr>
+<tr><td>PS1</td><td>pcsx_rearmed_libretro.so</td><td>640×480 (3x=1920×1440)</td><td>✅ Stable</td></tr>
+<tr><td>SNES</td><td>snes9x_libretro.so</td><td>256×224 (3x=768×672)</td><td>✅ (Docker + code)</td></tr>
+</tbody></table>
+
+<h3>3.2 Détection santé KOF98 (RAM — FBNeo) ✅</h3>
+
+<table>
+<thead><tr><th>Détection</th><th>Mécanisme</th><th>Adresse</th><th>Statut</th></tr></thead>
+<tbody>
+<tr><td>Santé P1/P2</td><td>UDP READ_CORE_RAM</td><td>0x8238 / 0x8438</td><td>✅</td></tr>
+<tr><td>Timer 16-bit</td><td>UDP fast poll</td><td>0xA83A-A83B</td><td>✅</td></tr>
+<tr><td>Perso actif</td><td>Lecture RAM</td><td>0x8256 / 0x8456</td><td>✅</td></tr>
+<tr><td>Compteur pertes (autoritaire)</td><td>Diff prev/curr</td><td>0xA859 / 0xA868</td><td>✅ Validé live</td></tr>
+<tr><td>Match end</td><td>p1Lost ≥3 ∥ p2Lost ≥3</td><td>Hardcodé</td><td>✅</td></tr>
+<tr><td>Perfect KO</td><td>Heuristique minHealth≥95%</td><td>—</td><td>✅</td></tr>
+<tr><td>Time-over</td><td>Timer >0 → 0 transition</td><td>0xA83A</td><td>✅</td></tr>
+<tr><td>Draw</td><td>Deux compteurs incrémentés</td><td>—</td><td>✅</td></tr>
+<tr><td>Équipes (3 persos)</td><td>Read + freeze</td><td>0xA84E/0xA84F/0xA851</td><td>✅</td></tr>
+<tr><td>Mode gauge ADV/EXTRA</td><td>Adresse RAM</td><td>0x821E / 0x841E</td><td>⚠️ Non validé</td></tr>
+<tr><td>Ordre sélection pick</td><td>one-shot RAM</td><td>0x15CB/0x15CA/0x15CD</td><td>✅ Capturé, non câblé overlay</td></tr>
+<tr><td>Continue/revanche</td><td>Pièce 0xF2C0 + START</td><td>UDP btn</td><td>✅</td></tr>
+<tr><td>RAM config dans DB</td><td>JSON via duel_games</td><td>—</td><td>🔧 <strong>WD</strong></td></tr>
+</tbody></table>
+
+<h3>3.3 Détection santé SFA2 (pixel — snes9x) 🔧 — sessions live 14→17/07</h3>
+
+<table>
+<thead><tr><th>Détection</th><th>Statut</th><th>Notes</th></tr></thead>
+<tbody>
+<tr><td>Capture stripe ffmpeg (y=110, h=48, scan 24 rangées)</td><td>✅</td><td><code>startHealthBarCapture()</code></td></tr>
+<tr><td>Machine à états (GamePhase)</td><td>✅</td><td>WARMUP→PLAYING→KO_PENDING→KO_CONFIRMED→MATCH_END</td></tr>
+<tr><td><strong>Mesure par comptage de colonnes</strong> (<code>measureFilledColumns</code>)</td><td>✅ Validé live</td><td>Remplace <code>measureBarEndX</code> — les barres SFA2 se vident du bord extérieur vers le centre, l'ancien scan lisait P1 à 100% en permanence</td></tr>
+<tr><td><strong>isHealthPixel v2</strong></td><td>✅ Validé live</td><td><code>maxC>120</code> + exclusion bleu-dominant — le fond de barre vide (bleu 33,49,82) passait l'ancien seuil</td></tr>
+<tr><td><strong>Recalibration fullBarW par round</strong></td><td>✅ Déployé</td><td>Début de round (frames 1-4) + différée au 1er tick timer pour le R1 (le warmup peut finir sur l'écran VS)</td></tr>
+<tr><td>Lissage médiane 5 frames + reset à la recalibration</td><td>✅</td><td><code>getSmoothedHealth()</code></td></tr>
+<tr><td>KO (seuil 2%, confirm 5 frames)</td><td>✅ Validé live</td><td></td></tr>
+<tr><td><strong>Anti-fantôme time-over</strong> (<code>roundTimerWasRunning</code>)</td><td>✅ Validé live</td><td>L'écran de résultat garde barres pleines + « 00 » figé</td></tr>
+<tr><td><strong>Anti-fantôme KO</strong> (timer-decrease liveness gate)</td><td>✅ Validé live</td><td>L'écran de victoire re-vide la barre du perdant avec un timer FIGÉ — un round n'est « live » que si le timer décroît</td></tr>
+<tr><td><strong>Garde « filet de vie »</strong></td><td>✅ Déployé</td><td>Barre ≤2% mais joueur vivant : chaque tick du timer reset la confirmation KO (un vrai KO gèle le timer)</td></tr>
+<tr><td><strong>KO rétroactif</strong> (<code>koPendingMaxTimer</code> sticky + guérison impossible)</td><td>✅ 1× validé live</td><td>Le 99 transitoire du round suivant prouve la fin du round même si les chiffres deviennent illisibles</td></tr>
+<tr><td><strong>Verdict time-over sur santés de combat</strong></td><td>✅ Validé live</td><td>Snapshot pendant timer>0 — l'écran de résultat re-remplit les barres avant la confirmation</td></tr>
+<tr><td>Draw time-over = aucun point</td><td>✅ Validé live</td><td>SFA2 rejoue le round, pas de marque</td></tr>
+<tr><td><strong>Suspension pendant char select</strong></td><td>✅ Déployé, à valider</td><td>Le compte à rebours de sélection passait pour un timer de combat → faux TIME OVER avant le match</td></tr>
+<tr><td>Perfect KO (minHealth ≥95%)</td><td>⚠️ 1× détecté live</td><td>Problème résiduel : largeur pleine barre variable (273→210 colonnes sans dégâts) — investigation en cours</td></tr>
+<tr><td>Timer OCR (template matching 8×12, seuil 160)</td><td>✅ Validé live</td><td>Décomptes complets 99→0, récupération de sauts</td></tr>
+<tr><td>Match end (winsNeeded=2) + overlay</td><td>✅ Validé live</td><td>À égalité parfaite : warn + moins de défaites gagne</td></tr>
+<tr><td>Char select joueur (grille 2×9, D-pad counting)</td><td>✅ Commité</td><td><code>3395538</code></td></tr>
+<tr><td>Xvfb persistant + nettoyage lock (entrypoint.sh)</td><td>✅ Validé</td><td>Restarts fiables, plus de warmup bloqué à 0%</td></tr>
+<tr><td>Overlay SFA2 (noms persos)</td><td>❌</td><td>Détection portraits en pause (tâches #21/#22)</td></tr>
+</tbody></table>
+
+<h3>3.4 Config → DB (Turso variables)</h3>
+
+<ul>
+<li>TURSO_DATABASE_URL + TURSO_AUTH_TOKEN ajoutés au Docker compose</li>
+<li>Permet au game-server de lire la config RAM/pixel depuis la BDD</li>
+<li>🔧 <strong>WD</strong> — pas encore utilisé par le code</li>
+</ul>
+
+<h3>3.5 Déploiement VPS</h3>
+
+<table>
+<thead><tr><th>Fichier</th><th>Statut</th></tr></thead>
+<tbody>
+<tr><td>docker-compose.prod.yml</td><td>✅</td></tr>
+<tr><td>Caddyfile (HTTPS auto + WSS)</td><td>✅</td></tr>
+<tr><td>.env.prod.example</td><td>✅</td></tr>
+<tr><td>DEPLOY-VPS.md (walkthrough complet)</td><td>✅</td></tr>
+</tbody></table>
+
+<hr>
+
+<h2>4. Base de données (Turso/libsql)</h2>
+
+<h3>4.1 Tables existantes ✅</h3>
+
+<ul>
+<li><code>users</code> — comptes joueurs</li>
+<li><code>duel_lobby</code> — heartbeat, statut joueurs</li>
+<li><code>duel_challenges</code> — défis (pending/accepted/declined/cancelled/rules_pending)</li>
+<li><code>netplay_notifications</code> — notifications temps réel</li>
+<li><code>duel_results</code> — résultats de duels</li>
+<li><code>sky_transactions</code> — transactions SKY</li>
+<li><code>cloud_rooms</code> — mapping room code → session</li>
+</ul>
+
+<h3>4.2 Nouvelles tables (🔧 WD — dans db.ts non commité)</h3>
+
+<table>
+<thead><tr><th>Table</th><th>Description</th></tr></thead>
+<tbody>
+<tr><td><code>duel_games</code></td><td>Registre de jeux (kof98, sf2, kof2002, sfa2)</td></tr>
+<tr><td><code>duel_game_modes</code></td><td>3 modes par jeu (standard/XL/fighter)</td></tr>
+<tr><td><code>duel_game_controls</code></td><td>Contrôles clavier par jeu/joueur</td></tr>
+<tr><td><code>duel_game_config_versions</code></td><td>Versioning git-like des configs</td></tr>
+</tbody></table>
+
+<h3>4.3 Nouveaux seeds (🔧 WD)</h3>
+
+<ul>
+<li>4 jeux avec cover_image, description, category</li>
+<li>KOF98 : RAM config complète en JSON + contrôles</li>
+<li>KOF2002 : RAM config basic (health/timer/mode)</li>
+<li>SF2 : contrôles 6 boutons</li>
+<li>SFA2 : en attente de config pixel</li>
+</ul>
+
+<h3>4.4 Nouveaux ALTER TABLE (🔧 WD)</h3>
+
+<ul>
+<li><code>duel_challenges</code> : mode_id, match_count, match_number, challenger_rules_accepted, target_rules_accepted</li>
+</ul>
+
+<hr>
+
+<h2>5. Économie SKY</h2>
+
+<table>
+<thead><tr><th>Fonctionnalité</th><th>Statut</th><th>Notes</th></tr></thead>
+<tbody>
+<tr><td>Balance compte</td><td>✅</td><td></td></tr>
+<tr><td>Entry fee fixe 1000 SKY</td><td>✅ → 🔧</td><td>Devient <code>DEFAULT_ENTRY_FEE</code></td></tr>
+<tr><td>Frais d'entrée par jeu/mode</td><td>🔧 <strong>WD</strong></td><td>Depuis <code>duel_games.entry_fee</code> / <code>duel_game_modes.entry_fee</code></td></tr>
+<tr><td>WINNER_SHARE (75%)</td><td>✅</td><td></td></tr>
+<tr><td>InsufficientFunds gate</td><td>✅</td><td></td></tr>
+<tr><td>Admins (unlimited SKY)</td><td>✅</td><td></td></tr>
+<tr><td>Charge au début du combat</td><td>✅</td><td>gated par <code>gameStarted</code></td></tr>
+<tr><td>Litige (remboursement / award)</td><td>✅</td><td><code>resolveDispute()</code></td></tr>
+<tr><td>Litige avec frais dynamiques</td><td>🔧 <strong>WD</strong></td><td>Lit depuis <code>duel_games</code></td></tr>
+<tr><td>Historique transactions</td><td>✅</td><td></td></tr>
+</tbody></table>
+
+<hr>
+
+<h2>6. i18n (FR/EN)</h2>
+
+<table>
+<thead><tr><th>Section</th><th>Statut</th><th>Notes</th></tr></thead>
+<tbody>
+<tr><td>Common + Play</td><td>✅</td><td></td></tr>
+<tr><td>Duel (base)</td><td>✅</td><td>lobby, intro, fight prompt, rematch</td></tr>
+<tr><td>Duel (étendu)</td><td>🔧 <strong>WD</strong></td><td>rules, pause, wizard, mode, controls KOF/SF2</td></tr>
+<tr><td>Profile</td><td>✅</td><td></td></tr>
+<tr><td>Admin</td><td>✅</td><td></td></tr>
+<tr><td>Dynamic strings</td><td>🔧 <strong>WD</strong></td><td><code>lobbySubtitle(game)</code>, <code>arenaTitle(game)</code>, <code>startingDuel(game)</code>, <code>notifChallenge(game)</code></td></tr>
+</tbody></table>
+
+<hr>
+
+<h2>7. SSO Arcade</h2>
+
+<table>
+<thead><tr><th>Fichier</th><th>Statut</th></tr></thead>
+<tbody>
+<tr><td><code>INTEGRATION-ARCADE-SSO.md</code></td><td>📄 Document untracké (plan)</td></tr>
+<tr><td>Route <code>api/sso/</code></td><td>Untracké (vide)</td></tr>
+</tbody></table>
+
+<hr>
+
+<h2>8. Migration + Hébergement</h2>
+
+<h3>8.1 Railway → Northflank</h3>
+
+<table>
+<thead><tr><th>Tâche</th><th>Statut</th></tr></thead>
+<tbody>
+<tr><td>Config/docs sweep (Dockerfile, NORTHFLANK docs)</td><td>✅</td></tr>
+<tr><td>Swap URLs .railway.app</td><td>❌ Pas fait</td></tr>
+<tr><td>Rotation secrets JWT/Cloudinary/Postgres</td><td>❌ Pas fait</td></tr>
+<tr><td>3 WSS placeholders Northflank</td><td>Scaffolded, pas configuré</td></tr>
+</tbody></table>
+
+<h3>8.2 VPS (alternative)</h3>
+
+<table>
+<thead><tr><th>Tâche</th><th>Statut</th></tr></thead>
+<tbody>
+<tr><td>Package prod complet</td><td>✅</td></tr>
+<tr><td>Caddy, deploy docs</td><td>✅</td></tr>
+<tr><td>Pas encore déployé</td><td>⏳</td></tr>
+</tbody></table>
+
+<hr>
+
+<h2>9. Plateforme principale (SKY-PLAY-Platform-main/)</h2>
+
+<p>Dossier untracké contenant :</p>
+
+<table>
+<thead><tr><th>Fichier</th><th>Description</th></tr></thead>
+<tbody>
+<tr><td><code>DEMARRAGE.md</code></td><td>Guide de démarrage</td></tr>
+<tr><td><code>README.md</code></td><td>Overview</td></tr>
+<tr><td><code>VERCEL_ENV_SETUP.md</code></td><td>Setup Vercel env</td></tr>
+<tr><td><code>DISCORD_INTEGRATION.md</code></td><td>Intégration Discord</td></tr>
+<tr><td><code>AWS_S3_SETUP.md</code></td><td>Setup S3</td></tr>
+<tr><td><code>NORTHFLANK_DEPLOY.md</code></td><td>Déploiement Northflank</td></tr>
+<tr><td><code>NORTHFLANK_STORAGE.md</code></td><td>Stockage Northflank</td></tr>
+<tr><td><code>TEST_AVATAR_UPLOAD.md</code></td><td>Test upload avatar</td></tr>
+<tr><td><code>api-deploy/</code></td><td>API NestJS avec Dockerfile</td></tr>
+</tbody></table>
+
+<hr>
+
+<h2>10. Scripts & Tests (untrackés)</h2>
+
+<table>
+<thead><tr><th>Script</th><th>Description</th></tr></thead>
+<tbody>
+<tr><td><code>scripts/backup-sky-users.mjs</code></td><td>Backup utilisateurs</td></tr>
+<tr><td><code>scripts/check-schema.mjs</code></td><td>Vérification schéma BDD</td></tr>
+<tr><td><code>scripts/migrate-duel-schema.mjs</code></td><td>Migration schéma duel</td></tr>
+<tr><td><code>scripts/reset-test-sky.mjs</code></td><td>Reset SKY test</td></tr>
+<tr><td><code>apps/game-server/scripts/analyze-stripe-cols.cjs</code></td><td>Analyse colonnes stripe santé (diagnostic perfect KO)</td></tr>
+<tr><td><code>apps/game-server/scripts/scan-sfa2-timer.mjs</code></td><td>Génération templates timer SFA2</td></tr>
+</tbody></table>
+
+<p>*Nettoyage 17/07 : supprimés <code>nav-sfa2.*</code>, <code>scan-sfa2-ram.mjs</code>, <code>test-keys.cjs</code>, <code>test-ws.mjs</code>, <code>debug-*.png/jpg</code>, <code>screenshots/</code>, captures <code>.rgb</code> (approches abandonnées / debug one-shot). Conservés : <code>char-select-shots/</code> (tâches portraits) et <code>recordings/templates</code> + <code>timercap</code> (templates timer).*</p>
+
+<hr>
+
+<h2>11. Résumé visuel</h2>
+
+<pre><code>┌──────────────────────────────────────────────────────────────────┐
+│                     SKY PLAY — ÉTAT PROJET                        │
+├──────────────────────────────────────────────────────────────────┤
+│                                                                   │
+│ ✅ COMMITÉ (stable en prod)                                        │
+│ ┌─────────────┬──────────────┬─────────────────┬───────────────┐ │
+│ │ NES Emu     │ NeoGeo Emu   │ KOF98 RAM det.  │ Lobby Duel    │ │
+│ │ Auth JWT    │ CloudStream  │ SKY Economy     │ Duels 1v1     │ │
+│ │ DuelEnd     │ Revanche     │ Abandon/Forfeit  │ Historique    │ │
+│ │ i18n base   │ Admin panel  │ DuelGameSelector │ Timeout 30s   │ │
+│ │ RulesOverlay│ VPS deploy   │ Multi-challenge  │ vsync video   │ │
+│ └─────────────┴──────────────┴─────────────────┴───────────────┘ │
+│                                                                   │
+│ 🔧 NON COMMITÉ (working tree)                                     │
+│ ┌─────────────┬──────────────┬─────────────────┬───────────────┐ │
+│ │ SFA2 pixel  │ Time-over ✅ │ Mode gauge KOF98 │ DB registre   │ │
+│ │ Rules flow  │ Confirm-rule │ Recovery lobby   │ Frais dyn.    │ │
+│ │ DuelScore   │ DuelPause    │ DuelWizard      │ Auto-rematch  │ │
+│ │ HeaderAuth  │ Turso conf   │ Config par ROM   │ Lieu partage  │ │
+│ └─────────────┴──────────────┴─────────────────┴───────────────┘ │
+│                                                                   │
+│ ❌ NON FAIT                                                       │
+│ ┌─────────────┬──────────────┬─────────────────┬───────────────┐ │
+│ │ Tests live  │ Overlay SFA2 │ Northflank swap  │ Secret rotate │ │
+│ │ SFA2        │ (noms persos)│ Railway URLs     │               │ │
+│ │ Pick order  │ SSO Arcade   │ KOF2002 RAM     │ KOF2002 team  │ │
+│ │ dans overlay│ (début)      │ complet          │ &amp; pick order  │ │
+│ └─────────────┴──────────────┴─────────────────┴───────────────┘ │
+│                                                                   │
+└──────────────────────────────────────────────────────────────────┘</code></pre>
+
+<hr>
+
+<h2>12. Priorités restantes</h2>
+
+<h3>🔴 URGENT</h3>
+<p>1. <strong>Valider en match réel les 3 fixes SFA2 déployés</strong> — suspension char select (<code>⏸️/▶️</code>), garde filet de vie (<code>🛡️ KO confirm reset</code>), recalibration par round (checklist post-reboot dans la mémoire <code>sfa2-pending-tasks</code>)</p>
+<p>2. <strong>Résoudre le mystère perfect KO</strong> — largeur pleine barre variable sans dégâts (273→210 colonnes) ; capture en rafale + <code>analyze-stripe-cols.cjs</code>, ou passer au ratio min/max du round</p>
+<p>3. <strong>Mode gauge KOF98</strong> — valider adresses <code>0x821E</code>/<code>0x841E</code> par diff live</p>
+
+<h3>🟡 IMPORTANT</h3>
+<p>4. <strong>Committer le working tree</strong> — par lots logiques :</p>
+<ul>
+<li>Lot 1 : game-runner + pixel/ (détection SFA2 fiabilisée : anti-fantômes, recalibration, sliver guard, suspension char select)</li>
+<li>Lot 2 : DB + registre jeux</li>
+<li>Lot 3 : Flow règles (respond → confirm-rules, rules_pending_at + timeouts)</li>
+<li>Lot 4 : UI duel (wizard, pause, score, lobby)</li>
+<li>Lot 5 : i18n + config SNES + homepage</li>
+</ul>
+<p>5. <strong>Pick order KOF98</strong> — câbler <code>capturePickOrders()</code> → <code>matchMeta()</code> → overlay</p>
+<p>6. <strong>Overlay SFA2</strong> — au moins le nom du jeu dans le HUD ; portraits en pause (tâches #17/#21/#22)</p>
+<p>7. <strong>Nettoyer 8 escrow_rooms obsolètes</strong> (2000 SKY chacun)</p>
+
+<h3>🟢 SECONDAIRE</h3>
+<p>8. <strong>Northflank</strong> — swapper URLs, rotate secrets</p>
+<p>9. <strong>SSO Arcade</strong> — reprendre l'intégration</p>
+<p>10. <strong>KOF2002</strong> — détection complète (team, pick order, perfect)</p>
+<p>11. <strong>Config pixel charger depuis DB</strong> (Turso → game-runner)</p>
+
+<h3>⚠️ Infra</h3>
+<ul>
+<li><strong>Docker Desktop instable</strong> (2 gels backend le 16/07) — remède : kill processus Docker + <code>wsl --shutdown</code> + relancer Docker Desktop, puis <code>docker-compose up -d</code></li>
+</ul>
+
+<hr>
+
+<p>*Document mis à jour le 2026-07-17 — sessions live SFA2 (fiabilisation détection pixel) + nettoyage fichiers.*</p>
+
+
+</body>
+</html>
