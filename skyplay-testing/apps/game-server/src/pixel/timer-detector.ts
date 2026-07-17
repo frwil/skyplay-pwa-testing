@@ -32,6 +32,20 @@ export class TimerDetector {
   private savedDigits = new Set<string>();
   /** Path to the template output directory. */
   private readonly TEMPLATE_DIR = "/recordings/templates";
+  /** Counter for calibration PNG captures (cap-0000.png, cap-0001.png, ...). */
+  private captureCounter = 0;
+  /** Set of timer values already captured — avoids duplicates. */
+  private capturedValues = new Set<number>();
+  /**
+   * Per-game captured digit templates.
+   * [0] = left side (tens), [1] = right side (ones).
+   * Each is array of 10: index = digit value (0-9), value = 12-row bitmap or null.
+   * Populated during match via countdown semantics and used in preference to hardcoded templates.
+   */
+  private capturedDigits: (number[] | null)[][] = [
+    Array(10).fill(null),
+    Array(10).fill(null),
+  ];
 
   constructor(timerConfig: PixelGameConfig["timer"]) {
     this.timerConfig = timerConfig;
@@ -48,6 +62,22 @@ export class TimerDetector {
     this.pendingValue = -1;
     this.pendingCount = 0;
     this.savedDigits.clear();
+    // NOTE: capturedDigits is NOT cleared here — it survives round transitions.
+    // Only resetCalibration() (called at match start) clears it.
+  }
+
+  /** Clear per-game captured templates. Called at the start of a new match. */
+  resetCalibration(): void {
+    this.capturedDigits = [Array(10).fill(null), Array(10).fill(null)];
+    this.capturedValues.clear();
+    this.captureCounter = 0;
+  }
+
+  /** Capture a digit bitmap with a known ground-truth label (from countdown). */
+  private captureDigit(side: 0 | 1, digitValue: number, bits: number[]): void {
+    if (digitValue < 0 || digitValue > 9) return;
+    if (this.capturedDigits[side]![digitValue] !== null) return; // already captured
+    this.capturedDigits[side]![digitValue] = [...bits];
   }
 
   /**
@@ -85,8 +115,8 @@ export class TimerDetector {
       return this.handleBlinking00(-1);
     }
 
-    const left = this.matchDigit(leftBits, t.digits);
-    const right = this.matchDigit(rightBits, t.digits);
+    const left = this.matchDigit(leftBits, t.digits, 0);
+    const right = this.matchDigit(rightBits, t.digits, 1);
     const rawValue = left * 10 + right;
 
     // ── Debug: periodic dump ──
@@ -110,7 +140,7 @@ export class TimerDetector {
       return this.handleBlinking00(-1);
     }
 
-    const result = this.validateTemporal(rawValue);
+    const result = this.validateTemporal(rawValue, frame, width, leftBits, rightBits);
 
     // ── Template collection ──
     if (result >= 0) {
@@ -154,7 +184,7 @@ export class TimerDetector {
    * Timer only decreases by 1 (or resets to 99 for new round).
    * Returns the validated value or -1 if rejected.
    */
-  private validateTemporal(rawValue: number): number {
+  private validateTemporal(rawValue: number, frame?: Buffer, frameWidth?: number, leftBits?: number[], rightBits?: number[]): number {
     if (rawValue === this.lastTimerValue) {
       this.timerStableFrames++;
       this.blinkGraceFrames = 0;
@@ -162,10 +192,6 @@ export class TimerDetector {
     }
 
     // New value — validate temporal constraints.
-    // The timer only DECREASES (by 1 per tick) or resets to 99 on a new round.
-    // A -1 step is accepted immediately. Larger downward jumps happen when
-    // frame processing misses ticks — accept those (and 99 resets) only after
-    // 2 consecutive identical readings to filter out one-frame misreads.
     const last = this.lastTimerValue;
     const isFirstReading = last < 0;
     const isMinusOne = rawValue === last - 1;
@@ -177,8 +203,20 @@ export class TimerDetector {
       this.pendingValue = -1;
       this.pendingCount = 0;
       this.lastTimerValue = rawValue;
+      // Dynamic calibration: capture digits with ground-truth labels from countdown
+      if (leftBits && rightBits) {
+        const tens = Math.floor(rawValue / 10);
+        const ones = rawValue % 10;
+        this.captureDigit(0, tens, leftBits);
+        this.captureDigit(1, ones, rightBits);
+      }
       if (isFirstReading) {
         console.log(`[pixel-analyzer] ⏱️ Timer: ${rawValue} (first reading)`);
+      }
+      // Capture PNG for manual calibration
+      if (frame && frameWidth !== undefined && !this.capturedValues.has(rawValue)) {
+        this.capturedValues.add(rawValue);
+        this.saveTimerPng(frame, frameWidth, rawValue, leftBits, rightBits);
       }
       return rawValue;
     }
@@ -191,10 +229,22 @@ export class TimerDetector {
           this.pendingValue = -1;
           this.pendingCount = 0;
           this.lastTimerValue = rawValue;
+          // Dynamic calibration: capture digits from confirmed jump/reset
+          if (leftBits && rightBits) {
+            const tens = Math.floor(rawValue / 10);
+            const ones = rawValue % 10;
+            this.captureDigit(0, tens, leftBits);
+            this.captureDigit(1, ones, rightBits);
+          }
           if (isRoundReset) {
             console.log(`[pixel-analyzer] ⏱️ Timer: ${rawValue} (new round reset, was ${last})`);
           } else {
             console.log(`[pixel-analyzer] ⏱️ Timer: ${rawValue} (jump down from ${last}, confirmed)`);
+          }
+          // Capture PNG for manual calibration
+          if (frame && frameWidth !== undefined && !this.capturedValues.has(rawValue)) {
+            this.capturedValues.add(rawValue);
+            this.saveTimerPng(frame, frameWidth, rawValue, leftBits, rightBits);
           }
           return rawValue;
         }
@@ -210,6 +260,66 @@ export class TimerDetector {
     this.pendingCount = 0;
     this.blinkGraceFrames = 0;
     return last >= 0 ? last : -1;
+  }
+
+  /**
+   * Save the timer digit region as a PNG for manual calibration.
+   * The user identifies the true timer value from the image.
+   */
+  private saveTimerPng(frame: Buffer, frameWidth: number, rawValue: number, leftBits?: number[], rightBits?: number[]): void {
+    try {
+      const t = this.timerConfig;
+      if (!t) return;
+      const dir = "/recordings/calibration";
+      if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+
+      const num = String(this.captureCounter).padStart(4, "0");
+      this.captureCounter++;
+      const ppmPath = join(dir, `cap-${num}-read${rawValue}.ppm`);
+      const pngPath = join(dir, `cap-${num}-read${rawValue}.png`);
+
+      // Capture the full timer region (both digits)
+      const x = t.leftDigitX;
+      const w = t.rightDigitX + t.digitW - t.leftDigitX;
+      const h = t.digitH;
+      const y = t.digitYOffset ?? 0;
+
+      const header = `P6\n${w} ${h}\n255\n`;
+      const headerBuf = Buffer.from(header, "ascii");
+      const pixels = Buffer.alloc(w * h * 3);
+      for (let row = 0; row < h; row++) {
+        for (let col = 0; col < w; col++) {
+          const srcIdx = ((y + row) * frameWidth + (x + col)) * 3;
+          const dstIdx = (row * w + col) * 3;
+          pixels[dstIdx] = frame[srcIdx] ?? 0;
+          pixels[dstIdx + 1] = frame[srcIdx + 1] ?? 0;
+          pixels[dstIdx + 2] = frame[srcIdx + 2] ?? 0;
+        }
+      }
+      writeFileSync(ppmPath, Buffer.concat([headerBuf, pixels]));
+
+      // Convert to PNG
+      try {
+        execSync(`magick convert "${ppmPath}" "${pngPath}"`, { stdio: "pipe", timeout: 5000 });
+      } catch {
+        execSync(`convert "${ppmPath}" "${pngPath}"`, { stdio: "pipe", timeout: 5000 });
+      }
+      // Save metadata JSON with extracted bitmaps for calibration
+      if (leftBits && rightBits) {
+        const metaPath = join(dir, `cap-${num}-read${rawValue}.json`);
+        writeFileSync(metaPath, JSON.stringify({
+          capture: `cap-${num}`,
+          systemRead: rawValue,
+          leftBits,
+          leftHex: leftBits.map((b: number) => "0x" + b.toString(16).padStart(2, "0")),
+          rightBits,
+          rightHex: rightBits.map((b: number) => "0x" + b.toString(16).padStart(2, "0")),
+        }, null, 2));
+      }
+      console.log(`[timer-calibrate] 📷 ${pngPath} (system read: ${rawValue})`);
+    } catch (err) {
+      console.warn(`[timer-calibrate] Failed to save timer PNG:`, err);
+    }
   }
 
   /**
@@ -309,11 +419,18 @@ export class TimerDetector {
    * Match a binarized digit bitmap against templates via Hamming distance.
    * Returns the best-match digit 0-9.
    */
-  private matchDigit(bits: number[], templates: number[][]): number {
+  /**
+   * Match a binarized digit bitmap against templates via Hamming distance.
+   * Prefers per-game captured templates over hardcoded ones.
+   * @param side 0 = left (tens), 1 = right (ones)
+   */
+  private matchDigit(bits: number[], templates: number[][], side: 0 | 1): number {
     let bestDigit = 0;
     let bestDist = Infinity;
+    const captured = this.capturedDigits[side]!;
     for (let d = 0; d < 10; d++) {
-      const tmpl = templates[d];
+      // Prefer captured (per-game) template, fall back to hardcoded
+      const tmpl = captured[d] ?? templates[d];
       if (!tmpl) continue;
       let dist = 0;
       for (let r = 0; r < DIGIT_TEMPLATE_H; r++) {
@@ -338,7 +455,7 @@ export class TimerDetector {
   ): number {
     const bits = this.extractDigitBits(frame, frameWidth, h, x, x + w);
     if (!bits) return 0;
-    return this.matchDigit(bits, templates);
+    return this.matchDigit(bits, templates, 0);
   }
 
   /**

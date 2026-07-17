@@ -39,3 +39,20 @@
 3. **Mettre à jour `MEMORY.md`** (l'index) si un nouveau fichier mémoire est créé ou si le résumé d'un fichier existant change.
 
 **Règle :** ne pas attendre le push git. La doc et la mémoire doivent être à jour en permanence, même en local avec du code non commité.
+
+## 🐳 Docker Maintenance
+
+**Nettoyer le cache Docker régulièrement** (toutes les 2-3 sessions de build) pour éviter l'accumulation :
+
+```bash
+docker builder prune --all --force
+docker system prune --force
+```
+
+Cela supprime le cache de build (`builder prune`) et les conteneurs/réseaux/images inutilisés (`system prune`). Sans `--volumes` pour préserver les données.
+
+**⚠️ Avant chaque `docker-compose restart`**, tuer les sessions Xvfb/RetroArch actives pour éviter les sessions fantômes qui bloquent l'affichage :
+
+```bash
+docker exec game-server-game-server-1 sh -c "pkill -9 Xvfb; pkill -9 retroarch; echo 'cleaned'"
+```

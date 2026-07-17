@@ -479,6 +479,12 @@ async function handleInit(
           setTimeout(() => runner.injectInput(player, btn, false), holdMs);
         };
 
+        // Everything before combat (title screen, ATTRACT DEMO, menus, char
+        // select) must NOT be analyzed: the attract demo is a real CPU-vs-CPU
+        // fight with a live timer and draining bars — it fabricates KOs.
+        // resetHealthWarmup() resumes analysis when combat actually starts.
+        runner.suspendPixelAnalysis("pre-combat menus/attract");
+
         setTimeout(() => {
           if (session.status !== "running") return;
           console.log(`[ws] ▶️  Starting game for CPU session ${msg.sessionId} (snes)`);
@@ -488,15 +494,11 @@ async function handleInit(
             runner.injectInput(1, startButton, false);
             console.log(`[ws] ✅ CPU auto-start complete for ${msg.sessionId}`);
 
-            // Spam START to skip intro screens
-            const startPhases = [1500, 3500, 5500, 7500, 9500];
-            for (const delay of startPhases) {
-              setTimeout(() => {
-                if (session.status !== "running") return;
-                console.log(`[ws] 🎮 SNES CPU: START spam at +${delay}ms`);
-                tap(1, startButton, 250);
-              }, delay);
-            }
+            // ── START spam DISABLED: pressing START during intros can PAUSE
+            //     the game on SNES instead of skipping them. Let the game
+            //     play out naturally — the pixel analyzer handles intro delay.
+            // const startPhases = [1500, 3500, 5500, 7500, 9500];
+            // for (const delay of startPhases) { ... }
 
             // Navigate ARCADE mode
             // START spam can shift the menu cursor; explicitly press UP to
@@ -1207,15 +1209,18 @@ function startGameAutoSequence(
           setTimeout(() => runner.injectInput(player, btn, false), holdMs);
         };
 
-        const startPhases = [1500, 3500, 5500, 7500, 9500];
-        for (const delay of startPhases) {
-          setTimeout(() => {
-            if (session.status !== "running") return;
-            console.log(`[ws] 🎮 SNES: START spam at +${delay}ms for ${sessionId}`);
-            tap(1, startButton, 250);
-            setTimeout(() => tap(2, startButton, 250), 100);
-          }, delay);
-        }
+        // ── START spam DISABLED: pressing START during intros can PAUSE the
+        //     game on SNES instead of skipping them. The timer-based WARMUP
+        //     exit in pixel-match-analyzer handles the intro delay without
+        //     needing button presses. Let the game play out naturally.
+        // const startPhases = [1500, 3500, 5500, 7500, 9500];
+        // for (const delay of startPhases) { ... }
+
+        // Everything before combat (title screen, ATTRACT DEMO, menus, char
+        // select) must NOT be analyzed: the attract demo is a real CPU-vs-CPU
+        // fight with a live timer and draining bars — it fabricates KOs.
+        // resetHealthWarmup() resumes analysis when combat actually starts.
+        runner.suspendPixelAnalysis("pre-combat menus/attract");
 
         const navDelay = 12000;
         setTimeout(async () => {

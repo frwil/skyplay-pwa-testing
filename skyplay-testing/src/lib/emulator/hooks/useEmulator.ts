@@ -790,7 +790,7 @@ export function useEmulator(system: SystemType = "nes") {
   const displayFps = isNes ? fps : (adapterRef.current?.fps ?? fps);
 
   // ─── Cloud Gaming: room code + join ────────────────────────────
-  const isCloud = system === "neogeo" || system === "ps1";
+  const isCloud = SYSTEM_CONFIGS[system]?.cloud ?? false;
   const roomCode = (adapterRef.current instanceof CloudAdapter) ? adapterRef.current.roomCode : null;
   const sessionId = (adapterRef.current instanceof CloudAdapter) ? adapterRef.current.currentSessionId : null;
 

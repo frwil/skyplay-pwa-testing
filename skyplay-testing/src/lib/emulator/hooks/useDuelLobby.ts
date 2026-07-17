@@ -395,80 +395,9 @@ export function useDuelLobby({
     poll();
     pollTimerRef.current = setInterval(poll, 2000);
 
-    // ── Recovery: after joining the lobby, check if the player has an
-    //     active challenge they got disconnected from (lost notification,
-    //     page refresh, etc.). If found, resume the flow automatically.
-    let recoveryRan = false;
-    const recoveryCheck = async () => {
-      if (recoveryRan) return;
-      recoveryRan = true;
-      const devId2 = isDevModeRef.current ? userIdRef.current : 0;
-      const devName2 = usernameRef.current || "";
-      try {
-        let url = "/api/duel/challenge?findActive=1";
-        if (devId2) url = addDevQuery(url, devId2, devName2);
-        const res = await fetch(url, { credentials: "include" });
-        if (!res.ok) return;
-        const data = await res.json();
-        const c = data?.challenge;
-        if (!c || !mountedRef.current) return;
-
-        if (c.status === "accepted" && c.session) {
-          // Game is running — connect immediately
-          console.log("[Duel] ✅ Recovery: found accepted challenge %d, reconnecting — wsUrl=%s room=%s",
-            c.id, c.session.wsUrl, c.session.roomCode);
-          setDuelSession({
-            sessionId: c.session.sessionId,
-            wsUrl: c.session.wsUrl,
-            roomCode: c.session.roomCode,
-            player1Id: c.session.player1Id,
-            player2Id: c.session.player2Id,
-            challengeId: c.session.challengeId || c.id,
-          });
-        } else if (c.status === "rules_pending") {
-          // Rules phase in progress — show the overlay AND start the 30s timeout
-          console.log("[Duel] ✅ Recovery: found rules_pending challenge %d, resuming...", c.id);
-          setRulesPendingChallenge({
-            id: 0,
-            duelChallengeId: c.id,
-            fromUsername: "",
-            message: "",
-            fromUserId: 0,
-            type: "duel_rules_pending",
-            challengeId: c.id,
-            read: false,
-            createdAt: c.createdAt || new Date().toISOString(),
-          });
-          // Start 30s timeout — same logic as the notification handler above
-          if (rulesPendingTimeoutRef.current) {
-            clearTimeout(rulesPendingTimeoutRef.current);
-            rulesPendingTimeoutRef.current = null;
-          }
-          const rpRecoveryChallengeId = c.id;
-          rulesPendingTimeoutRef.current = setTimeout(async () => {
-            const devId4 = isDevModeRef.current ? userIdRef.current : 0;
-            const devName4 = usernameRef.current || "";
-            console.log("[Duel] ⏰ Rules pending (recovery) timed out for challenge %d", rpRecoveryChallengeId);
-            try {
-              let cancelBody: Record<string, unknown> = { challengeId: rpRecoveryChallengeId };
-              if (devId4) cancelBody = withDevAuth(cancelBody, devId4, devName4);
-              await fetch("/api/duel/challenge/cancel", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(cancelBody),
-                credentials: "include",
-              });
-            } catch { /* best effort */ }
-            if (mountedRef.current) {
-              setRulesPendingChallenge(null);
-              setError("Défi expiré — pas de confirmation après 30s");
-            }
-          }, 30_000);
-        }
-      } catch { /* silent */ }
-    };
-    // Run recovery after a short delay (let the first poll complete first)
-    setTimeout(recoveryCheck, 1500);
+    // ── Recovery DISABLED: auto-reconnection to active challenges was
+    //     causing games to start on page refresh without user action.
+    //     Players must now explicitly re-join via the lobby UI.
 
     return () => {
       if (pollTimerRef.current) {

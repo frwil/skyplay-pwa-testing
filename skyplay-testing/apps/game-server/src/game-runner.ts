@@ -133,6 +133,8 @@ export class GameRunner extends EventEmitter {
 
   // ── Round win/loss detection (shared between RAM + pixel paths) ──
   private healthFfmpeg: ChildProcess | null = null;
+  private healthCaptureWatchdog: NodeJS.Timeout | null = null;
+  private lastHealthFrameAt = 0;
   private healthPollTimer: ReturnType<typeof setInterval> | null = null; // debug log timer (10s)
   private healthReadTimer: ReturnType<typeof setInterval> | null = null; // health polling timer (250ms)
   private healthPollEnabled = false;
@@ -455,6 +457,11 @@ export class GameRunner extends EventEmitter {
    * Start an ffmpeg process that captures a thin horizontal stripe at the
    * top of the screen (where health bars are) at 2 fps.
    * Raw RGB24 pixels are forwarded to PixelMatchAnalyzer for processing.
+   *
+   * A watchdog restarts the capture if no frame arrives for >8s: the 60fps
+   * main video x11grab can starve this low-fps grab on the shared X server
+   * (observed 2026-07-17: stripe ffmpeg alive but frozen for 9+ minutes —
+   * the analyzer kept processing minutes-old VS-screen frames).
    */
   private startHealthBarCapture(): void {
     const pixelConfig = getPixelConfig(this.rom);
@@ -463,9 +470,26 @@ export class GameRunner extends EventEmitter {
     this.displayW = (SYSTEM_RESOLUTIONS[this.system]?.w ?? 320) * UPSCALE;
     this.displayH = (SYSTEM_RESOLUTIONS[this.system]?.h ?? 224) * UPSCALE;
 
-    const stripeY = pixelConfig.stripeY;
-    const stripeH = pixelConfig.stripeH;
+    this.spawnHealthFfmpeg(pixelConfig.stripeY, pixelConfig.stripeH);
 
+    // Watchdog: respawn the stripe ffmpeg when frames stop flowing.
+    this.lastHealthFrameAt = Date.now();
+    if (this.healthCaptureWatchdog) clearInterval(this.healthCaptureWatchdog);
+    this.healthCaptureWatchdog = setInterval(() => {
+      if (!this.running || this.matchEnded) return;
+      const stale = Date.now() - this.lastHealthFrameAt;
+      if (stale > 8000) {
+        console.warn(`[game-runner] 🧠⚠️ Health stripe frozen for ${(stale / 1000).toFixed(0)}s — restarting capture ffmpeg`);
+        try { this.healthFfmpeg?.kill("SIGKILL"); } catch { /* already dead */ }
+        this.healthFfmpeg = null;
+        this.healthFrameBuf = Buffer.alloc(0);
+        this.lastHealthFrameAt = Date.now(); // reset so we don't kill the fresh one instantly
+        this.spawnHealthFfmpeg(pixelConfig.stripeY, pixelConfig.stripeH);
+      }
+    }, 4000);
+  }
+
+  private spawnHealthFfmpeg(stripeY: number, stripeH: number): void {
     try {
       this.healthFfmpeg = spawn("ffmpeg", [
         "-f", "x11grab",
@@ -482,6 +506,7 @@ export class GameRunner extends EventEmitter {
       });
 
       this.healthFfmpeg.stdout?.on("data", (chunk: Buffer) => {
+        this.lastHealthFrameAt = Date.now();
         this.healthFrameBuf = Buffer.concat([this.healthFrameBuf, chunk]);
         const frameSize = this.displayW * stripeH * 3; // RGB = 3 bytes/pixel
         while (this.healthFrameBuf.length >= frameSize) {
@@ -2671,6 +2696,10 @@ export class GameRunner extends EventEmitter {
     this.stopHealthWatcher();
 
     // Stop health bar ffmpeg (if pixel analysis was active)
+    if (this.healthCaptureWatchdog) {
+      clearInterval(this.healthCaptureWatchdog);
+      this.healthCaptureWatchdog = null;
+    }
     if (this.healthFfmpeg) {
       this.healthFfmpeg.kill("SIGTERM");
       this.healthFfmpeg = null;

@@ -108,6 +108,21 @@ export function addConnection(
 ): void {
   const session = sessions.get(sessionId);
   if (!session) return;
+
+  // ── Cross-session dedup: one WebSocket → one session at a time ──
+  // If this WS is already registered in ANOTHER session, eject it from
+  // that session first. Otherwise a single player can be in two sessions
+  // simultaneously (e.g. a stale session + a new one).
+  const oldInfo = wsToPlayer.get(ws);
+  if (oldInfo && oldInfo.sessionId !== sessionId) {
+    const oldSession = sessions.get(oldInfo.sessionId);
+    if (oldSession) {
+      const idx = oldSession.connections.findIndex((c) => c.ws === ws);
+      if (idx !== -1) oldSession.connections.splice(idx, 1);
+      console.log(`[session] Ejected P${oldInfo.player} from stale session ${oldInfo.sessionId}`);
+    }
+  }
+
   // Prevent duplicate player connections — replace if same player reconnects
   const existingIdx = session.connections.findIndex((c) => c.player === player);
   if (existingIdx !== -1) {

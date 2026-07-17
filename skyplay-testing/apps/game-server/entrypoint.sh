@@ -13,13 +13,26 @@ echo "[entrypoint] Starting D-Bus..."
 dbus-daemon --system --fork 2>/dev/null || echo "[entrypoint] D-Bus already running"
 
 echo "[entrypoint] Starting PulseAudio (null sink)..."
+# Kill any stale daemon and remove stale state — on `docker-compose restart`
+# /tmp and /var/run persist, and leftover pulse state makes `pulseaudio`
+# either refuse to start or point pactl at a dead socket.
 pulseaudio --kill 2>/dev/null || true
 sleep 1
-pulseaudio --start --exit-idle-time=-1 --disallow-module-loading=0 --disallow-exit=1 --log-target=stderr --log-level="$PULSE_LOGLEVEL" 2>/dev/null
-sleep 1
-pactl load-module module-null-sink sink_name=game_sink sink_properties=device.description=GameAudio format=float32le rate=48000 channels=2 2>/dev/null || true
-pactl set-default-sink game_sink 2>/dev/null || true
-echo "[entrypoint] PulseAudio ready (sink: game_sink)"
+rm -rf /tmp/pulse-* /var/run/pulse /root/.config/pulse/*.pid 2>/dev/null || true
+pulseaudio -D --exit-idle-time=-1 --disallow-module-loading=0 --disallow-exit=1 --log-target=stderr --log-level="$PULSE_LOGLEVEL" 2>/dev/null || true
+# Verify the daemon actually answers before declaring victory
+PULSE_OK=0
+for i in $(seq 1 10); do
+  if pactl info >/dev/null 2>&1; then PULSE_OK=1; break; fi
+  sleep 1
+done
+if [ "$PULSE_OK" = "1" ]; then
+  pactl load-module module-null-sink sink_name=game_sink sink_properties=device.description=GameAudio format=float32le rate=48000 channels=2 2>/dev/null || true
+  pactl set-default-sink game_sink 2>/dev/null || true
+  echo "[entrypoint] PulseAudio ready (sink: game_sink)"
+else
+  echo "[entrypoint] WARNING: PulseAudio failed to start — audio capture will fail"
+fi
 
 echo "[entrypoint] Starting Xvfb $XVFB_DISPLAY ($XVFB_SCREEN)..."
 # Kill any stale Xvfb and remove stale lock files — a killed Xvfb (e.g. on
