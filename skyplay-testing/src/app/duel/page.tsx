@@ -33,10 +33,18 @@ export default function DuelPage() {
 
   // ── Game selection (fetched from DB, falls back to games.ts) ────
   const { games: duelGames, getEntryFee, getModeEntryFee, getMode } = useDuelGames();
+  // Persist game/mode selection across page refreshes via localStorage.
+  // Initializer must return the SAME value on server & client to avoid hydration mismatch.
   const [selectedGameId, setSelectedGameId] = useState<string>("kof98");
   const game: ResolvedDuelGame = duelGames.find((g) => g.id === selectedGameId) ?? duelGames[0];
-  // Default to the first (standard) mode of the selected game
   const [selectedModeId, setSelectedModeId] = useState<string>("kof98_standard");
+  // Hydrate from localStorage after first render (client-only)
+  useEffect(() => {
+    const storedGame = localStorage.getItem("duel-selectedGameId");
+    if (storedGame && storedGame !== selectedGameId) setSelectedGameId(storedGame);
+    const storedMode = localStorage.getItem("duel-selectedModeId");
+    if (storedMode) setSelectedModeId(storedMode);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
   // ── Wizard step (game → mode → arena) ─────────────────────
   const [wizardStep, setWizardStep] = useState<WizardStep>("game");
   const handleSelectGame = useCallback((gameId: string) => {
@@ -113,6 +121,10 @@ export default function DuelPage() {
   }, []);
 
   useEffect(() => { setMounted(true); }, []);
+
+  // Persist game/mode selection to localStorage so it survives page refreshes
+  useEffect(() => { localStorage.setItem("duel-selectedGameId", selectedGameId); }, [selectedGameId]);
+  useEffect(() => { localStorage.setItem("duel-selectedModeId", selectedModeId); }, [selectedModeId]);
 
   // Resolve main platform URL after mount (avoids hydration mismatch)
   const mainPlatformUrl = mounted && typeof window !== "undefined" && window.location.hostname === "localhost"
@@ -1005,7 +1017,21 @@ export default function DuelPage() {
               color: "#fd2e5f",
             }}
           >
-            {lobby.error}
+            <span>{lobby.error}</span>
+            {lobby.error.includes("Un défi est déjà en cours") && (
+              <button
+                onClick={() => lobby.resetStaleChallenge()}
+                disabled={lobby.isCleaningUp}
+                className="ml-3 px-3 py-1 text-xs font-bold rounded-lg transition-colors"
+                style={{
+                  backgroundColor: lobby.isCleaningUp ? "rgba(253,46,95,0.15)" : "rgba(253,46,95,0.2)",
+                  color: lobby.isCleaningUp ? "#fd2e5f88" : "#fd2e5f",
+                  border: "1px solid rgba(253,46,95,0.35)",
+                }}
+              >
+                {lobby.isCleaningUp ? "Réinitialisation…" : "Réinitialiser"}
+              </button>
+            )}
           </div>
         )}
 

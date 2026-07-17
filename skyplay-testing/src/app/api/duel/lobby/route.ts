@@ -100,8 +100,8 @@ export async function POST(req: NextRequest) {
       args: [user.userId, user.userId, user.userId],
     });
     if (cancelledRs.rows.length > 0) {
-      console.log(`[duel/lobby] Cleaned ${cancelledRs.rows.length} stale challenge(s) for user ${user.userId}`);
-    }
+      const ids = cancelledRs.rows.map((r: any) => r.id).join(", ");
+      console.log(`[duel/lobby][join-cleanup] ❌ Cancelled challenge(s) [${ids}] for user ${user.userId}`);    }
 
     // Mark stale duel notifications as read on join, but PRESERVE active
     // flow notifications (rules_pending / accepted) so a page refresh doesn't
@@ -155,6 +155,21 @@ export async function GET(req: NextRequest) {
     });
     if (staleClean.rowsAffected > 0) {
       console.log(`[duel/lobby] Cleaned ${staleClean.rowsAffected} stale lobby entr${staleClean.rowsAffected > 1 ? 'ies' : 'y'}`);
+    }
+
+    // ── Active cleanup: cancel stale rules_pending challenges (35s grace vs 30s client timeout)
+    const staleRules = await db.execute({
+      sql: `UPDATE duel_challenges SET status = 'cancelled'
+            WHERE status = 'rules_pending'
+              AND rules_pending_at IS NOT NULL
+              AND rules_pending_at < datetime('now', '-35 seconds')
+            RETURNING id`,
+      args: [],
+    });
+    if (staleRules.rows.length > 0) {
+      const ids = staleRules.rows.map((r: any) => r.id).join(", ");
+      console.log(`[duel/lobby][active-cleanup] ❌ Auto-cancelled stale rules_pending challenge(s) [${ids}]`);
+      try { require("fs").appendFileSync("D:/SkyPlay/duel-cancel-debug.log", `[${new Date().toISOString()}] [active-cleanup] challenges=[${ids}]\n`); } catch {}
     }
 
     const rs = await db.execute({

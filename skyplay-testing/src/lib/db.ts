@@ -268,20 +268,58 @@ async function initializeSchema(): Promise<void> {
     );
   `);
 
+  // NOTE: no REFERENCES here on purpose. The duel flow stores duel_challenges ids
+  // in session_id/challenge_id (there is no netplay_sessions row for a duel), and
+  // PRAGMA foreign_keys=OFF is unreliable over Turso HTTP (each execute may land on
+  // a different connection) — FK violations were randomly 500-ing the duel flow.
   await getClient().execute(`
     CREATE TABLE IF NOT EXISTS netplay_notifications (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      session_id INTEGER NOT NULL REFERENCES netplay_sessions(id),
-      user_id INTEGER NOT NULL REFERENCES users(id),
-      from_user_id INTEGER NOT NULL REFERENCES users(id),
+      session_id INTEGER NOT NULL,
+      user_id INTEGER NOT NULL,
+      from_user_id INTEGER NOT NULL,
       from_username TEXT NOT NULL DEFAULT '',
       type TEXT NOT NULL DEFAULT 'challenge',
-      challenge_id INTEGER REFERENCES challenges(id),
+      challenge_id INTEGER,
       message TEXT DEFAULT '',
       read INTEGER DEFAULT 0,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
   `);
+
+  // ── One-time migration: rebuild pre-existing netplay_notifications without FKs ──
+  // (SQLite cannot drop constraints in place, so rename → recreate → copy → drop.)
+  try {
+    const notifSchema = await getClient().execute(
+      "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'netplay_notifications'"
+    );
+    const notifSql = (notifSchema.rows[0]?.sql as string) ?? "";
+    if (notifSql.includes("REFERENCES")) {
+      console.log("[db] Migrating netplay_notifications: rebuilding without foreign keys");
+      await getClient().batch([
+        "ALTER TABLE netplay_notifications RENAME TO netplay_notifications_fk_old",
+        `CREATE TABLE netplay_notifications (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          session_id INTEGER NOT NULL,
+          user_id INTEGER NOT NULL,
+          from_user_id INTEGER NOT NULL,
+          from_username TEXT NOT NULL DEFAULT '',
+          type TEXT NOT NULL DEFAULT 'challenge',
+          challenge_id INTEGER,
+          message TEXT DEFAULT '',
+          read INTEGER DEFAULT 0,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )`,
+        "INSERT INTO netplay_notifications SELECT * FROM netplay_notifications_fk_old",
+        "DROP TABLE netplay_notifications_fk_old",
+        "CREATE INDEX IF NOT EXISTS idx_netplay_notifications_user ON netplay_notifications(user_id, read)",
+        "CREATE INDEX IF NOT EXISTS idx_netplay_notifications_session ON netplay_notifications(session_id)",
+      ], "write");
+      console.log("[db] netplay_notifications FK migration complete");
+    }
+  } catch (e) {
+    console.error("[db] netplay_notifications FK migration failed:", e);
+  }
 
   // ——— Duel System (Cloud Gaming Matchmaking) ———
   await getClient().execute(`
@@ -346,6 +384,7 @@ async function initializeSchema(): Promise<void> {
   try { await getClient().execute("ALTER TABLE duel_challenges ADD COLUMN match_number INTEGER NOT NULL DEFAULT 0"); } catch { /* column already exists */ }
   try { await getClient().execute("ALTER TABLE duel_challenges ADD COLUMN challenger_rules_accepted INTEGER NOT NULL DEFAULT 0"); } catch { /* column already exists */ }
   try { await getClient().execute("ALTER TABLE duel_challenges ADD COLUMN target_rules_accepted INTEGER NOT NULL DEFAULT 0"); } catch { /* column already exists */ }
+  try { await getClient().execute("ALTER TABLE duel_challenges ADD COLUMN rules_pending_at TIMESTAMP DEFAULT NULL"); } catch { /* column already exists */ }
 
   // ─── Duel game registry (controls which ROMs are playable in duels) ───
   await getClient().execute(`

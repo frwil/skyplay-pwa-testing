@@ -78,6 +78,7 @@ export async function GET(req: NextRequest) {
       createdAt: row.created_at as string,
       modeId: row.mode_id as string | null,
       matchCount: (row.match_count as number) ?? 1,
+      rulesPendingAt: (row.rules_pending_at as string) ?? null,
     };
 
     // Include session info if accepted.
@@ -146,7 +147,7 @@ async function autoAcceptExistingChallenge(
 
     // Transition to rules_pending — both players must confirm rules
     await db.execute({
-      sql: "UPDATE duel_challenges SET status = 'rules_pending', challenger_rules_accepted = 0, target_rules_accepted = 0 WHERE id = ?",
+      sql: "UPDATE duel_challenges SET status = 'rules_pending', challenger_rules_accepted = 0, target_rules_accepted = 0, rules_pending_at = datetime('now') WHERE id = ?",
       args: [challengeId],
     });
 
@@ -300,7 +301,7 @@ export async function POST(req: NextRequest) {
       );
       if (sameDirection) {
         return NextResponse.json(
-          { error: "Un défi est déjà en cours avec ce joueur" },
+          { error: "Un défi est déjà en cours avec ce joueur", existingChallengeId: sameDirection.id as number },
           { status: 409 },
         );
       }

@@ -84,7 +84,7 @@ export async function POST(req: NextRequest) {
           args: [challengeId, row.challenger_id, user.userId, declinerName, challengeId,
             `${declinerName} a refusé votre défi.`],
         });
-      } catch (e) { console.error("[respond] ❌ INSERT notification (decline):", e); throw e; }
+      } catch (e) { console.error("[respond] ❌ INSERT notification (decline):", e); /* non-fatal — decline already recorded */ }
       finally {
         try { await db.execute("PRAGMA foreign_keys = ON"); } catch (e) { console.error("[respond] ❌ PRAGMA ON (decline):", e); }
       }
@@ -126,7 +126,7 @@ export async function POST(req: NextRequest) {
     }
 
     console.log("[respond] rules_pending: challengeId=%d modeId=%s matchCount=%d", challengeId, row.mode_id, respondMatchCount);
-    try { await db.execute({ sql: `UPDATE duel_challenges SET status = 'rules_pending', challenger_rules_accepted = 0, target_rules_accepted = 0 WHERE id = ?`, args: [challengeId] }); }
+    try { await db.execute({ sql: `UPDATE duel_challenges SET status = 'rules_pending', challenger_rules_accepted = 0, target_rules_accepted = 0, rules_pending_at = datetime('now') WHERE id = ?`, args: [challengeId] }); }
     catch (e) { console.error("[respond] ❌ UPDATE duel_challenges (rules_pending):", e); throw e; }
 
     // We do NOT update duel_lobby yet — players stay visible but marked as "in negotiation"

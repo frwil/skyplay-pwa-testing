@@ -96,6 +96,10 @@ interface UseDuelLobbyResult {
   isSending: boolean;
   isResponding: boolean;
   error: string | null;
+  /** True while auto-cleaning up a stale 409 challenge. */
+  isCleaningUp: boolean;
+  /** Manually reset a stale challenge: cancel → leave lobby → rejoin. */
+  resetStaleChallenge: () => Promise<void>;
 }
 
 export function useDuelLobby({
@@ -115,11 +119,17 @@ export function useDuelLobby({
   const [isSending, setIsSending] = useState(false);
   const [isResponding, setIsResponding] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [isCleaningUp, setIsCleaningUp] = useState(false);
 
   const lastNotifIdRef = useRef(0);
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const challengeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const rulesPendingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const cleanupTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const staleChallengeIdRef = useRef<number | null>(null);
   const mountedRef = useRef(true);
+  const lobbyEmptySinceRef = useRef<number | null>(null);
+  const lobbyAutoResetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingRef = useRef<DuelNotification | null>(null);
   const outgoingRef = useRef<OutgoingChallenge | null>(null);
   const userIdRef = useRef<number | null>(userId);
@@ -196,6 +206,32 @@ export function useDuelLobby({
           const data = await lobbyRes.json();
           setPlayers(data.players || []);
           setInLobby(data.inLobby);
+
+          // ── 10s empty-lobby detection ──────────────────────────
+          // If the player is alone in the lobby with no challenge activity
+          // for >10s, auto-reset the cage (leave + rejoin).
+          if (data.inLobby) {
+            const players: DuelPlayer[] = data.players || [];
+            const selfId = userIdRef.current;
+            const hasOtherPlayer = players.some((p) => p.userId !== selfId);
+            const hasActivity = pendingRef.current || outgoingRef.current;
+
+            if (!hasOtherPlayer && !hasActivity) {
+              if (lobbyEmptySinceRef.current === null) {
+                lobbyEmptySinceRef.current = Date.now();
+              }
+              if (!lobbyAutoResetTimerRef.current) {
+                lobbyAutoResetTimerRef.current = setTimeout(() => {
+                  performAutoReset();
+                }, 10_000);
+              }
+            } else {
+              clearAutoReset();
+            }
+          } else {
+            // Not in lobby anymore — clear timer
+            clearAutoReset();
+          }
         }
 
         // Poll notifications
@@ -240,6 +276,33 @@ export function useDuelLobby({
                 if (outgoingRef.current?.challengeId === n.duelChallengeId) {
                   setOutgoingChallenge(null);
                 }
+                // ── 30s rules confirmation timeout (challenger side) ──────
+                // If the opponent doesn't confirm rules within 30s, cancel
+                // the challenge so neither player is stuck waiting forever.
+                if (rulesPendingTimeoutRef.current) {
+                  clearTimeout(rulesPendingTimeoutRef.current);
+                  rulesPendingTimeoutRef.current = null;
+                }
+                const rpChallengeId = n.duelChallengeId;
+                rulesPendingTimeoutRef.current = setTimeout(async () => {
+                  const devId3 = isDevModeRef.current ? userIdRef.current : 0;
+                  const devName3 = usernameRef.current || "";
+                  console.log("[Duel] ⏰ Rules pending for 30s — cancelling challenge %d", rpChallengeId);
+                  try {
+                    let cancelBody: Record<string, unknown> = { challengeId: rpChallengeId };
+                    if (devId3) cancelBody = withDevAuth(cancelBody, devId3, devName3);
+                    await fetch("/api/duel/challenge/cancel", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify(cancelBody),
+                      credentials: "include",
+                    });
+                  } catch { /* best effort */ }
+                  if (mountedRef.current) {
+                    setRulesPendingChallenge(null);
+                    setError("Défi expiré — pas de confirmation après 30s");
+                  }
+                }, 30_000);
               }
             }
 
@@ -247,6 +310,11 @@ export function useDuelLobby({
             if (n.type === "duel_accepted") {
               // P1 (challenger): outgoing challenge matches the notification
               if (outgoingRef.current?.challengeId === n.duelChallengeId) {
+                // Clear rules-pending timeout — opponent confirmed rules
+                if (rulesPendingTimeoutRef.current) {
+                  clearTimeout(rulesPendingTimeoutRef.current);
+                  rulesPendingTimeoutRef.current = null;
+                }
                 fetchChallengeSession(n.duelChallengeId, devId, devName).then((session) => {
                   if (session && mountedRef.current) {
                     advanceNotif();
@@ -264,6 +332,11 @@ export function useDuelLobby({
                 // may have been created via confirm-rules. Try to fetch it — if successful,
                 // this is our signal to connect. If fetch returns null, the session was
                 // already set directly by handleRulesAccept, or it's genuinely stale.
+                // Clear rules-pending timeout — match is starting
+                if (rulesPendingTimeoutRef.current) {
+                  clearTimeout(rulesPendingTimeoutRef.current);
+                  rulesPendingTimeoutRef.current = null;
+                }
                 fetchChallengeSession(n.duelChallengeId, devId, devName).then((session) => {
                   if (session && mountedRef.current) {
                     advanceNotif();
@@ -353,7 +426,7 @@ export function useDuelLobby({
             challengeId: c.session.challengeId || c.id,
           });
         } else if (c.status === "rules_pending") {
-          // Rules phase in progress — show the overlay
+          // Rules phase in progress — show the overlay AND start the 30s timeout
           console.log("[Duel] ✅ Recovery: found rules_pending challenge %d, resuming...", c.id);
           setRulesPendingChallenge({
             id: 0,
@@ -366,6 +439,31 @@ export function useDuelLobby({
             read: false,
             createdAt: c.createdAt || new Date().toISOString(),
           });
+          // Start 30s timeout — same logic as the notification handler above
+          if (rulesPendingTimeoutRef.current) {
+            clearTimeout(rulesPendingTimeoutRef.current);
+            rulesPendingTimeoutRef.current = null;
+          }
+          const rpRecoveryChallengeId = c.id;
+          rulesPendingTimeoutRef.current = setTimeout(async () => {
+            const devId4 = isDevModeRef.current ? userIdRef.current : 0;
+            const devName4 = usernameRef.current || "";
+            console.log("[Duel] ⏰ Rules pending (recovery) timed out for challenge %d", rpRecoveryChallengeId);
+            try {
+              let cancelBody: Record<string, unknown> = { challengeId: rpRecoveryChallengeId };
+              if (devId4) cancelBody = withDevAuth(cancelBody, devId4, devName4);
+              await fetch("/api/duel/challenge/cancel", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(cancelBody),
+                credentials: "include",
+              });
+            } catch { /* best effort */ }
+            if (mountedRef.current) {
+              setRulesPendingChallenge(null);
+              setError("Défi expiré — pas de confirmation après 30s");
+            }
+          }, 30_000);
         }
       } catch { /* silent */ }
     };
@@ -459,6 +557,10 @@ export function useDuelLobby({
       clearTimeout(challengeTimeoutRef.current);
       challengeTimeoutRef.current = null;
     }
+    if (rulesPendingTimeoutRef.current) {
+      clearTimeout(rulesPendingTimeoutRef.current);
+      rulesPendingTimeoutRef.current = null;
+    }
   }, []);
 
   // ── Send challenge ──────────────────────────────────────────────
@@ -481,6 +583,100 @@ export function useDuelLobby({
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) {
+          // ── 409 same-direction duplicate: auto-cleanup ──────────
+          if (res.status === 409 && (data.existingChallengeId as number | undefined)) {
+            const staleId = data.existingChallengeId as number;
+            staleChallengeIdRef.current = staleId;
+            setIsCleaningUp(true);
+            setError("Défi existant détecté, nettoyage en cours…");
+
+            // Cancel the stale challenge
+            try {
+              let cancelBody: Record<string, unknown> = { challengeId: staleId };
+              if (devId) cancelBody = withDevAuth(cancelBody, devId, devName);
+              await fetch("/api/duel/challenge/cancel", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(cancelBody),
+                credentials: "include",
+              });
+            } catch { /* best effort */ }
+
+            // Clear any previous cleanup timeout
+            if (cleanupTimeoutRef.current) {
+              clearTimeout(cleanupTimeoutRef.current);
+            }
+
+            // Wait 10s for the cancelled challenge to propagate server-side
+            await new Promise<void>((resolve) => {
+              cleanupTimeoutRef.current = setTimeout(() => {
+                cleanupTimeoutRef.current = null;
+                resolve();
+              }, 10_000);
+            });
+
+            if (!mountedRef.current) {
+              setIsCleaningUp(false);
+              return null;
+            }
+
+            // Check if a new challenge/session arrived in the meantime
+            if (pendingRef.current || outgoingRef.current) {
+              setIsCleaningUp(false);
+              setError(null);
+              staleChallengeIdRef.current = null;
+              return null; // Something resolved — we're good
+            }
+
+            // Still nothing after 10s — destroy session and re-create
+            setError("Aucune réponse — réinitialisation de la session…");
+            setInLobby(false);
+            setPlayers([]);
+            setPendingChallenge(null);
+            setOutgoingChallenge(null);
+            if (challengeTimeoutRef.current) {
+              clearTimeout(challengeTimeoutRef.current);
+              challengeTimeoutRef.current = null;
+            }
+
+            try {
+              let leaveBody: Record<string, unknown> = { action: "leave" };
+              if (devId) leaveBody = withDevAuth(leaveBody, devId, devName);
+              await fetch("/api/duel/lobby", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(leaveBody),
+                credentials: "include",
+              });
+            } catch { /* best effort */ }
+
+            // Brief pause then rejoin
+            await new Promise((r) => setTimeout(r, 800));
+
+            try {
+              let joinBody: Record<string, unknown> = { action: "join", system: systemRef.current, rom: romRef.current };
+              if (devId) joinBody = withDevAuth(joinBody, devId, devName);
+              const joinRes = await fetch("/api/duel/lobby", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(joinBody),
+                credentials: "include",
+              });
+              if (joinRes.ok) {
+                setInLobby(true);
+                setError(null);
+              } else {
+                setError("Échec de la reconnexion — rechargez la page");
+              }
+            } catch {
+              setError("Échec de la reconnexion — rechargez la page");
+            }
+
+            setIsCleaningUp(false);
+            staleChallengeIdRef.current = null;
+            return null; // Handled — don't throw
+          }
+
           throw new Error(data.error || "Failed to send challenge");
         }
 
@@ -510,7 +706,7 @@ export function useDuelLobby({
         };
         setOutgoingChallenge(challenge);
 
-        // ── 30s auto-cancel timeout ────────────────────────────
+        // ── 20s auto-cancel timeout ────────────────────────────
         // Clear any previous timeout
         if (challengeTimeoutRef.current) {
           clearTimeout(challengeTimeoutRef.current);
@@ -535,9 +731,9 @@ export function useDuelLobby({
                 ? { ...prev, status: "expired" }
                 : prev,
             );
-            setError("Défi expiré — pas de réponse après 30s");
+            setError("Défi expiré — pas de réponse après 20s");
           }
-        }, 30_000);
+        }, 20_000);
 
         return null; // success
       } catch (err) {
@@ -652,10 +848,219 @@ export function useDuelLobby({
       clearTimeout(challengeTimeoutRef.current);
       challengeTimeoutRef.current = null;
     }
+    if (rulesPendingTimeoutRef.current) {
+      clearTimeout(rulesPendingTimeoutRef.current);
+      rulesPendingTimeoutRef.current = null;
+    }
   }, []);
 
   const clearRulesPending = useCallback(() => {
     setRulesPendingChallenge(null);
+    if (rulesPendingTimeoutRef.current) {
+      clearTimeout(rulesPendingTimeoutRef.current);
+      rulesPendingTimeoutRef.current = null;
+    }
+  }, []);
+
+  // ── 10s empty-lobby auto-reset ──────────────────────────────────
+
+  /** Clear any pending auto-reset timer. Call whenever a player appears or a challenge comes in. */
+  const clearAutoReset = useCallback(() => {
+    lobbyEmptySinceRef.current = null;
+    if (lobbyAutoResetTimerRef.current) {
+      clearTimeout(lobbyAutoResetTimerRef.current);
+      lobbyAutoResetTimerRef.current = null;
+    }
+  }, []);
+
+  const performAutoReset = useCallback(async () => {
+    const deepPending = pendingRef.current;
+    const deepOutgoing = outgoingRef.current;
+
+    const devId = isDevModeRef.current ? userIdRef.current : 0;
+    const devName = usernameRef.current || "";
+
+    console.log("[Duel] ⏰ Lobby empty for 10s — purging cage");
+
+    // ── Purge ALL duels linked to the current user ──────────────────
+    // Cancel outgoing + decline incoming before leave/rejoin.
+    const purgeOps: Promise<void>[] = [];
+
+    if (deepOutgoing) {
+      // We are the challenger → cancel
+      const challengeId = deepOutgoing.challengeId;
+      console.log("[Duel] 🔥 Auto-reset: cancelling outgoing challenge %d", challengeId);
+      purgeOps.push(
+        (async () => {
+          let body: Record<string, unknown> = { challengeId };
+          if (devId) body = withDevAuth(body, devId, devName);
+          const res = await fetch("/api/duel/challenge/cancel", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+            credentials: "include",
+          });
+          if (!res.ok) console.warn("[Duel] ⚠️ Auto-reset: cancel outgoing failed for challenge %d", challengeId);
+        })(),
+      );
+    }
+
+    if (deepPending) {
+      // We are the target → decline
+      const challengeId = deepPending.duelChallengeId;
+      console.log("[Duel] 🔥 Auto-reset: declining incoming challenge %d", challengeId);
+      purgeOps.push(
+        (async () => {
+          let body: Record<string, unknown> = { challengeId, accept: false };
+          if (devId) body = withDevAuth(body, devId, devName);
+          const res = await fetch("/api/duel/challenge/respond", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+            credentials: "include",
+          });
+          if (!res.ok) console.warn("[Duel] ⚠️ Auto-reset: decline incoming failed for challenge %d", challengeId);
+        })(),
+      );
+    }
+
+    // Best-effort: don't block leave/rejoin on purge failures
+    await Promise.allSettled(purgeOps);
+
+    // Clear client state
+    setInLobby(false);
+    setPlayers([]);
+    setPendingChallenge(null);
+    setOutgoingChallenge(null);
+    if (challengeTimeoutRef.current) {
+      clearTimeout(challengeTimeoutRef.current);
+      challengeTimeoutRef.current = null;
+    }
+    if (rulesPendingTimeoutRef.current) {
+      clearTimeout(rulesPendingTimeoutRef.current);
+      rulesPendingTimeoutRef.current = null;
+    }
+
+    // Notify server we're leaving
+    try {
+      let leaveBody: Record<string, unknown> = { action: "leave" };
+      if (devId) leaveBody = withDevAuth(leaveBody, devId, devName);
+      await fetch("/api/duel/lobby", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(leaveBody),
+        credentials: "include",
+      });
+    } catch { /* best effort */ }
+
+    // Brief pause then rejoin
+    await new Promise((r) => setTimeout(r, 800));
+
+    try {
+      let joinBody: Record<string, unknown> = { action: "join", system: systemRef.current, rom: romRef.current };
+      if (devId) joinBody = withDevAuth(joinBody, devId, devName);
+      const joinRes = await fetch("/api/duel/lobby", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(joinBody),
+        credentials: "include",
+      });
+      if (joinRes.ok) {
+        console.log("[Duel] ✅ Auto-reset: rejoined lobby successfully");
+        setInLobby(true);
+        clearAutoReset();
+      } else {
+        console.warn("[Duel] ⚠️ Auto-reset: failed to rejoin lobby");
+        setError("Échec du rafraîchissement du lobby");
+      }
+    } catch {
+      setError("Échec du rafraîchissement du lobby");
+    }
+  }, [clearAutoReset]);
+
+  // ── Manual reset for stale challenges ────────────────────────────
+
+  const resetStaleChallenge = useCallback(async () => {
+    // Clear any pending auto-cleanup timeout
+    if (cleanupTimeoutRef.current) {
+      clearTimeout(cleanupTimeoutRef.current);
+      cleanupTimeoutRef.current = null;
+    }
+
+    setIsCleaningUp(true);
+    setError("Réinitialisation manuelle en cours…");
+
+    // Cancel the stale challenge server-side if we have its ID
+    const staleId = staleChallengeIdRef.current;
+    if (staleId) {
+      try {
+        const devId = isDevModeRef.current ? userIdRef.current : 0;
+        const devName = usernameRef.current || "";
+        let cancelBody: Record<string, unknown> = { challengeId: staleId };
+        if (devId) cancelBody = withDevAuth(cancelBody, devId, devName);
+        await fetch("/api/duel/challenge/cancel", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(cancelBody),
+          credentials: "include",
+        });
+      } catch { /* best effort */ }
+      staleChallengeIdRef.current = null;
+    }
+
+    // Destroy current session state
+    setInLobby(false);
+    setPlayers([]);
+    setPendingChallenge(null);
+    setOutgoingChallenge(null);
+    if (challengeTimeoutRef.current) {
+      clearTimeout(challengeTimeoutRef.current);
+      challengeTimeoutRef.current = null;
+    }
+    if (rulesPendingTimeoutRef.current) {
+      clearTimeout(rulesPendingTimeoutRef.current);
+      rulesPendingTimeoutRef.current = null;
+    }
+
+    // Notify server we're leaving
+    try {
+      const devId = isDevModeRef.current ? userIdRef.current : 0;
+      const devName = usernameRef.current || "";
+      let leaveBody: Record<string, unknown> = { action: "leave" };
+      if (devId) leaveBody = withDevAuth(leaveBody, devId, devName);
+      await fetch("/api/duel/lobby", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(leaveBody),
+        credentials: "include",
+      });
+    } catch { /* best effort */ }
+
+    // Brief pause then rejoin
+    await new Promise((r) => setTimeout(r, 800));
+
+    try {
+      const devId = isDevModeRef.current ? userIdRef.current : 0;
+      const devName = usernameRef.current || "";
+      let joinBody: Record<string, unknown> = { action: "join", system: systemRef.current, rom: romRef.current };
+      if (devId) joinBody = withDevAuth(joinBody, devId, devName);
+      const joinRes = await fetch("/api/duel/lobby", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(joinBody),
+        credentials: "include",
+      });
+      if (joinRes.ok) {
+        setInLobby(true);
+        setError(null);
+      } else {
+        setError("Échec de la reconnexion — rechargez la page");
+      }
+    } catch {
+      setError("Échec de la reconnexion — rechargez la page");
+    }
+
+    setIsCleaningUp(false);
   }, []);
 
   return {
@@ -672,9 +1077,11 @@ export function useDuelLobby({
     declineChallenge,
     clearChallenge,
     clearRulesPending,
+    resetStaleChallenge,
     setDuelSession,
     isSending,
     isResponding,
+    isCleaningUp,
     error,
   };
 }

@@ -106,7 +106,8 @@ export async function POST(req: NextRequest) {
       await db.execute("PRAGMA foreign_keys = ON");
     }
 
-    console.log("[cancel] Challenge %d cancelled by challenger %d (target: %d)", challengeId, user.userId, row.target_id);
+    console.log("[cancel/route] ❌ Challenge %d cancelled — canceler=%d, target=%d, stack=%s", challengeId, user.userId, row.target_id, new Error().stack?.split("\n").slice(1,4).join(" → "));
+    try { require("fs").appendFileSync("D:/SkyPlay/duel-cancel-debug.log", `[${new Date().toISOString()}] [cancel/route] challenge=${challengeId} user=${user.userId}\n`); } catch {}
 
     return NextResponse.json({ success: true, cancelled: true, challengeId });
   } catch (error) {

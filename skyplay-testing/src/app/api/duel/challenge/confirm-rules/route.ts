@@ -71,6 +71,9 @@ export async function POST(req: NextRequest) {
                 VALUES (?, ?, ?, 'duel_declined', ?, ?)`,
           args: [challengeId, otherId, user.userId, challengeId, `Le duel a été annulé — les règles n'ont pas été acceptées.`],
         });
+      } catch (e) {
+        // Notification failure must NOT fail the decline — the challenge is already declined.
+        console.error("[confirm-rules] ❌ INSERT notification (decline):", e);
       } finally {
         try { await db.execute("PRAGMA foreign_keys = ON"); } catch {}
       }
@@ -138,6 +141,11 @@ export async function POST(req: NextRequest) {
               VALUES (?, ?, ?, 'duel_accepted', ?, ?)`,
         args: [challengeId, c.target_id, c.challenger_id, challengeId, "Les règles sont confirmées ! Le combat commence !"],
       });
+    } catch (e) {
+      // Notification failure must NOT fail the confirm — the session is already
+      // created and stored on the challenge row; throwing here would 500 the
+      // confirmer and strand both players on the rules screen (bug #23).
+      console.error("[confirm-rules] ❌ INSERT notifications (duel_accepted):", e);
     } finally {
       try { await db.execute("PRAGMA foreign_keys = ON"); } catch {}
     }

@@ -1,4 +1,5 @@
 import type { Metadata, Viewport } from "next";
+import Script from "next/script";
 import "./globals.css";
 import Providers from "@/components/Providers";
 
@@ -38,12 +39,10 @@ export default function RootLayout({
           href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap"
           rel="stylesheet"
         />
-        <script
+        <Script
           id="locale-detect"
-          dangerouslySetInnerHTML={{
-            __html: `(function(){var c=document.cookie.split("; ").find(function(r){return r.startsWith("skyplay-locale=")});var l=c?c.split("=")[1]:"fr";if(l==="fr"||l==="en")document.documentElement.lang=l})()`,
-          }}
-        />
+          strategy="beforeInteractive"
+        >{`(function(){var c=document.cookie.split("; ").find(function(r){return r.startsWith("skyplay-locale=")});var l=c?c.split("=")[1]:"fr";if(l==="fr"||l==="en")document.documentElement.lang=l})()`}</Script>
       </head>
       <body className="min-h-full flex flex-col">
         <Providers>{children}</Providers>

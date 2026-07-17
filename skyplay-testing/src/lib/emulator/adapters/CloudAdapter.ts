@@ -193,7 +193,7 @@ export class CloudAdapter implements EmulatorAdapter {
         console.log(`[Cloud:${this.systemType}] WebSocket created, readyState: ${this.ws.readyState}`);
 
         this.ws.onopen = () => {
-          console.log(`[Cloud:${this.systemType}] ✅ WebSocket OPEN`);
+          console.log(`[Cloud:${this.systemType}] ✅ WebSocket OPEN (readyState=${this.ws?.readyState})`);
           const initMessage = mode === "join" ? {
             type: "join", sessionId: this.sessionId, token: "",
           } : {
@@ -207,8 +207,23 @@ export class CloudAdapter implements EmulatorAdapter {
               return url ? { rtmpUrl: url } : {};
             })(),
           };
-          this.ws!.send(JSON.stringify(initMessage));
-          this.startPing();
+          // Guard: onopen can fire before readyState transitions to OPEN in some browsers
+          if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+            this.ws.send(JSON.stringify(initMessage));
+            this.startPing();
+          } else {
+            console.warn(`[Cloud:${this.systemType}] ⚠️ onopen fired but readyState=${this.ws?.readyState}, deferring send`);
+            // Delay send to let the browser finish the state transition
+            const trySend = () => {
+              if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+                this.ws.send(JSON.stringify(initMessage));
+                this.startPing();
+              } else {
+                console.error(`[Cloud:${this.systemType}] ❌ WebSocket never reached OPEN state`);
+              }
+            };
+            setTimeout(trySend, 10);
+          }
         };
 
         this.ws.onmessage = (event) => {
@@ -643,6 +658,8 @@ export class CloudAdapter implements EmulatorAdapter {
           this.callbacks.onStatusChange("running");
           console.log(`[Cloud:${this.systemType}] Stream ready — ${msg.width}x${msg.height}`);
           readyResolve?.();
+          // Signal back to the server that this client is fully loaded (dual-client ready guard)
+          this.ws?.send(JSON.stringify({ type: "client_ready" }));
           break;
         }
         case "status": {
