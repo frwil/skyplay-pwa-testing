@@ -1,9 +1,14 @@
 import { createClient } from "@libsql/client";
+import fs from "fs";
 
-const db = createClient({
-  url: "libsql://skyplay-pwa-frwil.aws-us-west-2.turso.io",
-  authToken: "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJhIjoicnciLCJpYXQiOjE3ODM3MTczMjEsImlkIjoiMDE5ZWIxNjYtZDEwMS03MWQ1LWEwOTItMWY0YTI4NzVhM2UzIiwia2lkIjoiZ0RWcHlKWW4wLWwzZTF2QUZHSERha1R5UWZFdXJBVmFJR0VTR1dwRHlBayIsInJpZCI6ImI1MmFkMGQ5LTlmOGItNGM3Ny05YjUxLWY2YzViN2EyNGNlNiJ9.hQn6YetR-MpqPt0yMHLTXcV8Rx75y5P-K1akoEUkfLI7LRUmN5GhQvWNNPVFLjGDhrj0eq53BYGNepm9hmz1Bw",
+// Run from skyplay-testing/ (reads .env.local from CWD).
+const envContent = fs.readFileSync(".env.local", "utf8");
+const env = {};
+envContent.split("\n").forEach((line) => {
+  const m = line.match(/^([^=]+)=(.*)$/);
+  if (m) env[m[1]] = m[2].trim().replace(/^["']|["']$/g, "");
 });
+const db = createClient({ url: env.TURSO_DATABASE_URL, authToken: env.TURSO_AUTH_TOKEN });
 
 const KOF98_RAM_CONFIG = {
   p1: 0x8238, p2: 0x8438, size: 1, maxHealth: 0x67,

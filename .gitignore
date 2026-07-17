@@ -2,3 +2,13 @@
 
 db-backups/
 cloudflared.log
+
+# Never commit — main platform source copy (separate repo)
+SKY-PLAY-Platform-main/
+
+# Root tooling deps + generated deliverables
+node_modules/
+*.pdf
+
+# ROMs (copyright)
+skyplay-testing/public/roms/
