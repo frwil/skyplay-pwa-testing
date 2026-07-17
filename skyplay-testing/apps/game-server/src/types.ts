@@ -70,6 +70,10 @@ export interface AutoRematchMessage {
   totalMatches: number;
 }
 
+export interface ClientReadyMessage {
+  type: "client_ready";
+}
+
 export type ClientMessage =
   | InitMessage
   | JoinMessage
@@ -80,7 +84,8 @@ export type ClientMessage =
   | RematchAcceptMessage
   | RematchDeclineMessage
   | StopDuelMessage
-  | AutoRematchMessage;
+  | AutoRematchMessage
+  | ClientReadyMessage;
 
 export interface StatusMessage {
   type: "status";
@@ -159,6 +164,12 @@ export interface MatchEndMessage {
   /** SNES/cursor-tracked character names (when RAM-based detection is unavailable). */
   p1CharName?: string;
   p2CharName?: string;
+  /** Pixel/portrait-detected character names (diagnostic ground truth). */
+  p1PixelCharName?: string;
+  p2PixelCharName?: string;
+  /** Portrait detection confidence for each player's selected cell (0-1). */
+  p1PixelConfidence?: number;
+  p2PixelConfidence?: number;
 }
 
 /** Rematch requested by opponent — show accept/decline UI. */
@@ -191,6 +202,12 @@ export interface RematchStartingMessage {
 /** Session is closed — all players should return to lobby and reload. */
 export interface SessionClosedMessage {
   type: "session_closed";
+}
+
+/** Session was cancelled — the dual-client ready guard timed out (one side didn't load in time). */
+export interface SessionCancelledMessage {
+  type: "session_cancelled";
+  reason: string;
 }
 
 /** Auto-rematch is starting — skip the stats overlay and roll to the next match. */
@@ -278,7 +295,8 @@ export type ServerMessage =
   | PausedMessage
   | ResumedMessage
   | CharSelectStartMessage
-  | CharSelectedMessage;
+  | CharSelectedMessage
+  | SessionCancelledMessage;
 
 /** Binary frame header: 0x01 + width(u16) + height(u16) + frameId(u32) + nalLength(u32) + H.264 NAL data */
 export const FRAME_MAGIC = 0x01;

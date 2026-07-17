@@ -34,6 +34,8 @@ RUN apt-get -o Acquire::Retries=5 update && \
     # PulseAudio (virtual audio for headless)
     pulseaudio \
     pulseaudio-utils \
+    # ImageMagick for PPM→PNG conversion (timer debug captures)
+    imagemagick \
     # Runtime libs
     libsdl2-2.0-0 \
     libpulse0 \
@@ -95,4 +97,7 @@ EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD curl -f http://localhost:8080/ || exit 1
 
-CMD ["node", "dist/index.js"]
+# Entrypoint starts persistent D-Bus, PulseAudio, and Xvfb before launching the game server
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+ENTRYPOINT ["/entrypoint.sh"]

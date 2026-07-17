@@ -1,4 +1,7 @@
 import { DIGIT_TEMPLATE_W, DIGIT_TEMPLATE_H, type PixelGameConfig } from "./pixel-game-config.js";
+import { writeFileSync, mkdirSync, existsSync } from "fs";
+import { execSync } from "child_process";
+import { join } from "path";
 
 /**
  * Per-frame timer digit recognizer with temporal validation.
@@ -13,10 +16,22 @@ export class TimerDetector {
   private lastTimerValue = -1;
   private timerStableFrames = 0;
   private blinkGraceFrames = 0;
+  /** Pending downward-jump / 99-reset value awaiting 2-frame confirmation. */
+  private pendingValue = -1;
+  private pendingCount = 0;
   private readonly timerConfig: PixelGameConfig["timer"];
-  private readonly TIMER_STABLE_REQUIRED = 3;
   /** Number of consecutive unreadable frames after seeing "01" to decide it's "00". */
   private readonly BLINK_GRACE = 3;
+  /** Frame counter for periodic debug logging. */
+  private debugFrameCount = 0;
+  /** Dump raw digit bitmaps every N read attempts. */
+  private readonly DEBUG_DUMP_INTERVAL = 10;
+  /** One-shot PPM dump flag — saves stripe + digit regions on first frame. */
+  private debugPpmSaved = false;
+  /** Set of "L-7", "R-3" keys already saved as templates — one sample per digit per position. */
+  private savedDigits = new Set<string>();
+  /** Path to the template output directory. */
+  private readonly TEMPLATE_DIR = "/recordings/templates";
 
   constructor(timerConfig: PixelGameConfig["timer"]) {
     this.timerConfig = timerConfig;
@@ -30,51 +45,82 @@ export class TimerDetector {
     this.lastTimerValue = -1;
     this.timerStableFrames = 0;
     this.blinkGraceFrames = 0;
+    this.pendingValue = -1;
+    this.pendingCount = 0;
+    this.savedDigits.clear();
   }
 
   /**
    * Read the timer from a raw RGB24 frame of the health bar stripe.
    * Returns 0-99 on a validated reading, or -1 if unrecognizable / unstable.
+   *
+   * Uses bounding-box extraction within search windows (one per digit)
+   * because SFA2 digits have variable widths (1 is ~16px, 7 is ~24px).
+   * Fixed-geometry downsampling fails when a narrow digit is drowned in
+   * black pixels.
    */
   readFromFrame(frame: Buffer, width: number, height: number): number {
     const t = this.timerConfig;
     if (!t) return -1;
 
-    const DIGIT_W = t.digitW;
-    const DIGIT_H = t.digitH;
-    const leftX = t.leftDigitX;
-    const rightX = t.rightDigitX;
-    const y = Math.max(0, Math.floor((height - DIGIT_H) / 2)); // center vertically in stripe
+    const searchW = t.digitW;
+    const leftStart = t.leftDigitX;
+    const rightStart = t.rightDigitX;
+
     const minRatio = t.minBrightRatio;
 
-    // Basic guard: check if the region has enough bright pixels
-    const checkBright = (cx: number): boolean => {
-      let bright = 0, total = 0;
-      for (let row = 0; row < DIGIT_H && (y + row) < height; row++) {
-        for (let col = 0; col < DIGIT_W && (cx + col) < width; col++) {
-          const idx = ((y + row) * width + (cx + col)) * 3;
-          const r = frame[idx] ?? 0, g = frame[idx + 1] ?? 0, b = frame[idx + 2] ?? 0;
-          if ((r + g + b) / 3 > 80) bright++;
-          total++;
-        }
-      }
-      return total > 0 && bright / total > minRatio;
-    };
+    // ── One-time PPM dump ──
+    if (!this.debugPpmSaved) {
+      this.debugPpmSaved = true;
+      this.saveDigitPpm(frame, width, height, leftStart, 0, searchW, height, "timer-debug-left.ppm");
+      this.saveDigitPpm(frame, width, height, rightStart, 0, searchW, height, "timer-debug-right.ppm");
+      this.saveFullStripePpm(frame, width, height, "timer-debug-stripe.ppm");
+    }
 
-    if (!checkBright(leftX) || !checkBright(rightX)) {
-      // Both digits unreadable — maybe blinking 00 at round end?
+    // Extract digit bitmaps via bounding-box within each search window
+    const leftBits = this.extractDigitBits(frame, width, height, leftStart, leftStart + searchW);
+    const rightBits = this.extractDigitBits(frame, width, height, rightStart, rightStart + searchW);
+
+    if (!leftBits || !rightBits) {
       return this.handleBlinking00(-1);
     }
 
-    const left = this.recognizeDigit(frame, width, leftX, y, DIGIT_W, DIGIT_H, t.digits);
-    const right = this.recognizeDigit(frame, width, rightX, y, DIGIT_W, DIGIT_H, t.digits);
+    const left = this.matchDigit(leftBits, t.digits);
+    const right = this.matchDigit(rightBits, t.digits);
     const rawValue = left * 10 + right;
+
+    // ── Debug: periodic dump ──
+    this.debugFrameCount++;
+    if (this.debugFrameCount % this.DEBUG_DUMP_INTERVAL === 1) {
+      const leftDists = this.allDigitDistances(leftBits);
+      const rightDists = this.allDigitDistances(rightBits);
+      console.log(
+        `[timer-debug] frame=${this.debugFrameCount} raw=${left}/${right} → ${rawValue} ` +
+        `lastTimer=${this.lastTimerValue} stableFrames=${this.timerStableFrames}`
+      );
+      console.log(`[timer-debug]   left bitmap:  0b${leftBits.map(b => b.toString(2).padStart(8, "0")).join(",0b")}`);
+      console.log(`[timer-debug]   left distances: [${leftDists.join(",")}] → ${left}`);
+      console.log(`[timer-debug]   right bitmap: 0b${rightBits.map(b => b.toString(2).padStart(8, "0")).join(",0b")}`);
+      console.log(`[timer-debug]   right distances:[${rightDists.join(",")}] → ${right}`);
+      this.dumpDigitAscii("left", leftBits);
+      this.dumpDigitAscii("right", rightBits);
+    }
 
     if (rawValue < 0 || rawValue > 99) {
       return this.handleBlinking00(-1);
     }
 
-    return this.validateTemporal(rawValue);
+    const result = this.validateTemporal(rawValue);
+
+    // ── Template collection ──
+    if (result >= 0) {
+      const tens = Math.floor(result / 10);
+      const ones = result % 10;
+      this.saveTemplateSample(frame, width, leftStart, 0, searchW, height, "L", tens);
+      this.saveTemplateSample(frame, width, rightStart, 0, searchW, height, "R", ones);
+    }
+
+    return result;
   }
 
   // ── Private helpers ────────────────────────────────────────────────
@@ -115,24 +161,85 @@ export class TimerDetector {
       return this.lastTimerValue; // already reported
     }
 
-    // New value — validate temporal constraints
-    const isValidDecrease = rawValue === this.lastTimerValue - 1 && this.lastTimerValue >= 0;
-    const isNewRoundReset = rawValue === 99 && this.lastTimerValue >= 0;
+    // New value — validate temporal constraints.
+    // The timer only DECREASES (by 1 per tick) or resets to 99 on a new round.
+    // A -1 step is accepted immediately. Larger downward jumps happen when
+    // frame processing misses ticks — accept those (and 99 resets) only after
+    // 2 consecutive identical readings to filter out one-frame misreads.
+    const last = this.lastTimerValue;
+    const isFirstReading = last < 0;
+    const isMinusOne = rawValue === last - 1;
+    const isJumpDown = rawValue < last;
+    const isRoundReset = rawValue === 99 && last >= 0;
 
-    if (isValidDecrease || isNewRoundReset || this.lastTimerValue < 0) {
-      this.timerStableFrames++;
+    if (isFirstReading || isMinusOne) {
       this.blinkGraceFrames = 0;
-      if (this.timerStableFrames >= this.TIMER_STABLE_REQUIRED) {
-        this.lastTimerValue = rawValue;
-        this.timerStableFrames = 0;
-        return rawValue;
+      this.pendingValue = -1;
+      this.pendingCount = 0;
+      this.lastTimerValue = rawValue;
+      if (isFirstReading) {
+        console.log(`[pixel-analyzer] ⏱️ Timer: ${rawValue} (first reading)`);
       }
-      return this.lastTimerValue >= 0 ? this.lastTimerValue : -1;
-    } else {
-      // Invalid transition — ignore (blinking, visual artifact)
-      this.timerStableFrames = 0;
+      return rawValue;
+    }
+
+    if (isJumpDown || isRoundReset) {
       this.blinkGraceFrames = 0;
-      return this.lastTimerValue >= 0 ? this.lastTimerValue : -1;
+      if (this.pendingValue === rawValue) {
+        this.pendingCount++;
+        if (this.pendingCount >= 2) {
+          this.pendingValue = -1;
+          this.pendingCount = 0;
+          this.lastTimerValue = rawValue;
+          if (isRoundReset) {
+            console.log(`[pixel-analyzer] ⏱️ Timer: ${rawValue} (new round reset, was ${last})`);
+          } else {
+            console.log(`[pixel-analyzer] ⏱️ Timer: ${rawValue} (jump down from ${last}, confirmed)`);
+          }
+          return rawValue;
+        }
+      } else {
+        this.pendingValue = rawValue;
+        this.pendingCount = 1;
+      }
+      return last >= 0 ? last : -1;
+    }
+
+    // Increase that isn't a 99 reset — visual artifact, ignore
+    this.pendingValue = -1;
+    this.pendingCount = 0;
+    this.blinkGraceFrames = 0;
+    return last >= 0 ? last : -1;
+  }
+
+  /**
+   * Save a single digit bitmap as a JSON template file for later calibration.
+   * Skips if we already have a sample for this digit at this position.
+   */
+  private saveTemplateSample(
+    frame: Buffer, frameWidth: number,
+    x: number, y: number, w: number, h: number,
+    position: "L" | "R", digitValue: number,
+  ): void {
+    const key = `${position}-${digitValue}`;
+    if (this.savedDigits.has(key)) return;
+    this.savedDigits.add(key);
+
+    try {
+      const bits = this.recognizeDigitDebug(frame, frameWidth, x, y, w, h);
+      const dir = this.TEMPLATE_DIR;
+      if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+      const path = join(dir, `digit-${key}.json`);
+      writeFileSync(path, JSON.stringify({
+        position,
+        value: digitValue,
+        bits,
+        bitsHex: bits.map((b: number) => "0x" + b.toString(16).padStart(2, "0")),
+        capturedAt: new Date().toISOString(),
+      }, null, 2));
+      console.log(`[timer-calibrate] 📸 Saved template sample: ${key} → ${path}`);
+    } catch (err) {
+      console.warn(`[timer-calibrate] Failed to save template ${key}:`, err);
     }
   }
 
@@ -142,50 +249,67 @@ export class TimerDetector {
    * binarizes via threshold, then compares against each template via
    * Hamming distance (XOR popcount). Returns the best-match digit 0-9.
    */
-  private recognizeDigit(
-    frame: Buffer, frameWidth: number,
-    x: number, y: number, w: number, h: number,
-    templates: number[][],
-  ): number {
-    // Step 1: determine brightness threshold (median of the region)
-    const samples: number[] = [];
-    for (let row = 0; row < h; row += 4) {
-      for (let col = 0; col < w; col += 4) {
-        const idx = ((y + row) * frameWidth + (x + col)) * 3;
+  /**
+   * Extract a digit bitmap from a horizontal search window within the stripe.
+   * Finds the bounding box of pixels above the binarization threshold,
+   * then downsamples that bbox to TW×TH bits. Returns null if no digit found.
+   */
+  private extractDigitBits(
+    frame: Buffer, frameWidth: number, frameHeight: number,
+    xStart: number, xEnd: number,
+  ): number[] | null {
+    const threshold = this.timerConfig!.binarizeThreshold ?? 160;
+
+    // Find bounding box of bright pixels within the search window
+    let minX = Infinity, maxX = -1, minY = Infinity, maxY = -1;
+    for (let y = 0; y < frameHeight; y++) {
+      for (let x = xStart; x < xEnd && x < frameWidth; x++) {
+        const idx = (y * frameWidth + x) * 3;
         const r = frame[idx] ?? 0, g = frame[idx + 1] ?? 0, b = frame[idx + 2] ?? 0;
-        samples.push((r + g + b) / 3);
+        if ((r + g + b) / 3 > threshold) {
+          if (x < minX) minX = x;
+          if (x > maxX) maxX = x;
+          if (y < minY) minY = y;
+          if (y > maxY) maxY = y;
+        }
       }
     }
-    samples.sort((a, b) => a - b);
-    const threshold = samples[Math.floor(samples.length * 0.6)] + 20; // upper 40% are "lit"
 
-    // Step 2: downsample to template size
-    const cellW = w / DIGIT_TEMPLATE_W;
-    const cellH = h / DIGIT_TEMPLATE_H;
+    if (maxX < 0 || (maxX - minX) < 5 || (maxY - minY) < 10) return null;
+
+    const bbW = maxX - minX + 1;
+    const bbH = maxY - minY + 1;
+    const cellW = bbW / DIGIT_TEMPLATE_W;
+    const cellH = bbH / DIGIT_TEMPLATE_H;
     const bits: number[] = [];
+
     for (let tr = 0; tr < DIGIT_TEMPLATE_H; tr++) {
       let rowBits = 0;
       for (let tc = 0; tc < DIGIT_TEMPLATE_W; tc++) {
-        // Average brightness of this cell
         let sum = 0, count = 0;
-        const sx = Math.round(x + tc * cellW);
-        const sy = Math.round(y + tr * cellH);
-        const ex = Math.round(x + (tc + 1) * cellW);
-        const ey = Math.round(y + (tr + 1) * cellH);
-        for (let py = sy; py < ey && py < y + h; py++) {
-          for (let px = sx; px < ex && px < x + w; px++) {
+        const sx = Math.round(minX + tc * cellW);
+        const sy = Math.round(minY + tr * cellH);
+        const ex = Math.round(minX + (tc + 1) * cellW);
+        const ey = Math.round(minY + (tr + 1) * cellH);
+        for (let py = sy; py < ey && py <= maxY; py++) {
+          for (let px = sx; px < ex && px <= maxX; px++) {
             const idx = (py * frameWidth + px) * 3;
             sum += (frame[idx] ?? 0) + (frame[idx + 1] ?? 0) + (frame[idx + 2] ?? 0);
             count += 3;
           }
         }
-        const avg = count > 0 ? sum / count : 0;
-        if (avg > threshold) rowBits |= (1 << (7 - tc));
+        if (count > 0 && sum / count > threshold * 0.75) rowBits |= (1 << (7 - tc));
       }
       bits.push(rowBits);
     }
+    return bits;
+  }
 
-    // Step 3: Hamming distance against each template
+  /**
+   * Match a binarized digit bitmap against templates via Hamming distance.
+   * Returns the best-match digit 0-9.
+   */
+  private matchDigit(bits: number[], templates: number[][]): number {
     let bestDigit = 0;
     let bestDist = Infinity;
     for (let d = 0; d < 10; d++) {
@@ -194,12 +318,135 @@ export class TimerDetector {
       let dist = 0;
       for (let r = 0; r < DIGIT_TEMPLATE_H; r++) {
         const xor = (bits[r] ?? 0) ^ (tmpl[r] ?? 0);
-        // popcount
         let v = xor;
         while (v) { dist++; v &= v - 1; }
       }
       if (dist < bestDist) { bestDist = dist; bestDigit = d; }
     }
     return bestDigit;
+  }
+
+  /**
+   * Recognize a single timer digit from a search window within the frame.
+   * Uses bounding-box extraction + template matching.
+   * (x, y, w, h) defines the search window within the stripe.
+   */
+  private recognizeDigit(
+    frame: Buffer, frameWidth: number,
+    x: number, y: number, w: number, h: number,
+    templates: number[][],
+  ): number {
+    const bits = this.extractDigitBits(frame, frameWidth, h, x, x + w);
+    if (!bits) return 0;
+    return this.matchDigit(bits, templates);
+  }
+
+  /**
+   * Debug variant: extract raw 8×12 bitmap via bounding box.
+   * (x, y, w, h) defines the search window.
+   */
+  private recognizeDigitDebug(
+    frame: Buffer, frameWidth: number,
+    x: number, y: number, w: number, h: number,
+  ): number[] {
+    return this.extractDigitBits(frame, frameWidth, h, x, x + w) ?? Array(DIGIT_TEMPLATE_H).fill(0);
+  }
+
+  /** Compute Hamming distances from a raw bitmap to all 10 digit templates. */
+  private allDigitDistances(bits: number[]): number[] {
+    const t = this.timerConfig;
+    if (!t) return [];
+    return Array.from({ length: 10 }, (_, d) => {
+      const tmpl = t.digits[d];
+      if (!tmpl) return Infinity;
+      let dist = 0;
+      for (let r = 0; r < DIGIT_TEMPLATE_H; r++) {
+        const xor = (bits[r] ?? 0) ^ (tmpl[r] ?? 0);
+        let v = xor;
+        while (v) { dist++; v &= v - 1; }
+      }
+      return dist;
+    });
+  }
+
+  /** ASCII dump of a digit bitmap for visual inspection in logs. */
+  private dumpDigitAscii(label: string, bits: number[]): void {
+    const lines: string[] = [];
+    for (let r = 0; r < bits.length; r++) {
+      let line = "";
+      for (let c = 7; c >= 0; c--) {
+        line += (bits[r]! & (1 << c)) ? "██" : "  ";
+      }
+      lines.push(`[timer-debug]   ${label} row${String(r).padStart(2,"0")}: |${line}|`);
+    }
+    console.log(lines.join("\n"));
+  }
+
+  /** Save a digit sub-region as a PPM (P6 binary) file for visual inspection. */
+  private saveDigitPpm(
+    frame: Buffer, frameW: number, _frameH: number,
+    x: number, y: number, w: number, h: number,
+    filename: string,
+  ): void {
+    try {
+      const dir = "/recordings";
+      if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+      const path = join(dir, filename);
+      // P6 header: "P6\nW H\n255\n" + raw RGB bytes
+      const header = `P6\n${w} ${h}\n255\n`;
+      const headerBuf = Buffer.from(header, "ascii");
+      const pixels = Buffer.alloc(w * h * 3);
+      for (let row = 0; row < h; row++) {
+        for (let col = 0; col < w; col++) {
+          const srcIdx = ((y + row) * frameW + (x + col)) * 3;
+          const dstIdx = (row * w + col) * 3;
+          pixels[dstIdx] = frame[srcIdx] ?? 0;
+          pixels[dstIdx + 1] = frame[srcIdx + 1] ?? 0;
+          pixels[dstIdx + 2] = frame[srcIdx + 2] ?? 0;
+        }
+      }
+      writeFileSync(path, Buffer.concat([headerBuf, pixels]));
+      console.log(`[timer-debug] saved ${filename} (${w}×${h}) to ${path}`);
+      this.convertPpmToPng(path);
+    } catch (err) {
+      console.warn(`[timer-debug] failed to save ${filename}:`, err);
+    }
+  }
+
+  /** Save the full health-bar stripe as a PPM for visual inspection. */
+  private saveFullStripePpm(
+    frame: Buffer, width: number, height: number, filename: string,
+  ): void {
+    try {
+      const dir = "/recordings";
+      if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+      const path = join(dir, filename);
+      const header = `P6\n${width} ${height}\n255\n`;
+      const headerBuf = Buffer.from(header, "ascii");
+      writeFileSync(path, Buffer.concat([headerBuf, frame]));
+      console.log(`[timer-debug] saved ${filename} (${width}×${height}) to ${path}`);
+      this.convertPpmToPng(path);
+    } catch (err) {
+      console.warn(`[timer-debug] failed to save ${filename}:`, err);
+    }
+  }
+
+  /** Convert a PPM file to PNG using ImageMagick for easy visual inspection. */
+  private convertPpmToPng(ppmPath: string): void {
+    try {
+      const pngPath = ppmPath.replace(/\.ppm$/i, ".png");
+      // Try ImageMagick 7 CLI first, fall back to v6
+      try {
+        execSync(`magick convert "${ppmPath}" "${pngPath}"`, { stdio: "pipe", timeout: 5000 });
+      } catch {
+        execSync(`convert "${ppmPath}" "${pngPath}"`, { stdio: "pipe", timeout: 5000 });
+      }
+      if (existsSync(pngPath)) {
+        console.log(`[timer-debug] converted to ${pngPath}`);
+      }
+    } catch (err) {
+      // Non-fatal: PPM is still saved, user can convert manually
+      console.warn(`[timer-debug] ImageMagick conversion failed (PPM saved):`, String(err));
+    }
   }
 }

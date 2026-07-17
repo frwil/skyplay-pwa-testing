@@ -7,6 +7,43 @@
 // In the future, these configs can be loaded from the Turso DB (duel_games.ram_config)
 // instead of being hardcoded here.
 
+// ── Portrait template matching config ─────────────────────────────────
+
+/** Template dimensions for portrait matching (24×24 bits per character). */
+export const PORTRAIT_TEMPLATE_W = 24;
+export const PORTRAIT_TEMPLATE_H = 24;
+
+/** Per-game portrait detection configuration for character select screens. */
+export interface PortraitConfig {
+  /** X offset of the portrait grid from the left of Xvfb. */
+  gridX: number;
+  /** Y offset of the portrait grid from the top of Xvfb. */
+  gridY: number;
+  /** Number of columns in the character select grid. */
+  cols: number;
+  /** Number of rows in the character select grid. */
+  rows: number;
+  /** Width of each portrait cell in pixels. */
+  cellW: number;
+  /** Height of each portrait cell in pixels. */
+  cellH: number;
+  /**
+   * Character templates — one entry per grid cell in row-major order
+   * (index = row * cols + col). Each template is an array of
+   * PORTRAIT_TEMPLATE_H rows, each row a number whose lower
+   * PORTRAIT_TEMPLATE_W bits encode the binarized portrait (MSB = left).
+   *
+   * Seed with all zeros for calibration mode — the calibrator populates them.
+   */
+  templates: number[][];
+  /** Display names indexed by character ID (0x00-0x11 for SFA2). */
+  charNames: string[];
+  /** Minimum Hamming-distance confidence to consider a cell reliable (0-1). */
+  minConfidence: number;
+  /** Minimum margin vs 2nd-best match to consider unambiguous (0-1). */
+  minMargin: number;
+}
+
 /** Full pixel-detection configuration for a single game ROM. */
 export interface PixelGameConfig {
   // ── Health bar stripe (ffmpeg capture region) ──
@@ -34,34 +71,76 @@ export interface PixelGameConfig {
     digitW: number;
     /** Height of each digit in pixels. */
     digitH: number;
+    /** Absolute brightness threshold for binarization (0-255). White digits on dark bg. */
+    binarizeThreshold?: number;
     /** Minimum bright pixel ratio to consider the region readable. */
     minBrightRatio: number;
+    /** Y offset of the digit top within the stripe (0 = stripe top).
+     *  When absent the detector centers the digit vertically. */
+    digitYOffset?: number;
   };
+  /** Portrait detection config for character select screens (absent → no pixel portraits). */
+  portrait?: PortraitConfig;
 }
 
 export const PIXEL_GAME_CONFIGS: Record<string, PixelGameConfig> = {
   // ── Street Fighter Alpha 2 (SNES) ──────────────────────────────────
   "Street Fighter Alpha 2 (Europe).sfc": {
-    stripeY: 110, stripeH: 24,
+    // Stripe covers BOTH health bars (rows 0-23) and timer digits (rows ~8-48).
+    // Calibrated against real frame (timer=73) on 2026-07-15: left digit at x=354,
+    // right digit at x=382, each 26×40 px, top at y=118 → y=8 within the stripe.
+    stripeY: 110, stripeH: 48,
     p1StartX: 70, p1EndX: 310,
     p2StartX: 450, p2EndX: 768,
     winsNeeded: 2,
     timer: {
-      // Arcade-style bold white digits on dark background, ~22×24px each at 3x upscale.
-      // Timer sits between P1 health (ends 310) and P2 health (starts 450).
-      digits: [
-        [0b00111100,0b01100110,0b01100110,0b01100110,0b01100110,0b01100110,0b01100110,0b01100110,0b01100110,0b01100110,0b01100110,0b00111100], // 0
-        [0b00011000,0b00111000,0b00011000,0b00011000,0b00011000,0b00011000,0b00011000,0b00011000,0b00011000,0b00011000,0b00011000,0b01111110], // 1
-        [0b00111100,0b01100110,0b00000110,0b00000110,0b00000110,0b00001100,0b00011000,0b00110000,0b01100000,0b01100000,0b01111110,0b01111110], // 2
-        [0b00111100,0b01100110,0b00000110,0b00000110,0b00001100,0b00111100,0b00000110,0b00000110,0b00000110,0b00000110,0b01100110,0b00111100], // 3
-        [0b00001100,0b00011100,0b00111100,0b01101100,0b11001100,0b11001100,0b11111110,0b11111110,0b00001100,0b00001100,0b00001100,0b00001100], // 4
-        [0b01111110,0b01100000,0b01100000,0b01100000,0b01111100,0b00000110,0b00000110,0b00000110,0b00000110,0b00000110,0b01100110,0b00111100], // 5
-        [0b00011100,0b00110000,0b01100000,0b01100000,0b01111100,0b01100110,0b01100110,0b01100110,0b01100110,0b01100110,0b01100110,0b00111100], // 6
-        [0b01111110,0b01111110,0b00000110,0b00000110,0b00001100,0b00011000,0b00011000,0b00110000,0b00110000,0b01100000,0b01100000,0b01100000], // 7
-        [0b00111100,0b01100110,0b01100110,0b01100110,0b00111100,0b01100110,0b01100110,0b01100110,0b01100110,0b01100110,0b01100110,0b00111100], // 8
-        [0b00111100,0b01100110,0b01100110,0b01100110,0b01100110,0b01100110,0b00111110,0b00000110,0b00000110,0b00000110,0b00001100,0b01111000], // 9
+      digits: [ // REAL templates from 220-frame capture, binarized @ threshold=160, 8×12 grid
+        [0b01111110,0b11111111,0b11000011,0b11000011,0b11000011,0b11000011,0b11000011,0b11000011,0b11000011,0b11000011,0b11111111,0b01111110], // 0
+        [0b11111100,0b11111100,0b00111100,0b00111100,0b00111100,0b00111100,0b00111100,0b00111100,0b00111100,0b00111100,0b11111111,0b11111111], // 1
+        [0b01111110,0b11111111,0b11000011,0b11000011,0b00000011,0b00000011,0b01111111,0b11111110,0b11000000,0b11000000,0b11111111,0b01111111], // 2
+        [0b11111110,0b11111111,0b00000011,0b00000011,0b00000011,0b11111111,0b11111111,0b00000011,0b00000011,0b00000011,0b11111111,0b11111110], // 3
+        [0b11000011,0b11000011,0b11000011,0b11000011,0b11000011,0b11000011,0b11111111,0b01111111,0b00000011,0b00000011,0b00000011,0b00000011], // 4
+        [0b01111111,0b11111111,0b11000000,0b11000000,0b11000000,0b11111110,0b01111111,0b00000011,0b00000011,0b00000011,0b11111111,0b11111110], // 5
+        [0b01111110,0b11111111,0b11000011,0b11000000,0b11000000,0b11111110,0b11111111,0b11000011,0b11000011,0b11000011,0b11111111,0b01111110], // 6
+        [0b01111110,0b11111111,0b11000011,0b11000011,0b00000011,0b00000011,0b00000011,0b00000011,0b00000011,0b00000011,0b00000011,0b00000011], // 7
+        [0b01111110,0b11111111,0b11000011,0b11000011,0b11000011,0b11111111,0b11111111,0b11000011,0b11000011,0b11000011,0b11111111,0b01111110], // 8
+        [0b01111110,0b11111111,0b11000011,0b11000011,0b11000011,0b11111111,0b01111111,0b00000011,0b00000011,0b11000011,0b11111111,0b01111110], // 9
       ],
-      leftDigitX: 338, rightDigitX: 362, digitW: 22, digitH: 24, minBrightRatio: 0.15,
+      leftDigitX: 354, rightDigitX: 382, digitW: 26, digitH: 40,
+      digitYOffset: 8, // digit top at y=118 relative to stripeY=110
+      binarizeThreshold: 160, // absolute threshold — white digits (~255) on dark bg
+      minBrightRatio: 0.10,
+    },
+    portrait: {
+      // Empirical coords: grid starts ~x=30, y=220 at 3x upscale.
+      // Cursor row at y=180, portrait content spans rows ~220-440.
+      gridX: 30, gridY: 220,
+      cols: 9, rows: 2,
+      cellW: 80, cellH: 110,
+      // 18 zero-seed templates (one per character). Calibrator populates them.
+      templates: Array.from({ length: 18 }, () => Array(24).fill(0)),
+      charNames: [
+        "Ryu",        // 0x00  row 0 col 0
+        "Ken",        // 0x01  row 0 col 1
+        "Chun-Li",    // 0x02  row 0 col 2
+        "Adon",       // 0x03  row 0 col 3
+        "Guy",        // 0x04  row 0 col 4
+        "Akuma",      // 0x05  row 0 col 5
+        "Charlie",    // 0x06  row 0 col 6
+        "Sodom",      // 0x07  row 0 col 7
+        "Rose",       // 0x08  row 0 col 8
+        "Birdie",     // 0x09  row 1 col 0
+        "Sagat",      // 0x0A  row 1 col 1
+        "M. Bison",   // 0x0B  row 1 col 2
+        "Dan",        // 0x0C  row 1 col 3
+        "Dhalsim",    // 0x0D  row 1 col 4
+        "Gen",        // 0x0E  row 1 col 5
+        "Sakura",     // 0x0F  row 1 col 6
+        "Rolento",    // 0x10  row 1 col 7
+        "Zangief",    // 0x11  row 1 col 8
+      ],
+      minConfidence: 0.65,
+      minMargin: 0.08,
     },
   },
 };

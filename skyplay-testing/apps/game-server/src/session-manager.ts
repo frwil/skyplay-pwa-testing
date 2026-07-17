@@ -1,4 +1,5 @@
 import type { ServerMessage } from "./types.js";
+import type { PortraitGridResult } from "./pixel/portrait-detector.js";
 import { WebSocket } from "ws";
 
 export interface PlayerConnection {
@@ -46,6 +47,14 @@ export interface Session {
   p2SelectedCharName: string;
   /** Timer handle for character select timeout (auto-locks after N seconds). */
   charSelectTimer: ReturnType<typeof setTimeout> | null;
+  /** Dual-client ready guard: whether P1 has sent client_ready. */
+  p1ClientReady: boolean;
+  /** Dual-client ready guard: whether P2 has sent client_ready. */
+  p2ClientReady: boolean;
+  /** Timer handle for the 10s dual-client ready guard. */
+  clientReadyTimer: ReturnType<typeof setTimeout> | null;
+  /** Portrait grid detection result from the character select screen (diagnostic only). */
+  portraitResults?: PortraitGridResult;
 }
 
 const sessions = new Map<string, Session>();
@@ -83,6 +92,9 @@ export function createSession(
     p1SelectedCharName: "",
     p2SelectedCharName: "",
     charSelectTimer: null,
+    p1ClientReady: false,
+    p2ClientReady: false,
+    clientReadyTimer: null,
   };
   sessions.set(id, session);
   console.log(`[session] Created session ${id} (${system} / ${rom}), total: ${sessions.size}`);
@@ -156,6 +168,12 @@ export function removeSession(id: string): void {
   if (!session) return;
   if (session.idleTimer) {
     clearTimeout(session.idleTimer);
+  }
+  if (session.clientReadyTimer) {
+    clearTimeout(session.clientReadyTimer);
+  }
+  if (session.charSelectTimer) {
+    clearTimeout(session.charSelectTimer);
   }
   // Close all remaining connections
   for (const conn of session.connections) {
