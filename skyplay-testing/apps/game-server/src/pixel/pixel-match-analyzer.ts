@@ -475,23 +475,33 @@ export class PixelMatchAnalyzer extends EventEmitter {
           // are rare, so any confirmed decrease arms the round.
           if (this.roundTimerLastValue > 0 && dropped >= 1) {
             if (!this.roundTimerWasRunning) {
-              this.roundTimerWasRunning = true;
-              this.calibrateOnTimerStart = false;
-
-              // ── Timer-start calibration ───────────────────────
-              // The timer just decreased for the first time — the FIGHT! glow
-              // is gone. However, on SNES the bars may STILL be hidden for a
-              // few more seconds (character intros overlap the timer start),
-              // and the roundStartMax values tracked since WARMUP→PLAYING
-              // include the FIGHT! glow frames (inflated to full region
-              // width).
+              // ── Bar-visibility guard (SFA2 SNES fix) ──────────────
+              // The SNES SFA2 timer counts down twice: once on the VS screen
+              // (99→0, no bars visible) and once during the actual fight.
+              // On the VS countdown the bars are absent (filled≈0), so
+              // resetting max to 0 there means the post-glow calibration
+              // tracks from empty frames and never reaches its floor until
+              // the very end of the round (if at all).
               //
-              // Fix: reset the max trackers to 0 NOW and track fresh. The
-              // post-glow calibration below waits until a bar actually
-              // reaches its floor before locking (timeout at 60 frames).
-              this.roundStartMaxP1Filled = 0;
-              this.roundStartMaxP2Filled = 0;
-              this._postTimerCalibFrames = 0;
+              // Fix: only arm timer-running when at least one bar region has
+              // meaningful fill — this skips the VS countdown entirely.
+              const barsVisible = p1Filled > 100 || p2Filled > 100;
+              if (barsVisible) {
+                this.roundTimerWasRunning = true;
+                this.calibrateOnTimerStart = false;
+
+                // ── Timer-start calibration ───────────────────────
+                // The timer just decreased for the first time — the FIGHT!
+                // glow is gone. We do NOT reset roundStartMax here because
+                // the max tracker has already been running since PLAYING
+                // start (filtering full-region glow via < p1RegionW). If we
+                // reset to 0 now and the timer detector armed late (e.g. the
+                // timer was misread during glow), one bar may already be
+                // damaged and its max can't reach the floor. Keeping the
+                // accumulated max preserves the full-bar-width that was
+                // captured when the bars first appeared.
+                this._postTimerCalibFrames = 0;
+              }
             }
           }
           this.roundTimerLastValue = timerValue;
@@ -520,6 +530,14 @@ export class PixelMatchAnalyzer extends EventEmitter {
                     this.healthHistoryP1 = [];
                     this.p1FullBarLocked = true;
                     console.log(`[pixel-analyzer] 📏🔒 P1 post-glow calibrated: fullBarW=${this.p1FullBarWidth} (was ${oldW}, waited ${this._postTimerCalibFrames}f)`);
+                  } else if (timedOut && this.p2FullBarLocked) {
+                    // ── Symmetry fallback ──────────────────────────
+                    // P2 locked correctly but P1 never reached its floor.
+                    const oldW = this.p1FullBarWidth;
+                    this.p1FullBarWidth = this.p2FullBarWidth;
+                    this.healthHistoryP1 = [];
+                    this.p1FullBarLocked = true;
+                    console.log(`[pixel-analyzer] 📏🔒 P1 post-glow calibrated (symmetry fallback): fullBarW=${this.p1FullBarWidth} (was ${oldW}, copied from P2, waited ${this._postTimerCalibFrames}f)`);
                   } else if (this._postTimerCalibFrames === 60) {
                     // Bar still hasn't reached the floor — do NOT lock a
                     // garbage width (a VS-screen misread can arm the window
@@ -535,6 +553,15 @@ export class PixelMatchAnalyzer extends EventEmitter {
                     this.healthHistoryP2 = [];
                     this.p2FullBarLocked = true;
                     console.log(`[pixel-analyzer] 📏🔒 P2 post-glow calibrated: fullBarW=${this.p2FullBarWidth} (was ${oldW}, waited ${this._postTimerCalibFrames}f)`);
+                  } else if (timedOut && this.p1FullBarLocked) {
+                    // ── Symmetry fallback ──────────────────────────
+                    // P1 locked correctly but P2 never reached its floor.
+                    // SFA2 bars are symmetric — copy P1's width.
+                    const oldW = this.p2FullBarWidth;
+                    this.p2FullBarWidth = this.p1FullBarWidth;
+                    this.healthHistoryP2 = [];
+                    this.p2FullBarLocked = true;
+                    console.log(`[pixel-analyzer] 📏🔒 P2 post-glow calibrated (symmetry fallback): fullBarW=${this.p2FullBarWidth} (was ${oldW}, copied from P1, waited ${this._postTimerCalibFrames}f)`);
                   } else if (this._postTimerCalibFrames === 60) {
                     console.log(`[pixel-analyzer] ⏳ P2 post-glow calib still waiting: max=${this.roundStartMaxP2Filled} < floor=${floor2} (fullBarW stays ${this.p2FullBarWidth})`);
                   }
