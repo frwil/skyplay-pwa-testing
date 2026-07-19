@@ -132,9 +132,8 @@ export class GameRunner extends EventEmitter {
   private configPath: string | null = null;
 
   // ── Round win/loss detection (shared between RAM + pixel paths) ──
-  private healthFfmpeg: ChildProcess | null = null;
-  private healthCaptureWatchdog: NodeJS.Timeout | null = null;
   private lastHealthFrameAt = 0;
+  // Note: health stripe is now extracted from ffmpegVideo fd 3 — no separate ffmpeg needed.
   private healthPollTimer: ReturnType<typeof setInterval> | null = null; // debug log timer (10s)
   private healthReadTimer: ReturnType<typeof setInterval> | null = null; // health polling timer (250ms)
   private healthPollEnabled = false;
@@ -454,90 +453,17 @@ export class GameRunner extends EventEmitter {
   // ─────────────────────────────────────────────────────────────────
 
   /**
-   * Start an ffmpeg process that captures a thin horizontal stripe at the
-   * top of the screen (where health bars are) at 2 fps.
-   * Raw RGB24 pixels are forwarded to PixelMatchAnalyzer for processing.
+   * DEPRECATED: the health bar stripe is now extracted from the MAIN video
+   * ffmpeg (see startFfmpegVideo, output fd 3). The separate x11grab was
+   * starved by the 60fps main grab — frames arrived 2+ min late.
    *
-   * A watchdog restarts the capture if no frame arrives for >8s: the 60fps
-   * main video x11grab can starve this low-fps grab on the shared X server
-   * (observed 2026-07-17: stripe ffmpeg alive but frozen for 9+ minutes —
-   * the analyzer kept processing minutes-old VS-screen frames).
+   * This method is kept as a no-op solely for call-site compatibility.
+   * The capture actually happens in startFfmpegVideo().
    */
   private startHealthBarCapture(): void {
-    const pixelConfig = getPixelConfig(this.rom);
-    if (!pixelConfig) return;
-
     this.displayW = (SYSTEM_RESOLUTIONS[this.system]?.w ?? 320) * UPSCALE;
     this.displayH = (SYSTEM_RESOLUTIONS[this.system]?.h ?? 224) * UPSCALE;
-
-    this.spawnHealthFfmpeg(pixelConfig.stripeY, pixelConfig.stripeH);
-
-    // Watchdog: respawn the stripe ffmpeg when frames stop flowing.
-    this.lastHealthFrameAt = Date.now();
-    if (this.healthCaptureWatchdog) clearInterval(this.healthCaptureWatchdog);
-    this.healthCaptureWatchdog = setInterval(() => {
-      if (!this.running || this.matchEnded) return;
-      const stale = Date.now() - this.lastHealthFrameAt;
-      if (stale > 8000) {
-        console.warn(`[game-runner] 🧠⚠️ Health stripe frozen for ${(stale / 1000).toFixed(0)}s — restarting capture ffmpeg`);
-        try { this.healthFfmpeg?.kill("SIGKILL"); } catch { /* already dead */ }
-        this.healthFfmpeg = null;
-        this.healthFrameBuf = Buffer.alloc(0);
-        this.lastHealthFrameAt = Date.now(); // reset so we don't kill the fresh one instantly
-        this.spawnHealthFfmpeg(pixelConfig.stripeY, pixelConfig.stripeH);
-      }
-    }, 4000);
-  }
-
-  private spawnHealthFfmpeg(stripeY: number, stripeH: number): void {
-    try {
-      this.healthFfmpeg = spawn("ffmpeg", [
-        "-f", "x11grab",
-        "-framerate", "2",
-        "-video_size", `${this.displayW}x${stripeH}`,
-        "-i", `${this.display}.0+0,${stripeY}`,
-        "-f", "rawvideo",
-        "-pix_fmt", "rgb24",
-        "-loglevel", "quiet",
-        "pipe:1",
-      ], {
-        stdio: ["ignore", "pipe", "ignore"],
-        env: { ...process.env, DISPLAY: this.display },
-      });
-
-      this.healthFfmpeg.stdout?.on("data", (chunk: Buffer) => {
-        this.lastHealthFrameAt = Date.now();
-        this.healthFrameBuf = Buffer.concat([this.healthFrameBuf, chunk]);
-        const frameSize = this.displayW * stripeH * 3; // RGB = 3 bytes/pixel
-        while (this.healthFrameBuf.length >= frameSize) {
-          const frame = this.healthFrameBuf.subarray(0, frameSize);
-          this.healthFrameBuf = this.healthFrameBuf.subarray(frameSize);
-          // Suspended during char select: the portrait grid reads as "healthy
-          // bars" and the char-select COUNTDOWN ticks down like a fight timer,
-          // defeating the liveness gate (observed: fabricated TIME OVER round
-          // before the match even started).
-          if (!this.pixelAnalysisSuspended) {
-            this.pixelAnalyzer?.processFrame(frame, this.displayW, stripeH);
-          }
-        }
-        // Safety: prevent unbounded buffer growth
-        if (this.healthFrameBuf.length > frameSize * 3) {
-          this.healthFrameBuf = Buffer.alloc(0);
-        }
-      });
-
-      this.healthFfmpeg.on("error", (err) => {
-        if (this.healthPollErrorCount < 3) {
-          console.warn("[game-runner] 🧠 Health bar ffmpeg error:", err.message);
-        }
-        this.healthPollErrorCount++;
-        this.pixelAnalyzer?.signalError();
-      });
-
-      console.log(`[game-runner] 🧠 Health bar capture started: ${this.displayW}x${stripeH} at y=${stripeY}`);
-    } catch (err) {
-      console.warn("[game-runner] 🧠 Failed to start health bar capture:", err);
-    }
+    // Capture is already set up in startFfmpegVideo (fd 3 output).
   }
 
   // ── Portrait capture (diagnostic metadata for character select) ──
@@ -2084,12 +2010,13 @@ export class GameRunner extends EventEmitter {
 
   /** FFmpeg video: captures Xvfb, encodes H.264 baseline, outputs to stdout. */
   private startFfmpegVideo(w: number, h: number): void {
-    this.ffmpegVideo = spawn("ffmpeg", [
+    const pixelConfig = getPixelConfig(this.rom);
+    const args = [
       "-f", "x11grab",
       "-framerate", "60",
       "-video_size", `${w}x${h}`,
       "-i", `${this.display}.0`,
-      // H.264 baseline — WebCodecs compatible
+      // Output 1: H.264 baseline — WebCodecs compatible
       "-c:v", "libx264",
       "-preset", "ultrafast",
       "-tune", "zerolatency",
@@ -2099,24 +2026,69 @@ export class GameRunner extends EventEmitter {
       "-b:v", "2M",
       "-maxrate", "3M",
       "-bufsize", "1M",
-      "-g", "120",         // keyframe every 2s at 60fps
+      "-g", "120",
       "-keyint_min", "60",
       "-sc_threshold", "0",
       "-refs", "1",
       "-x264-params", "sliced-threads=0:sync-lookahead=0:rc-lookahead=0",
-      // Output Annex B format (raw NAL units)
       "-f", "h264",
       "-avioflags", "direct",
       "-flush_packets", "1",
       "pipe:1",
-    ], {
-      stdio: ["ignore", "pipe", "pipe"],
+    ];
+
+    // Output 2 (fd 3): health bar stripe — crop + raw rgb24. This avoids a
+    // SECOND x11grab that gets starved on the shared X server (observed:
+    // separate 2fps stripe ffmpeg delivered frames 2+ minutes late).
+    let hasStripeOutput = false;
+    if (pixelConfig) {
+      args.push(
+        "-map", "0:v",
+        "-vf", `crop=${w}:${pixelConfig.stripeH}:0:${pixelConfig.stripeY}`,
+        "-c:v", "rawvideo",
+        "-pix_fmt", "rgb24",
+        "-f", "rawvideo",
+        "-flush_packets", "1",
+        "pipe:3",
+      );
+      hasStripeOutput = true;
+    }
+
+    this.ffmpegVideo = spawn("ffmpeg", args, {
+      stdio: ["ignore", "pipe", "pipe", hasStripeOutput ? "pipe" : "ignore"],
       env: { ...process.env, DISPLAY: this.display },
     });
 
     this.ffmpegVideo.stdout?.on("data", (chunk: Buffer) => {
       this.handleVideoChunk(chunk);
     });
+
+    // Read health bar stripe from fd 3 (if pixel analysis is active)
+    if (hasStripeOutput && pixelConfig) {
+      const stripeH = pixelConfig.stripeH;
+      const stripeY = pixelConfig.stripeY;
+      const stripeFd: any = (this.ffmpegVideo as any).stdio?.[3];
+      if (stripeFd) {
+        this.healthFrameBuf = Buffer.alloc(0);
+        this.lastHealthFrameAt = Date.now();
+        stripeFd.on("data", (chunk: Buffer) => {
+          this.lastHealthFrameAt = Date.now();
+          this.healthFrameBuf = Buffer.concat([this.healthFrameBuf, chunk]);
+          const frameSize = w * stripeH * 3;
+          while (this.healthFrameBuf.length >= frameSize) {
+            const frame = this.healthFrameBuf.subarray(0, frameSize);
+            this.healthFrameBuf = this.healthFrameBuf.subarray(frameSize);
+            if (!this.pixelAnalysisSuspended) {
+              this.pixelAnalyzer?.processFrame(frame, w, stripeH);
+            }
+          }
+          if (this.healthFrameBuf.length > frameSize * 3) {
+            this.healthFrameBuf = Buffer.alloc(0);
+          }
+        });
+      }
+      console.log(`[game-runner] 🧠 Health bar capture: stripe from main ffmpeg (${w}x${stripeH} at y=${stripeY})`);
+    }
 
     this.ffmpegVideo.stderr?.on("data", (data: Buffer) => {
       const text = data.toString();
@@ -2695,15 +2667,8 @@ export class GameRunner extends EventEmitter {
     // Stop health watcher
     this.stopHealthWatcher();
 
-    // Stop health bar ffmpeg (if pixel analysis was active)
-    if (this.healthCaptureWatchdog) {
-      clearInterval(this.healthCaptureWatchdog);
-      this.healthCaptureWatchdog = null;
-    }
-    if (this.healthFfmpeg) {
-      this.healthFfmpeg.kill("SIGTERM");
-      this.healthFfmpeg = null;
-    }
+    // Health bar stripe is now extracted from the main ffmpeg (fd 3) —
+    // it dies with ffmpegVideo below. No separate process to kill.
 
     // Close UDP health socket (if memory reading was active)
     if (this.healthUdp) {
