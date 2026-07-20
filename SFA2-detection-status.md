@@ -35,7 +35,7 @@ Ils partagent uniquement des variables de sortie : `p1Losses`, `p2Losses`, `matc
 | Santé P1/P2 | UDP `READ_CORE_RAM` | `0x8238` / `0x8438` | ✅ Stable |
 | Timer 16-bit | UDP (timer-only fast poll) | `0xA83A-A83B` | ✅ |
 | Perso actif P1/P2 | Lecture RAM | `0x8256` / `0x8456` | ✅ |
-| Mode gauge | Lecture RAM | `0x821E` / `0x841E` | ⚠️ Adresses pas encore validées |
+| Mode gauge | Lecture RAM | `0x821E` / `0x841E` | ✅ Validé (2026-07-09, 5 matchs + 29 échantillons) |
 | Équipes (3 persos) | Lecture RAM + freeze | `0xA84E`/`0xA84F`/`0xA851` (P1) | ✅ Figées au combat |
 | Ordre de sélection | Lecture RAM one-shot | `0x15CB`/`0x15CA`/`0x15CD` (P1) | ✅ Capturé, pas encore câblé dans overlay |
 | **Compteur de pertes** | **Autoritaire** | **`0xA859` (P1) / `0xA868` (P2)** | ✅ **C'est ça qui drive tout** |
@@ -56,7 +56,7 @@ Ils partagent uniquement des variables de sortie : `p1Losses`, `p2Losses`, `matc
 
 ### ⚠️ Points d'attention KOF98
 
-- **Mode gauge ADVANCED/EXTRA** : les adresses `0x81F0`/`0x83F0` étaient fausses, remplacées par `0x821E`/`0x841E` dans la config DB — **pas encore validées live**
+- **Mode gauge ADVANCED/EXTRA** : adresses `0x821E`/`0x841E` validées live 2026-07-09 (1=ADV, 0=EXT, 5 matchs + 29 échantillons). Anciennes adresses `0x81F0`/`0x83F0` étaient fausses.
 - **Ordre de sélection** : adresses trouvées et validées (`0x15CB`/`0x15CA`/`0x15CD`), mais **pas encore câblé** dans `matchMeta()` pour l'overlay de fin de match
 - **`winsNeeded` hardcodé à 3** dans `processLossCounters()` — si un jour on veut du KOF98 en BO1, il faudra paramétrer
 
@@ -124,13 +124,15 @@ WARMUP ──(timer ≥30 OU bars ≥100 cols)──▶ PLAYING
 | Portrait capture | ImageMagick `import -depth 8 -window root` → PPM 8-bit | `game-runner.ts` | ✅ |
 | Portrait calibrator | Collecte 18 échantillons/match, consensus ≥10/perso | `game-runner.ts` | ✅ (collecte OK, pas assez de matchs) |
 | Portrait grid fix | cellW 80→58, gridY 220→230 — mesuré sur char-select-full.ppm (content x=30→552) | `pixel-game-config.ts` | ✅ (2026-07-20) |
+| Portrait persistence | Auto-load/save vers `/recordings/calibration/portrait-samples.json` | `game-runner.ts` | ✅ (2026-07-20) |
+| Timer bar-stable fix | Fallback sorti du guard `timerValue>0` + warmup timeout 300f | `pixel-match-analyzer.ts` | ✅ (2026-07-20) |
 
 ### Ce qui MANQUE pour SFA2
 
 | Détection | Problème | Priorité |
 |-----------|----------|----------|
-| **Templates portrait ≥10/match** | Calibrateur collecte 1 échantillon/match → besoin de 10 matchs OU persistance disque. Script `generate-portrait-templates.mjs` fonctionnel depuis fix grille. | 🟡 |
-| **Tests live SFA2** | Tout le code pixel est testé en CPU auto-fight. Fonctionne 2/3 du temps (timer instable sur ~1/3 des runs). | 🟡 |
+| **Templates portrait ≥10/char** | Persistance OK (3/char accumulés), besoin de 7 matchs de plus pour auto-génération consensus. | 🟡 |
+| **Tests live SFA2** | 3/3 runs OK depuis fix bar-stable + warmup timeout. À surveiller. | 🟢 |
 | **Autres jeux SNES** | La structure `PIXEL_GAME_CONFIGS` est prête. Ajouter un jeu = une entrée. | 🟢 |
 | **Config charger depuis DB** | Actuellement hardcodé dans `pixel-game-config.ts`. | 🟢 |
 
@@ -185,8 +187,8 @@ Dans analyzeHealthFrame(), état PLAYING :
 - Une fois la détection SFA2 complète, committer par lots logiques
 - Ne pas mélanger les changements game-runner avec les changements UI
 
-### Étape 4 — KOF98 gauge mode
-- Valider les adresses `0x821E`/`0x841E` par diff live (ADVANCED vs EXTRA)
+### Étape 4 — KOF98 gauge mode ✅ (déjà fait 2026-07-09)
+- Adresses `0x821E`/`0x841E` validées par diff live (ADVANCED vs EXTRA) — 5 matchs + 29 échantillons
 
 ---
 

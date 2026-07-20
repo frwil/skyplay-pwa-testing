@@ -155,7 +155,8 @@
 | Xvfb persistant + nettoyage lock (entrypoint.sh) | ✅ Validé | |
 | **Portrait capture** (`import -depth 8`) | ✅ Fixé 20/07 | PPM 8-bit, calibrateur collecte 18 échantillons/match (était 0 avec le 16-bit) |
 | **Portrait grid fix** (cellW 80→58, gridY 220→230) | ✅ Fixé 20/07 | Mesuré sur char-select-full.ppm : contenu x=30→552. Avant : cols 7-8 (Sodom/Rose/Rolento/Zangief) 0% contenu. Maintenant 18/18 cellules OK. |
-| Overlay SFA2 (noms persos) | 🔧 | Templates portrait en calibration — script `generate-portrait-templates.mjs` prêt, besoin de 10+ matchs pour consensus |
+| **Portrait calibration persistence** | ✅ Fixé 20/07 | Auto-load/save vers `/recordings/calibration/portrait-samples.json`. 3 samples/char accumulés en 3 matchs (cible 10). |
+| Overlay SFA2 (noms persos) | 🔧 | Templates portrait : 54 samples accumulés, besoin de 10/char pour auto-génération consensus. |
 
 ### 3.4 Config → DB (Turso variables)
 
@@ -342,8 +343,8 @@ Dossier untracké contenant :
 ## 12. Priorités restantes
 
 ### 🔴 URGENT
-1. **Mode gauge KOF98** — valider adresses `0x821E`/`0x841E` par diff live
-2. **Templates portrait SFA2** — accumuler 10+ matchs pour consensus (grille fixée 20/07 : cellW 58, gridY 230, 18/18 cellules valides)
+1. **Nettoyer 8 escrow_rooms obsolètes** (2000 SKY chacun) — script `scripts/cleanup-escrow.ts` prêt, ou via page admin `/admin/duel/disputes`
+2. **Templates portrait SFA2** — 54 samples accumulés (3/char), besoin de 10/char pour auto-génération consensus (7 matchs restants)
 
 ### 🟡 IMPORTANT
 3. **Committer le reste du working tree** :
