@@ -93,16 +93,17 @@ export const PIXEL_GAME_CONFIGS: Record<string, PixelGameConfig> = {
   // ── Street Fighter Alpha 2 (SNES) ──────────────────────────────────
   "Street Fighter Alpha 2 (Europe).sfc": {
     // Stripe covers score digits/names (top rows), timer digits, and the
-    // health bars. Measured on live frames (2026-07-17, Xvfb :99):
-    //   screen y=110-135: score digits + names (NOT bars — excluded)
-    //   screen y=118-158: timer digits (26×40 at x=354/382)
-    //   screen y=136-160: health bars — P1 x=42..341, P2 x=426..725 (294-300px)
+    // health bars. Measured on live frames (2026-07-19 debug-stripe-combat.ppm):
+    //   stripe y=0-19:  score digits + names (NOT bars — excluded)
+    //   stripe y=20-30: timer digits + gap
+    //   stripe y=31-45: health bars (15 rows, 291 health px/row at 100%)
+    //   stripe y=46-51: gap + leftover pixels
     // barRowStart/barRowH restrict the fill measurement to the bar rows so
     // the bright score digits above P1's bar don't pollute the columns.
     stripeY: 110, stripeH: 52,
     p1StartX: 44, p1EndX: 348,
     p2StartX: 420, p2EndX: 724,
-    barRowStart: 24, barRowH: 28, // screen y=134-162
+    barRowStart: 29, barRowH: 19, // stripe y=29-47, screen y=139-157 (bars at y=31-45 + 2px margin)
     winsNeeded: 2,
     timer: {
       digits: [ // REAL templates from 220-frame capture, binarized @ threshold=160, 8×12 grid

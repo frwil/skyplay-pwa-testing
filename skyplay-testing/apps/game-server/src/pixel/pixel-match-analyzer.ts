@@ -56,7 +56,8 @@ const KO_RECOVERY = 5;          // health > this after KO_PENDING = false alarm
 const NEW_ROUND_HEALTH = 80;    // both bars ≥ this = new round
 const WARMUP_HEALTHY = 65;      // health ≥ this = "healthy" for warmup counting
 const WARMUP_MIN_RATIO = 0.65;
-const PERFECT_HEALTH = 95;
+const PERFECT_HEALTH = 95; // kept for backwards compat, prefer isPerfectKo()
+const PERFECT_RATIO = 0.95; // minFilled / maxFilled must be ≥ this
 const ROUND_START_CALIB_FRAMES = 4; // PLAYING frames over which full-bar width is re-measured (bars are full during the round intro)
 const HEALTH_HISTORY_SIZE = 3; // median-of-3 — minimal lag while filtering single-frame noise
 const KO_CONFIRM_REQUIRED = 5;        // ~2.5s at 2 fps — longer than a timer tick (~1.8s), so a live round's tick always resets the count (sliver-of-health guard)
@@ -157,11 +158,22 @@ export class PixelMatchAnalyzer extends EventEmitter {
    *  window — bars are guaranteed full during the round intro. */
   private roundStartMaxP1Filled = 0;
   private roundStartMaxP2Filled = 0;
+  /** Min RAW filled-column counts during PLAYING — used for ratio-based
+   *  perfect KO detection (insensitive to fullBarWidth calibration drift). */
+  private roundP1MinFilled = 9999;
+  private roundP2MinFilled = 9999;
+  private roundP1MaxFilled = 0;
+  private roundP2MaxFilled = 0;
   private koDetected = false;
   /** One-shot debug flag — saves the full stripe PPM during combat. */
   private _debugStripeSaved = false;
   /** Post-timer-start calibration countdown (0 = inactive). */
   private _postTimerCalibFrames = 0;
+  /** Consecutive frames where both bars are ≥80% without a timer decrease.
+   *  Triggers bar-stable fallback calibration after 30 frames (~7.5s). */
+  private _barStableFrames = 0;
+  /** Throttle for live health events — emit at most once per 500ms. */
+  private _lastHealthEmit = 0;
 
   // ── Health bar X regions (set from config, fallback to defaults) ───
   private p1StartX: number;
@@ -206,6 +218,15 @@ export class PixelMatchAnalyzer extends EventEmitter {
 
   isMatchEnded(): boolean {
     return this.matchEnded;
+  }
+
+  /** Ratio-based perfect KO — uses raw filled-column min/max so it's immune
+   *  to fullBarWidth calibration drift. A true perfect means the winner's bar
+   *  never shrank: minFilled ≥ 95% of maxFilled during the round. */
+  private isPerfectKo(player: 1 | 2): boolean {
+    const minFilled = player === 1 ? this.roundP1MinFilled : this.roundP2MinFilled;
+    const maxFilled = player === 1 ? this.roundP1MaxFilled : this.roundP2MaxFilled;
+    return maxFilled > 0 && (minFilled / maxFilled) >= PERFECT_RATIO;
   }
 
   /**
@@ -296,6 +317,19 @@ export class PixelMatchAnalyzer extends EventEmitter {
     if (this.gamePhase === GamePhase.PLAYING) {
       if (p1Health > 0) this.roundP1MinHealth = Math.min(this.roundP1MinHealth, p1Health);
       if (p2Health > 0) this.roundP2MinHealth = Math.min(this.roundP2MinHealth, p2Health);
+      // Raw filled-column tracking — immune to fullBarWidth calibration drift.
+      // A true perfect KO means the bar never shrank, so minFilled ≈ maxFilled.
+      const p1RegionW = this.p1EndX - this.p1StartX;
+      const p2RegionW = this.p2EndX - this.p2StartX;
+      if (p1Filled > 0) {
+        this.roundP1MinFilled = Math.min(this.roundP1MinFilled, p1Filled);
+        // Anti-glow: full-region fill is an artifact (FIGHT! glow, flashes), ignore.
+        if (p1Filled < p1RegionW) this.roundP1MaxFilled = Math.max(this.roundP1MaxFilled, p1Filled);
+      }
+      if (p2Filled > 0) {
+        this.roundP2MinFilled = Math.min(this.roundP2MinFilled, p2Filled);
+        if (p2Filled < p2RegionW) this.roundP2MaxFilled = Math.max(this.roundP2MaxFilled, p2Filled);
+      }
     }
 
     // ── Timer digit recognition (always — even during WARMUP, so we can
@@ -307,6 +341,21 @@ export class PixelMatchAnalyzer extends EventEmitter {
 
     // ── State machine ────────────────────────────────────────────────
     this.runStateMachine(p1Health, p2Health, rawP1, rawP2, p1Filled, p2Filled, timerValue);
+
+    // ── Live health events (throttled ~500ms) ──────────────────────────
+    // Emit current health + phase so ws-handler can forward match_state
+    // to clients. Previously only KOF98 (RAM-based) did this; SFA2 clients
+    // only saw round_result / match_end with no live HUD updates.
+    if (Date.now() - this._lastHealthEmit >= 500) {
+      this._lastHealthEmit = Date.now();
+      this.emit("health", {
+        p1Health, p2Health, timerValue,
+        phase: this.gamePhase,
+        roundTimerWasRunning: this.roundTimerWasRunning,
+        p1FullBarWidth: this.p1FullBarWidth,
+        p2FullBarWidth: this.p2FullBarWidth,
+      });
+    }
 
     // Update previous values for the next frame
     this.previousP1Health = p1Health;
@@ -344,12 +393,17 @@ export class PixelMatchAnalyzer extends EventEmitter {
     this.lastRunningP2Health = -1;
     this.roundP1MinHealth = 100;
     this.roundP2MinHealth = 100;
+    this.roundP1MinFilled = 9999;
+    this.roundP2MinFilled = 9999;
+    this.roundP1MaxFilled = 0;
+    this.roundP2MaxFilled = 0;
     this.roundStartMaxP1Filled = 0;
     this.roundStartMaxP2Filled = 0;
     this.koDetected = false;
     this.matchEnded = false;
     this._debugStripeSaved = false;
     this._postTimerCalibFrames = 0;
+    this._barStableFrames = 0;
     this.p1Losses = 0;
     this.p2Losses = 0;
     this.roundNumber = 0;
@@ -388,30 +442,61 @@ export class PixelMatchAnalyzer extends EventEmitter {
         if (p1Extent > this.p1FullBarWidth) this.p1FullBarWidth = p1Extent;
         if (p2Extent > this.p2FullBarWidth) this.p2FullBarWidth = p2Extent;
 
-        // ── Timer-based exit: the timer is the most reliable signal that ──
-        //     the fight has started. Health bars may not be visible during
-        //     the VS screen / character intros, which keeps the warmup stuck
-        //     indefinitely. When the timer reads a plausible starting value
-        //     (≥80, i.e. 99 down to ~80), we know the round is live.
-        //     We do NOT calibrate here — the FIGHT! overlay and intro flashes
-        //     can still obscure the bars, producing garbage fullBarWidth
-        //     (observed: P1=8). Calibration is deferred to timer-start
-        //     (first confirmed timer decrease), when the intro is proven over.
-        // Timer-based exit: if the timer reads any plausible value, the
-        // game is past loading screens — exit WARMUP immediately. Health bars
-        // may still be invisible (VS screen, intros), but the post-glow
-        // calibration will handle that once the timer starts decreasing.
+        // ── Bar-based fast exit ───────────────────────────────────────
+        // If both bars have shown substantial fill (≥100 columns each,
+        // ~⅓ of the region), the bars are definitely real and visible —
+        // exit warmup immediately. The timer-based exit (≥30) is too slow:
+        // the timer detector needs calibration frames, so the first valid
+        // timer read can arrive mid-round (observed: timer=34 instead of
+        // 99). The health-based exit (24 frames @ 65% healthy) never fires
+        // on loading screens where bars are invisible.
+        // fullBarWidth captured here is the max seen during warmup; the
+        // post-glow calibration in PLAYING can still refine it once the
+        // timer starts decreasing (first decrease arms roundTimerWasRunning
+        // → roundStartMax tracking activates → locks at ≥80% floor).
+        const MIN_BAR_COLUMNS = 100;
+        if (this.p1FullBarWidth >= MIN_BAR_COLUMNS && this.p2FullBarWidth >= MIN_BAR_COLUMNS) {
+          this.healthHistoryP1 = [];
+          this.healthHistoryP2 = [];
+          this.gamePhase = GamePhase.PLAYING;
+          this.playingFrameCount = 0;
+          this.fastWarmup = false;
+          this.calibrateOnTimerStart = false;
+          this.roundTimerLastValue = timerValue > 0 ? timerValue : -1;
+          this.roundTimerWasRunning = false;
+          this._postTimerCalibFrames = 0;
+    this._barStableFrames = 0;
+          console.log(`[pixel-analyzer] 🎮 Phase: WARMUP → PLAYING (bars visible: P1=${this.p1FullBarWidth} P2=${this.p2FullBarWidth} cols — waiting for timer-drop to arm)`);
+          break;
+        }
+
+        // ── Timer-based exit: fallback if bars haven't been seen yet but ──
+        //     the timer is clearly in-match (≥30). This catches cases where
+        //     the stripe geometry is wrong and bars are never detected.
         if (timerValue >= 30) {
           this.healthHistoryP1 = [];
           this.healthHistoryP2 = [];
           this.gamePhase = GamePhase.PLAYING;
           this.playingFrameCount = 0;
           this.fastWarmup = false;
-          this.calibrateOnTimerStart = true;
+          this.calibrateOnTimerStart = false;
           this.roundTimerLastValue = timerValue;
-          // Keep warmup-tracked fullBarWidth for now — timer-start calibration
-          // will overwrite it once the timer is confirmed running.
-          console.log(`[pixel-analyzer] 🎮 Phase: WARMUP → PLAYING (timer=${timerValue}, barW warmup P1=${this.p1FullBarWidth} P2=${this.p2FullBarWidth} — waiting for timer-drop to calibrate)`);
+          // Timer-based exit: a plausible timer value (≥30) means the game
+          // is past loading screens — exit WARMUP immediately. Do NOT arm
+          // roundTimerWasRunning here: on SFA2 SNES the timer is displayed
+          // during the VS screen and character intros but does NOT decrease
+          // until "FIGHT!" clears. Arming early allows KO detection while
+          // bars are invisible (intros) → false KO → calibration never runs.
+          // Instead, keep roundTimerWasRunning false and let the first
+          // confirmed timer decrease in PLAYING (line ~487) arm it — that
+          // proves the round is actually live. The PLAYING_GRACE_FRAMES
+          // guard (16 frames) covers the gap between warmup exit and that
+          // first decrease. roundTimerLastValue is seeded so the dropped
+          // calculation works when the timer finally ticks.
+          this.roundTimerWasRunning = false;
+          this._postTimerCalibFrames = 0;
+    this._barStableFrames = 0;
+          console.log(`[pixel-analyzer] 🎮 Phase: WARMUP → PLAYING (timer=${timerValue}, barW warmup P1=${this.p1FullBarWidth} P2=${this.p2FullBarWidth} — waiting for timer-drop to arm)`);
           break;
         }
 
@@ -475,35 +560,51 @@ export class PixelMatchAnalyzer extends EventEmitter {
           // are rare, so any confirmed decrease arms the round.
           if (this.roundTimerLastValue > 0 && dropped >= 1) {
             if (!this.roundTimerWasRunning) {
-              // ── Bar-visibility guard (SFA2 SNES fix) ──────────────
-              // The SNES SFA2 timer counts down twice: once on the VS screen
-              // (99→0, no bars visible) and once during the actual fight.
-              // On the VS countdown the bars are absent (filled≈0), so
-              // resetting max to 0 there means the post-glow calibration
-              // tracks from empty frames and never reaches its floor until
-              // the very end of the round (if at all).
+              // ── Timer-start calibration (no reset, no guard) ─────
+              // The timer just decreased for the first time — the fight is
+              // live. We do NOT gate on bar visibility here because the
+              // timer detector may fire early (during VS countdown or
+              // FIGHT! glow) while bars are still absent — checking
+              // current filled misses the window if bars appear later.
               //
-              // Fix: only arm timer-running when at least one bar region has
-              // meaningful fill — this skips the VS countdown entirely.
-              const barsVisible = p1Filled > 100 || p2Filled > 100;
-              if (barsVisible) {
-                this.roundTimerWasRunning = true;
-                this.calibrateOnTimerStart = false;
-
-                // ── Timer-start calibration ───────────────────────
-                // The timer just decreased for the first time — the FIGHT!
-                // glow is gone. We do NOT reset roundStartMax here because
-                // the max tracker has already been running since PLAYING
-                // start (filtering full-region glow via < p1RegionW). If we
-                // reset to 0 now and the timer detector armed late (e.g. the
-                // timer was misread during glow), one bar may already be
-                // damaged and its max can't reach the floor. Keeping the
-                // accumulated max preserves the full-bar-width that was
-                // captured when the bars first appeared.
-                this._postTimerCalibFrames = 0;
-              }
+              // Instead we rely on roundStartMax, which has been tracking
+              // since PLAYING start with the anti-glow filter (< regionW).
+              // It stays at 0 through the VS screen / glow, then jumps to
+              // the true bar width (270-295) as soon as bars appear. The
+              // post-glow calibration below locks the instant max ≥ floor.
+              // No reset means the accumulated max survives across the
+              // timer-start boundary.
+              this.roundTimerWasRunning = true;
+              this.calibrateOnTimerStart = false;
+              this._postTimerCalibFrames = 0;
+    this._barStableFrames = 0;
             }
           }
+
+          // ── Bar-stable fallback ──────────────────────────────────
+          // If the timer never decreases (frozen VS screen, static
+          // pre-round display) but at least ONE bar is clearly visible
+          // at ≥80% of region width for 30 consecutive frames, arm the
+          // round anyway. Without this, a VS-screen timer that reads
+          // as a constant value (e.g. "81") blocks calibration forever.
+          if (!this.roundTimerWasRunning && !this.p1FullBarLocked && !this.p2FullBarLocked) {
+            const floorOne = Math.floor((this.p1EndX - this.p1StartX) * 0.8);
+            const anyBarStable =
+              this.roundStartMaxP1Filled >= floorOne ||
+              this.roundStartMaxP2Filled >= floorOne;
+            if (anyBarStable) {
+              this._barStableFrames++;
+              if (this._barStableFrames === 30) {
+                console.log(`[pixel-analyzer] 🔄 Bar-stable fallback: P1=${this.roundStartMaxP1Filled} P2=${this.roundStartMaxP2Filled} timer=${timerValue} (30f stable, arming without timer drop)`);
+                this.roundTimerWasRunning = true;
+                this.calibrateOnTimerStart = false;
+                this._postTimerCalibFrames = 0;
+              }
+            } else {
+              this._barStableFrames = 0;
+            }
+          }
+
           this.roundTimerLastValue = timerValue;
           if (this.roundTimerWasRunning) {
             this.lastRunningP1Health = p1Health;
@@ -516,8 +617,12 @@ export class PixelMatchAnalyzer extends EventEmitter {
             // visible before we lock. Safety timeout at 60 frames (~15s).
             if (!this.p1FullBarLocked || !this.p2FullBarLocked) {
               this._postTimerCalibFrames++;
-              const floor1 = Math.floor((this.p1EndX - this.p1StartX) * 0.4);
-              const floor2 = Math.floor((this.p2EndX - this.p2StartX) * 0.4);
+              // 80% of region width = full bar (~270-288 of 304). Lower floors
+              // (40%) cause calibration to lock prematurely on a partially-
+              // revealed bar during intro animations (observed: locked at 183
+              // when true width was 270).
+              const floor1 = Math.floor((this.p1EndX - this.p1StartX) * 0.8);
+              const floor2 = Math.floor((this.p2EndX - this.p2StartX) * 0.8);
               const p1Ready = this.roundStartMaxP1Filled >= floor1;
               const p2Ready = this.roundStartMaxP2Filled >= floor2;
               const timedOut = this._postTimerCalibFrames >= 60;
@@ -577,8 +682,52 @@ export class PixelMatchAnalyzer extends EventEmitter {
         const p1Down = p1Health <= KO_THRESHOLD;
         const p2Down = p2Health <= KO_THRESHOLD;
 
-        // Simultaneous double-drop guard — screen transition, not a real double KO
-        if (p1Down && p2Down) break;
+        // Simultaneous double-drop guard — screen transition, not a real double KO.
+        // BUT: if the round was live and we have lastRunning values, a simultaneous
+        // drop to 0 on both bars is a result-screen transition. Use lastRunning to
+        // determine the winner (lower health = loser). The actual KO frame was
+        // missed between 4fps samples.
+        if (p1Down && p2Down) {
+          const roundIsLive = this.timerDetector ? this.roundTimerWasRunning : this.roundSawHealthyBars;
+          // Only fire once per round: koDetected prevents re-triggering on the
+          // same result screen (bars stay at 0% after KO and would loop forever).
+          if (!this.koDetected && roundIsLive && this.lastRunningP1Health >= 0 && this.lastRunningP2Health >= 0 &&
+              this.lastRunningP1Health > KO_THRESHOLD && this.lastRunningP2Health > KO_THRESHOLD) {
+            // Both bars were healthy in the last running frame, then both vanished.
+            // This is a screen transition. If healths differ by >10%, the lower player lost.
+            const lrP1 = this.lastRunningP1Health;
+            const lrP2 = this.lastRunningP2Health;
+            const healthDiff = Math.abs(lrP1 - lrP2);
+            if (healthDiff > 10) {
+              if (lrP1 < lrP2) {
+                this.p1Losses++;
+                this.roundNumber++;
+                this.gamePhase = GamePhase.KO_CONFIRMED;
+                this.koDetected = true;
+                this.newRoundConfirmFrames = 0;
+                const koType = this.isPerfectKo(2) ? "perfect" : "normal";
+                if (koType === "perfect") this.matchPerfectKos++;
+                console.log(`[pixel-analyzer] 🎮 Bars-vanished KO: P1 was ${lrP1}% vs P2 ${lrP2}% → P2 wins (${koType}). Score: P1=${this.p1Losses} P2=${this.p2Losses}`);
+                this.emit("roundResult", { loser: 1, winner: 2, p1Losses: this.p1Losses, p2Losses: this.p2Losses, koType } satisfies RoundResultEvent);
+                break;
+              } else {
+                this.p2Losses++;
+                this.roundNumber++;
+                this.gamePhase = GamePhase.KO_CONFIRMED;
+                this.koDetected = true;
+                this.newRoundConfirmFrames = 0;
+                const koType = this.isPerfectKo(1) ? "perfect" : "normal";
+                if (koType === "perfect") this.matchPerfectKos++;
+                console.log(`[pixel-analyzer] 🎮 Bars-vanished KO: P2 was ${lrP2}% vs P1 ${lrP1}% → P1 wins (${koType}). Score: P1=${this.p1Losses} P2=${this.p2Losses}`);
+                this.emit("roundResult", { loser: 2, winner: 1, p1Losses: this.p1Losses, p2Losses: this.p2Losses, koType } satisfies RoundResultEvent);
+                break;
+              }
+            }
+            // Healths were close (≤10% diff) — could be a timeout draw or menu transition
+          }
+          // Genuine double-drop: menu/attract transition with no round context
+          break;
+        }
 
         // Both bars seen healthy → this round's bars are real and visible.
         // Screens without bars (VS/intros/menus) read ~0% for both.
@@ -587,7 +736,11 @@ export class PixelMatchAnalyzer extends EventEmitter {
         // KO/time-over are only armed once the round is provably live
         // (timer seen decreasing AND both bars seen healthy). ROMs without
         // timer templates keep the legacy always-armed behavior.
-        const roundIsLive = (this.timerDetector ? this.roundTimerWasRunning : true) && this.roundSawHealthyBars;
+        // With timer detector: a confirmed timer decrease proves the round is
+        // live — no need to also wait for both bars to appear at ≥50%. Without
+        // timer detector (legacy): require both bars to be seen healthy at least
+        // once to filter out attract-demo / menu artifacts.
+        const roundIsLive = this.timerDetector ? this.roundTimerWasRunning : this.roundSawHealthyBars;
 
         // ── Time-over detection ──────────────────────────────────────
         // Only armed once the timer was seen running (>0) this round —
@@ -697,14 +850,14 @@ export class PixelMatchAnalyzer extends EventEmitter {
             } else if (p1WinsRound) {
               this.p2Losses++;
               this.roundNumber++;
-              const koType = (this.roundP1MinHealth >= PERFECT_HEALTH) ? "perfect" : "normal";
+              const koType = this.isPerfectKo(1) ? "perfect" : "normal";
               if (koType === "perfect") this.matchPerfectKos++;
               console.log(`[pixel-analyzer] 🎮 KO_CONFIRMED: P2 KO'd! P1 wins (${koType}). P1=${p1Health}% P2=${p2Health}% minP1=${this.roundP1MinHealth}% Score: P1=${this.p1Losses} P2=${this.p2Losses}`);
               this.emit("roundResult", { loser: 2, winner: 1, p1Losses: this.p1Losses, p2Losses: this.p2Losses, koType } satisfies RoundResultEvent);
             } else if (p2WinsRound) {
               this.p1Losses++;
               this.roundNumber++;
-              const koType = (this.roundP2MinHealth >= PERFECT_HEALTH) ? "perfect" : "normal";
+              const koType = this.isPerfectKo(2) ? "perfect" : "normal";
               if (koType === "perfect") this.matchPerfectKos++;
               console.log(`[pixel-analyzer] 🎮 KO_CONFIRMED: P1 KO'd! P2 wins (${koType}). P1=${p1Health}% P2=${p2Health}% minP2=${this.roundP2MinHealth}% Score: P1=${this.p1Losses} P2=${this.p2Losses}`);
               this.emit("roundResult", { loser: 1, winner: 2, p1Losses: this.p1Losses, p2Losses: this.p2Losses, koType } satisfies RoundResultEvent);
@@ -736,13 +889,13 @@ export class PixelMatchAnalyzer extends EventEmitter {
             this.roundNumber++;
             if (loserP === 1) {
               this.p1Losses++;
-              const koType = (this.roundP2MinHealth >= PERFECT_HEALTH) ? "perfect" : "normal";
+              const koType = this.isPerfectKo(2) ? "perfect" : "normal";
               if (koType === "perfect") this.matchPerfectKos++;
               console.log(`[pixel-analyzer] 🎮 KO_CONFIRMED (retroactive, ${signal}): P1 KO'd! P2 wins (${koType}). Score: P1=${this.p1Losses} P2=${this.p2Losses}`);
               this.emit("roundResult", { loser: 1, winner: 2, p1Losses: this.p1Losses, p2Losses: this.p2Losses, koType } satisfies RoundResultEvent);
             } else {
               this.p2Losses++;
-              const koType = (this.roundP1MinHealth >= PERFECT_HEALTH) ? "perfect" : "normal";
+              const koType = this.isPerfectKo(1) ? "perfect" : "normal";
               if (koType === "perfect") this.matchPerfectKos++;
               console.log(`[pixel-analyzer] 🎮 KO_CONFIRMED (retroactive, ${signal}): P2 KO'd! P1 wins (${koType}). Score: P1=${this.p1Losses} P2=${this.p2Losses}`);
               this.emit("roundResult", { loser: 2, winner: 1, p1Losses: this.p1Losses, p2Losses: this.p2Losses, koType } satisfies RoundResultEvent);
@@ -810,6 +963,8 @@ export class PixelMatchAnalyzer extends EventEmitter {
             this.newRoundConfirmFrames = 0;
             this.roundP1MinHealth = 100;
             this.roundP2MinHealth = 100;
+            this.roundP1MinFilled = 9999;
+            this.roundP2MinFilled = 9999;
             // Fresh round: forget the previous round's frozen timer state and
             // require the timer to be seen running again before time-over re-arms.
             this.roundTimerWasRunning = false;
@@ -916,7 +1071,7 @@ export class PixelMatchAnalyzer extends EventEmitter {
     // The floor prevents the relative threshold from collapsing to
     // near-zero on menu screens (where a single bright pixel can
     // push maxScore just above the old 0.18 gate).
-    const absFloor = 16 / regionH;
+    const absFloor = 0.45; // require ≥45% of rows have health pixels (was 16/regionH — broke when regionH < 28)
     const threshold = Math.max(maxScore * 0.45, absFloor);
     let best = 0;
     let run = 0;
