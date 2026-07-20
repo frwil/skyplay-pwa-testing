@@ -154,7 +154,8 @@
 | Char select joueur (grille 2×9, D-pad counting) | ✅ Commité | `3395538` |
 | Xvfb persistant + nettoyage lock (entrypoint.sh) | ✅ Validé | |
 | **Portrait capture** (`import -depth 8`) | ✅ Fixé 20/07 | PPM 8-bit, calibrateur collecte 18 échantillons/match (était 0 avec le 16-bit) |
-| Overlay SFA2 (noms persos) | 🔧 | Templates portrait en calibration — script `generate-portrait-templates.mjs` prêt, besoin de 10 matchs ou ajustement grille |
+| **Portrait grid fix** (cellW 80→58, gridY 220→230) | ✅ Fixé 20/07 | Mesuré sur char-select-full.ppm : contenu x=30→552. Avant : cols 7-8 (Sodom/Rose/Rolento/Zangief) 0% contenu. Maintenant 18/18 cellules OK. |
+| Overlay SFA2 (noms persos) | 🔧 | Templates portrait en calibration — script `generate-portrait-templates.mjs` prêt, besoin de 10+ matchs pour consensus |
 
 ### 3.4 Config → DB (Turso variables)
 
@@ -342,7 +343,7 @@ Dossier untracké contenant :
 
 ### 🔴 URGENT
 1. **Mode gauge KOF98** — valider adresses `0x821E`/`0x841E` par diff live
-2. **Templates portrait SFA2** — ajuster la grille (colonnes droites tout-noir) + accumuler 10+ matchs pour consensus, ou utiliser `generate-portrait-templates.mjs` avec calibration manuelle
+2. **Templates portrait SFA2** — accumuler 10+ matchs pour consensus (grille fixée 20/07 : cellW 58, gridY 230, 18/18 cellules valides)
 
 ### 🟡 IMPORTANT
 3. **Committer le reste du working tree** :

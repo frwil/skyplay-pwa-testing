@@ -124,11 +124,11 @@ export const PIXEL_GAME_CONFIGS: Record<string, PixelGameConfig> = {
       minBrightRatio: 0.10,
     },
     portrait: {
-      // Empirical coords: grid starts ~x=30, y=220 at 3x upscale.
-      // Cursor row at y=180, portrait content spans rows ~220-440.
-      gridX: 30, gridY: 220,
+      // Measured from char-select-full.ppm: portrait content x=30→552, y=230→450 at 3x upscale.
+      // cellW=58 gives 522px total (9 cols); previous 80px overflowed into background (cols 7-8 all-green).
+      gridX: 30, gridY: 230,
       cols: 9, rows: 2,
-      cellW: 80, cellH: 110,
+      cellW: 58, cellH: 110,
       // 18 zero-seed templates (one per character). Calibrator populates them.
       templates: Array.from({ length: 18 }, () => Array(24).fill(0)),
       charNames: [

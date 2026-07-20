@@ -123,12 +123,13 @@ WARMUP ──(timer ≥30 OU bars ≥100 cols)──▶ PLAYING
 | Anti-fantôme KO | Gardes timer-decrease, thaw détection, KO recovery | `pixel-match-analyzer.ts` | ✅ |
 | Portrait capture | ImageMagick `import -depth 8 -window root` → PPM 8-bit | `game-runner.ts` | ✅ |
 | Portrait calibrator | Collecte 18 échantillons/match, consensus ≥10/perso | `game-runner.ts` | ✅ (collecte OK, pas assez de matchs) |
+| Portrait grid fix | cellW 80→58, gridY 220→230 — mesuré sur char-select-full.ppm (content x=30→552) | `pixel-game-config.ts` | ✅ (2026-07-20) |
 
 ### Ce qui MANQUE pour SFA2
 
 | Détection | Problème | Priorité |
 |-----------|----------|----------|
-| **Templates portrait** | Calibrateur collecte mais 1 seul échantillon/match → besoin de 10 matchs ou persistance disque. Script `generate-portrait-templates.mjs` prêt mais colonnes droites tout-noir (grille à ajuster). | 🟡 |
+| **Templates portrait ≥10/match** | Calibrateur collecte 1 échantillon/match → besoin de 10 matchs OU persistance disque. Script `generate-portrait-templates.mjs` fonctionnel depuis fix grille. | 🟡 |
 | **Tests live SFA2** | Tout le code pixel est testé en CPU auto-fight. Fonctionne 2/3 du temps (timer instable sur ~1/3 des runs). | 🟡 |
 | **Autres jeux SNES** | La structure `PIXEL_GAME_CONFIGS` est prête. Ajouter un jeu = une entrée. | 🟢 |
 | **Config charger depuis DB** | Actuellement hardcodé dans `pixel-game-config.ts`. | 🟢 |
