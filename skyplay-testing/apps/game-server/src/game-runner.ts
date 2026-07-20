@@ -606,6 +606,16 @@ export class GameRunner extends EventEmitter {
               `[game-runner] 🔧 Calibrator fed ${frames.length} frame(s) — ${this.calibrator.getTotalSamples()} total samples across ${this.calibrator.getSampledCharIds().length} characters`,
             );
 
+            // ── Auto-persist samples to disk for cross-match accumulation ──
+            try {
+              const samplesPath = "/recordings/calibration/portrait-samples.json";
+              const dir = "/recordings/calibration";
+              if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+              this.calibrator.save(samplesPath, this.rom);
+            } catch (e) {
+              console.warn("[game-runner] 🔧 Failed to persist calibration data:", e);
+            }
+
             // ── Auto-generate templates when enough samples ──────────
             // Once every character has ≥MIN_SAMPLES_PER_CHAR samples, generate
             // consensus templates, validate, and auto-swap the detector's
@@ -682,6 +692,14 @@ export class GameRunner extends EventEmitter {
     if (!this.calibrator) {
       this.calibrator = new TemplateCalibrator(pixelConfig.portrait);
       console.log("[game-runner] 🔧 Template calibrator ENABLED — samples will be collected on each char select capture");
+
+      // ── Auto-load persisted samples from previous matches ──
+      const samplesPath = "/recordings/calibration/portrait-samples.json";
+      try {
+        this.calibrator.load(samplesPath);
+      } catch (e) {
+        console.log("[game-runner] 🔧 No existing calibration data to load (first run or file missing)");
+      }
     }
   }
 

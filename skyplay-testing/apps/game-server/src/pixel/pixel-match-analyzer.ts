@@ -56,6 +56,7 @@ const KO_RECOVERY = 5;          // health > this after KO_PENDING = false alarm
 const NEW_ROUND_HEALTH = 80;    // both bars ≥ this = new round
 const WARMUP_HEALTHY = 65;      // health ≥ this = "healthy" for warmup counting
 const WARMUP_MIN_RATIO = 0.65;
+const WARMUP_TIMEOUT_FRAMES = 300; // ~75s at 4fps — force-exit if warmup never ends
 const PERFECT_HEALTH = 95; // kept for backwards compat, prefer isPerfectKo()
 const PERFECT_RATIO = 0.95; // minFilled / maxFilled must be ≥ this
 const ROUND_START_CALIB_FRAMES = 4; // PLAYING frames over which full-bar width is re-measured (bars are full during the round intro)
@@ -139,6 +140,7 @@ export class PixelMatchAnalyzer extends EventEmitter {
   private healthStableFrames = 0;
   private healthStableFramesHealthy = 0;
   private fastWarmup = false;
+  private _warmupFrameCount = 0;  // safety timeout counter
   private healthPollErrorCount = 0;
 
   // ── Round / match tracking ─────────────────────────────────────────
@@ -375,6 +377,7 @@ export class PixelMatchAnalyzer extends EventEmitter {
     this.healthHistoryP2 = [];
     this.healthStableFrames = 0;
     this.healthStableFramesHealthy = 0;
+    this._warmupFrameCount = 0;
     this.healthPollErrorCount = 0;
     this.koConfirmFrames = 0;
     this.newRoundConfirmFrames = 0;
@@ -436,6 +439,26 @@ export class PixelMatchAnalyzer extends EventEmitter {
     switch (this.gamePhase) {
 
       case GamePhase.WARMUP: {
+        // ── Safety timeout: force-exit if warmup never ends ─────────
+        // If bars are never visible (Xvfb black screen, ffmpeg failure,
+        // stripe capture on wrong display) the warmup phase could loop
+        // forever. After WARMUP_TIMEOUT_FRAMES (~75s at 4fps) we force
+        // exit to PLAYING so the timer-based arming paths have a chance
+        // to recover.
+        this._warmupFrameCount++;
+        if (this._warmupFrameCount >= WARMUP_TIMEOUT_FRAMES) {
+          this.healthHistoryP1 = [];
+          this.healthHistoryP2 = [];
+          this.gamePhase = GamePhase.PLAYING;
+          this.playingFrameCount = 0;
+          this.fastWarmup = false;
+          this.calibrateOnTimerStart = true;
+          this.roundTimerLastValue = -1;
+          this.roundTimerWasRunning = false;
+          console.log(`[pixel-analyzer] ⏰ Warmup timeout after ${this._warmupFrameCount} frames — forcing PLAYING (bars may be invisible)`);
+          break;
+        }
+
         // Calibrate full-bar width: track the max filled-column count.
         const p1Extent = p1Filled;
         const p2Extent = p2Filled;
@@ -581,30 +604,6 @@ export class PixelMatchAnalyzer extends EventEmitter {
             }
           }
 
-          // ── Bar-stable fallback ──────────────────────────────────
-          // If the timer never decreases (frozen VS screen, static
-          // pre-round display) but at least ONE bar is clearly visible
-          // at ≥80% of region width for 30 consecutive frames, arm the
-          // round anyway. Without this, a VS-screen timer that reads
-          // as a constant value (e.g. "81") blocks calibration forever.
-          if (!this.roundTimerWasRunning && !this.p1FullBarLocked && !this.p2FullBarLocked) {
-            const floorOne = Math.floor((this.p1EndX - this.p1StartX) * 0.8);
-            const anyBarStable =
-              this.roundStartMaxP1Filled >= floorOne ||
-              this.roundStartMaxP2Filled >= floorOne;
-            if (anyBarStable) {
-              this._barStableFrames++;
-              if (this._barStableFrames === 30) {
-                console.log(`[pixel-analyzer] 🔄 Bar-stable fallback: P1=${this.roundStartMaxP1Filled} P2=${this.roundStartMaxP2Filled} timer=${timerValue} (30f stable, arming without timer drop)`);
-                this.roundTimerWasRunning = true;
-                this.calibrateOnTimerStart = false;
-                this._postTimerCalibFrames = 0;
-              }
-            } else {
-              this._barStableFrames = 0;
-            }
-          }
-
           this.roundTimerLastValue = timerValue;
           if (this.roundTimerWasRunning) {
             this.lastRunningP1Health = p1Health;
@@ -673,6 +672,34 @@ export class PixelMatchAnalyzer extends EventEmitter {
                 }
               }
             }
+          }
+        }
+
+        // ── Bar-stable fallback (timer-independent) ───────────────
+        // The timer-drop arming path only fires when the timer reads a
+        // non-zero value AND shows a confirmed decrease. Both conditions
+        // fail when the OCR reads 0/-1 (loading screens) or a constant
+        // value (VS screen freeze at "81"). This fallback is independent
+        // of timer state: if bars are clearly visible (≥80% of region
+        // width) for 30 consecutive frames, the fight is live regardless
+        // of what the timer OCR says. Gated on calibration NOT being
+        // locked (post-glow calibration only runs after arming, so unlocked
+        // bars mean the round hasn't been armed yet).
+        if (!this.roundTimerWasRunning && !this.p1FullBarLocked && !this.p2FullBarLocked) {
+          const floorOne = Math.floor((this.p1EndX - this.p1StartX) * 0.8);
+          const anyBarStable =
+            this.roundStartMaxP1Filled >= floorOne ||
+            this.roundStartMaxP2Filled >= floorOne;
+          if (anyBarStable) {
+            this._barStableFrames++;
+            if (this._barStableFrames === 30) {
+              console.log(`[pixel-analyzer] 🔄 Bar-stable fallback: P1=${this.roundStartMaxP1Filled} P2=${this.roundStartMaxP2Filled} timer=${timerValue} (30f stable, arming without timer drop)`);
+              this.roundTimerWasRunning = true;
+              this.calibrateOnTimerStart = false;
+              this._postTimerCalibFrames = 0;
+            }
+          } else {
+            this._barStableFrames = 0;
           }
         }
 
