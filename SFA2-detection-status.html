@@ -3,33 +3,30 @@
 <head>
 <meta charset="utf-8">
 <style>
-  body { font-family: 'Segoe UI', system-ui, sans-serif; max-width: 900px; margin: 40px auto; padding: 20px; color: #1a1a1a; line-height: 1.6; }
-  h1 { border-bottom: 3px solid #2563eb; padding-bottom: 8px; color: #1e3a5f; }
-  h2 { color: #2563eb; border-bottom: 1px solid #e5e7eb; padding-bottom: 4px; margin-top: 32px; }
-  h3 { color: #374151; margin-top: 24px; }
-  code { background: #f3f4f6; padding: 2px 6px; border-radius: 4px; font-size: 0.9em; }
-  pre { background: #1e293b; color: #e2e8f0; padding: 16px; border-radius: 8px; overflow-x: auto; font-size: 0.85em; line-height: 1.5; }
-  pre code { background: none; padding: 0; color: inherit; }
-  table { border-collapse: collapse; width: 100%; margin: 16px 0; }
-  th, td { border: 1px solid #d1d5db; padding: 8px 12px; text-align: left; }
-  th { background: #f9fafb; font-weight: 600; }
-  tr:nth-child(even) td { background: #f9fafb; }
-  ul, ol { padding-left: 24px; }
-  li { margin: 4px 0; }
-  blockquote { border-left: 4px solid #2563eb; margin: 16px 0; padding: 8px 16px; background: #f0f4ff; }
-  hr { border: none; border-top: 1px solid #e5e7eb; margin: 24px 0; }
-  strong { color: #1e3a5f; }
-  .emoji { font-style: normal; }
+body { font-family: system-ui, -apple-system, sans-serif; max-width: 900px; margin: 40px auto; padding: 20px; color: #1a202c; line-height: 1.6; }
+h1 { font-size: 1.8em; border-bottom: 3px solid #2563eb; padding-bottom: 8px; }
+h2 { font-size: 1.4em; border-bottom: 2px solid #e2e8f0; padding-bottom: 6px; margin-top: 32px; }
+h3 { font-size: 1.1em; margin-top: 24px; }
+code { background: #f1f5f9; padding: 2px 6px; border-radius: 4px; font-size: 0.9em; }
+pre { background: #1e293b; color: #e2e8f0; padding: 16px; border-radius: 8px; overflow-x: auto; }
+pre code { background: none; padding: 0; }
+table { border-collapse: collapse; width: 100%; margin: 12px 0; }
+th, td { border: 1px solid #e2e8f0; padding: 8px 12px; text-align: left; font-size: 0.9em; }
+th { background: #f8fafc; font-weight: 600; }
+ul, ol { padding-left: 24px; margin: 8px 0; }
+li { margin: 3px 0; }
+hr { border: none; border-top: 2px solid #e2e8f0; margin: 32px 0; }
+strong { color: #1e3a5f; }
+a { color: #2563eb; text-decoration: none; }
+blockquote { border-left: 4px solid #2563eb; margin: 16px 0; padding: 8px 20px; background: #f0f4ff; border-radius: 0 8px 8px 0; }
 </style>
 </head>
 <body>
 <h1>SFA2 — État de la détection pixel & isolation KOF98</h1>
 
-<blockquote>
-<p><strong>Date</strong> : 2026-07-14</p>
-<p><strong>Branche</strong> : <code>main</code> (27 fichiers modifiés non commités)</p>
-<p><strong>Contexte</strong> : Détection pixel pour SFA2 (SNES/snes9x — RAM inaccessible), sans casser KOF98 (RAM Neo Geo/FBNeo)</p>
-</blockquote>
+<blockquote><strong>Date</strong> : 2026-07-20  </blockquote>
+<blockquote><strong>Branche</strong> : <code>main</code>  </blockquote>
+<blockquote><strong>Contexte</strong> : Détection pixel pour SFA2 (SNES/snes9x — RAM inaccessible), sans casser KOF98 (RAM Neo Geo/FBNeo)</blockquote>
 
 <hr>
 
@@ -44,8 +41,10 @@
 │   │
 │   └── NON → startHealthBarCapture()
 │             ffmpeg x11grab → analyzeHealthFrame()   ← SFA2, SF2, ...
-│               state machine: WARMUP→PLAYING→KO_PENDING→KO_CONFIRMED→MATCH_END</code></pre>
-<p><strong>Les deux chemins sont complètement séparés au niveau de la détection.</strong></p>
+│               state machine: WARMUP→PLAYING→KO_PENDING→KO_CONFIRMED→MATCH_END
+</code></pre>
+
+<p><strong>Les deux chemins sont complètement séparés au niveau de la détection.</strong>  </p>
 <p>Ils partagent uniquement des variables de sortie : <code>p1Losses</code>, <code>p2Losses</code>, <code>matchEnded</code>, <code>roundNumber</code>, <code>matchPerfectKos</code>.</p>
 
 <hr>
@@ -57,29 +56,29 @@
 <table>
 <thead><tr><th>Détection</th><th>Mécanisme</th><th>Adresse(s) RAM</th><th>Statut</th></tr></thead>
 <tbody>
-<tr><td>Santé P1/P2</td><td>UDP <code>READ_CORE_RAM</code></td><td><code>0x8238</code> / <code>0x8438</code></td><td>✅ Stable</td></tr>
-<tr><td>Timer 16-bit</td><td>UDP (timer-only fast poll)</td><td><code>0xA83A-A83B</code></td><td>✅</td></tr>
-<tr><td>Perso actif P1/P2</td><td>Lecture RAM</td><td><code>0x8256</code> / <code>0x8456</code></td><td>✅</td></tr>
-<tr><td>Mode gauge</td><td>Lecture RAM</td><td><code>0x821E</code> / <code>0x841E</code></td><td>⚠️ Adresses pas encore validées</td></tr>
-<tr><td>Équipes (3 persos)</td><td>Lecture RAM + freeze</td><td><code>0xA84E</code>/<code>0xA84F</code>/<code>0xA851</code> (P1)</td><td>✅ Figées au combat</td></tr>
-<tr><td>Ordre de sélection</td><td>Lecture RAM one-shot</td><td><code>0x15CB</code>/<code>0x15CA</code>/<code>0x15CD</code> (P1)</td><td>✅ Capturé, pas encore câblé dans overlay</td></tr>
-<tr><td><strong>Compteur de pertes</strong></td><td><strong>Autoritaire</strong></td><td><strong><code>0xA859</code> (P1) / <code>0xA868</code> (P2)</strong></td><td>✅ <strong>C'est ça qui drive tout</strong></td></tr>
-<tr><td>Round gagné/perdu</td><td><code>processLossCounters()</code></td><td>Diff <code>prevLost</code> → <code>currLost</code></td><td>✅</td></tr>
-<tr><td>Time-over</td><td><code>memTimer16 > 0 → 0</code> transition</td><td><code>0xA83A</code></td><td>✅</td></tr>
+<tr><td>Santé P1/P2</td><td>UDP `READ_CORE_RAM`</td><td>`0x8238` / `0x8438`</td><td>✅ Stable</td></tr>
+<tr><td>Timer 16-bit</td><td>UDP (timer-only fast poll)</td><td>`0xA83A-A83B`</td><td>✅</td></tr>
+<tr><td>Perso actif P1/P2</td><td>Lecture RAM</td><td>`0x8256` / `0x8456`</td><td>✅</td></tr>
+<tr><td>Mode gauge</td><td>Lecture RAM</td><td>`0x821E` / `0x841E`</td><td>⚠️ Adresses pas encore validées</td></tr>
+<tr><td>Équipes (3 persos)</td><td>Lecture RAM + freeze</td><td>`0xA84E`/`0xA84F`/`0xA851` (P1)</td><td>✅ Figées au combat</td></tr>
+<tr><td>Ordre de sélection</td><td>Lecture RAM one-shot</td><td>`0x15CB`/`0x15CA`/`0x15CD` (P1)</td><td>✅ Capturé, pas encore câblé dans overlay</td></tr>
+<tr><td>**Compteur de pertes**</td><td>**Autoritaire**</td><td>**`0xA859` (P1) / `0xA868` (P2)**</td><td>✅ **C'est ça qui drive tout**</td></tr>
+<tr><td>Round gagné/perdu</td><td>`processLossCounters()`</td><td>Diff `prevLost` → `currLost`</td><td>✅</td></tr>
+<tr><td>Time-over</td><td>`memTimer16 > 0 → 0` transition</td><td>`0xA83A`</td><td>✅</td></tr>
 <tr><td>KO</td><td>Perte incrémentée sans time-over</td><td>Compteurs</td><td>✅</td></tr>
-<tr><td>Perfect KO</td><td><code>roundMinHealth ≥ 95%</code> (combat stable)</td><td>Heuristique (pas de compteur RAM fiable)</td><td>✅</td></tr>
-<tr><td>Draw</td><td>Les deux compteurs incrémentés au même poll</td><td><code>0xA859</code> + <code>0xA868</code></td><td>✅</td></tr>
+<tr><td>Perfect KO</td><td>`roundMinHealth ≥ 95%` (combat stable)</td><td>Heuristique (pas de compteur RAM fiable)</td><td>✅</td></tr>
+<tr><td>Draw</td><td>Les deux compteurs incrémentés au même poll</td><td>`0xA859` + `0xA868`</td><td>✅</td></tr>
 <tr><td>Fin de match</td><td>`p1Lost ≥ 3</td><td></td><td>p2Lost ≥ 3`</td><td>Hardcodé à 3</td><td>✅</td></tr>
-<tr><td>Continue/Revanche</td><td>Pièce via <code>0xF2C0</code>, START loop</td><td>UDP <code>btn</code> commands</td><td>✅</td></tr>
-</tbody></table>
+<tr><td>Continue/Revanche</td><td>Pièce via `0xF2C0`, START loop</td><td>UDP `btn` commands</td><td>✅</td></tr>
+</tbody>
+</table>
+
 <h3>Pourquoi KOF98 n'est pas affecté par les changements SFA2</h3>
 
-<ul>
-<li><strong><code>processHealthFrame()</code> (ligne 1422)</strong> : si <code>healthMemMap?.p1Lost != null</code>, appelle <code>processLossCounters()</code> et <strong>return immédiatement</strong> — le code pixel n'est jamais atteint</li>
-<li><strong><code>analyzeHealthFrame()</code></strong> est appelé uniquement depuis le handler <code>ffmpeg.stdout.on("data")</code> — qui n'est jamais démarré pour KOF98 (car <code>startMemoryHealthReader()</code> est appelé à la place)</li>
-<li><strong><code>pixelConfig</code></strong> vaut <code>null</code> pour KOF98 (<code>getPixelConfig("kof98.zip")</code> → pas d'entrée dans <code>PIXEL_GAME_CONFIGS</code>)</li>
-<li><strong>Match end KOF98</strong> : <code>processLossCounters()</code> ligne 1397 → <code>p1Lost >= 3 || p2Lost >= 3</code> (hardcodé, unchanged)</li>
-</ul>
+<p>1. <strong><code>processHealthFrame()</code> (ligne 1422)</strong> : si <code>healthMemMap?.p1Lost != null</code>, appelle <code>processLossCounters()</code> et <strong>return immédiatement</strong> — le code pixel n'est jamais atteint</p>
+<p>2. <strong><code>analyzeHealthFrame()</code></strong> est appelé uniquement depuis le handler <code>ffmpeg.stdout.on("data")</code> — qui n'est jamais démarré pour KOF98 (car <code>startMemoryHealthReader()</code> est appelé à la place)</p>
+<p>3. <strong><code>pixelConfig</code></strong> vaut <code>null</code> pour KOF98 (<code>getPixelConfig("kof98.zip")</code> → pas d'entrée dans <code>PIXEL_GAME_CONFIGS</code>)</p>
+<p>4. <strong>Match end KOF98</strong> : <code>processLossCounters()</code> ligne 1397 → <code>p1Lost >= 3 || p2Lost >= 3</code> (hardcodé, unchanged)</p>
 
 <h3>⚠️ Points d'attention KOF98</h3>
 
@@ -88,7 +87,6 @@
 <li><strong>Ordre de sélection</strong> : adresses trouvées et validées (<code>0x15CB</code>/<code>0x15CA</code>/<code>0x15CD</code>), mais <strong>pas encore câblé</strong> dans <code>matchMeta()</code> pour l'overlay de fin de match</li>
 <li><strong><code>winsNeeded</code> hardcodé à 3</strong> dans <code>processLossCounters()</code> — si un jour on veut du KOF98 en BO1, il faudra paramétrer</li>
 </ul>
-
 <hr>
 
 <h2>3. SFA2 — Chemin pixel (snes9x) : EN COURS 🔧</h2>
@@ -96,7 +94,7 @@
 <h3>Config par ROM</h3>
 
 <pre><code>PIXEL_GAME_CONFIGS = {
-  &quot;Street Fighter Alpha 2 (Europe).sfc&quot;: {
+  "Street Fighter Alpha 2 (Europe).sfc": {
     stripeY: 110, stripeH: 24,     // barre de vie = 24px à y=110 (après bordure noire)
     p1StartX: 70,  p1EndX: 310,   // barre P1 à gauche
     p2StartX: 450, p2EndX: 768,   // barre P2 à droite
@@ -108,56 +106,64 @@
       minBrightRatio: 0.15,
     },
   },
-};</code></pre>
+};
+</code></pre>
+
 <h3>State machine (GamePhase)</h3>
 
-<pre><code>WARMUP ──(24 frames ≥65% healthy)──▶ PLAYING
-  │                                      │
-  │                              (un joueur ≤2%)
-  │                                      ▼
-  │                                KO_PENDING
-  │                                      │
-  │                        (4 frames confirmées)
-  │                                      ▼
-  │                              KO_CONFIRMED ──(losses≥winsNeeded)──▶ MATCH_END
-  │                                      │
-  │                        (2 bars ≥80%, 5 frames)
-  │                                      ▼
-  └────────────────────────────── PLAYING (new round)</code></pre>
-<h3>Ce qui est fait (dans le code non commité)</h3>
+<pre><code>WARMUP ──(timer ≥30 OU bars ≥100 cols)──▶ PLAYING
+  │                                           │
+  │                                   (un joueur ≤10%)
+  │                                           ▼
+  │                                     KO_PENDING
+  │                                           │
+  │                             (5 frames confirmées)
+  │                                           ▼
+  │                                   KO_CONFIRMED ──(losses≥winsNeeded)──▶ MATCH_END
+  │                                           │
+  │                             (2 bars ≥80%, 5 frames)
+  │                                           ▼
+  └────────────────────────────────── PLAYING (new round)
+</code></pre>
+
+<h3>Ce qui est fait (commits récents — 2026-07-20)</h3>
 
 <table>
 <thead><tr><th>Détection</th><th>Mécanisme</th><th>Fichier</th><th>Statut</th></tr></thead>
 <tbody>
-<tr><td>Santé P1/P2</td><td>Column scan + saturation couleur</td><td><code>game-runner.ts:analyzeHealthFrame()</code></td><td>✅ Implémenté</td></tr>
-<tr><td>Barre calibrée</td><td><code>p1FullBarWidth</code>/<code>p2FullBarWidth</code> max pendant WARMUP</td><td><code>game-runner.ts</code></td><td>✅</td></tr>
-<tr><td>Lissage</td><td>Médiane glissante sur 5 frames</td><td><code>game-runner.ts:getSmoothedHealth()</code></td><td>✅</td></tr>
-<tr><td>Seuil KO</td><td><code>KO_THRESHOLD = 2%</code></td><td><code>game-runner.ts</code></td><td>✅</td></tr>
-<tr><td>Confirmation KO</td><td>4 frames consécutives (<code>KO_CONFIRM_REQUIRED</code>)</td><td><code>game-runner.ts</code></td><td>✅</td></tr>
-<tr><td>Grâce début round</td><td>16 frames après entrée PLAYING (<code>PLAYING_GRACE_FRAMES</code>)</td><td><code>game-runner.ts</code></td><td>✅</td></tr>
-<tr><td>KO</td><td><code>KO_PENDING → KO_CONFIRMED</code>, détermine vainqueur</td><td><code>game-runner.ts:analyzeHealthFrame()</code></td><td>✅</td></tr>
-<tr><td>Perfect KO</td><td><code>roundP1MinHealth ≥ 95%</code> ou <code>roundP2MinHealth ≥ 95%</code></td><td><code>game-runner.ts</code></td><td>✅</td></tr>
-<tr><td>Draw</td><td>Les deux joueurs KO simultanément, santé égale</td><td><code>game-runner.ts</code></td><td>✅</td></tr>
-<tr><td>Nouveau round</td><td>2 barres ≥ 80% pendant 5 frames → retour PLAYING</td><td><code>game-runner.ts</code></td><td>✅</td></tr>
-<tr><td>Fin de match</td><td><code>losses ≥ winsNeeded</code> (2 pour SFA2)</td><td><code>game-runner.ts</code></td><td>✅</td></tr>
-<tr><td>Timer OCR</td><td>Template matching 8×12 → digits 0-99</td><td><code>game-runner.ts:readTimerFromFrame()</code></td><td>✅</td></tr>
-<tr><td>Validation timer</td><td>Stabilité N frames, transitions valides</td><td><code>game-runner.ts:processTimerValue()</code></td><td>✅</td></tr>
-<tr><td>Config par ROM</td><td><code>PIXEL_GAME_CONFIGS</code> + <code>getPixelConfig()</code></td><td><code>game-runner.ts</code></td><td>✅</td></tr>
-<tr><td>Warmup rapide</td><td><code>fastWarmup = true</code> → 8 frames au lieu de 24</td><td><code>game-runner.ts:resetHealthWarmup()</code></td><td>✅</td></tr>
-<tr><td>Anti-faux-positif</td><td>Double-drop simultané ignoré (transition écran)</td><td><code>game-runner.ts</code></td><td>✅</td></tr>
-</tbody></table>
+<tr><td>Santé P1/P2</td><td>Column scan + médiane glissante</td><td>`pixel-match-analyzer.ts`</td><td>✅ Stable</td></tr>
+<tr><td>Barre calibrée</td><td>`p1FullBarWidth` max warmup + recalibration timer-start</td><td>`pixel-match-analyzer.ts`</td><td>✅</td></tr>
+<tr><td>Seuil KO</td><td>`KO_THRESHOLD = 10%`</td><td>`pixel-match-analyzer.ts`</td><td>✅</td></tr>
+<tr><td>Confirmation KO</td><td>5 frames (`KO_CONFIRM_REQUIRED`)</td><td>`pixel-match-analyzer.ts`</td><td>✅</td></tr>
+<tr><td>Grâce début round</td><td>16 frames (`PLAYING_GRACE_FRAMES`)</td><td>`pixel-match-analyzer.ts`</td><td>✅</td></tr>
+<tr><td>KO</td><td>KO_PENDING → KO_CONFIRMED + retroactive KO</td><td>`pixel-match-analyzer.ts`</td><td>✅</td></tr>
+<tr><td>Perfect KO</td><td>Ratio-based : `minFilled/maxFilled ≥ 0.95` (colonnes brutes)</td><td>`pixel-match-analyzer.ts`</td><td>✅</td></tr>
+<tr><td>Draw</td><td>Double KO simultané, santé égale</td><td>`pixel-match-analyzer.ts`</td><td>✅</td></tr>
+<tr><td>Nouveau round</td><td>2 barres ≥ 80% pendant 5 frames</td><td>`pixel-match-analyzer.ts`</td><td>✅</td></tr>
+<tr><td>Fin de match</td><td>`losses ≥ winsNeeded` (2 pour SFA2)</td><td>`pixel-match-analyzer.ts`</td><td>✅</td></tr>
+<tr><td>Timer OCR</td><td>Template matching 8×12 → digits 0-99</td><td>`pixel-match-analyzer.ts`</td><td>✅</td></tr>
+<tr><td>Time-over</td><td>timer→0 dans PLAYING armé → compare santé → roundResult</td><td>`pixel-match-analyzer.ts`</td><td>✅ Validé live</td></tr>
+<tr><td>Bars-vanished KO</td><td>Double drop à 0% avec lastRunning sain → KO rétroactif</td><td>`pixel-match-analyzer.ts`</td><td>✅</td></tr>
+<tr><td>match_state WebSocket</td><td>PixelMatchAnalyzer "health" → GameRunner "matchState" → ws-handler</td><td>`game-runner.ts` / `ws-handler.ts`</td><td>✅</td></tr>
+<tr><td>Warmup rapide</td><td>`fastWarmup = true` → 8 frames</td><td>`pixel-match-analyzer.ts`</td><td>✅</td></tr>
+<tr><td>Anti-fantôme KO</td><td>Gardes timer-decrease, thaw détection, KO recovery</td><td>`pixel-match-analyzer.ts`</td><td>✅</td></tr>
+<tr><td>Portrait capture</td><td>ImageMagick `import -depth 8 -window root` → PPM 8-bit</td><td>`game-runner.ts`</td><td>✅</td></tr>
+<tr><td>Portrait calibrator</td><td>Collecte 18 échantillons/match, consensus ≥10/perso</td><td>`game-runner.ts`</td><td>✅ (collecte OK, pas assez de matchs)</td></tr>
+</tbody>
+</table>
+
 <h3>Ce qui MANQUE pour SFA2</h3>
 
 <table>
 <thead><tr><th>Détection</th><th>Problème</th><th>Priorité</th></tr></thead>
 <tbody>
-<tr><td><strong>Time-over</strong></td><td>Le timer est LU (OCR → digits) mais <strong>jamais utilisé</strong> pour détecter une fin de round. <code>processTimerValue()</code> ne fait que valider et logger. Il faut : détecter <code>timer → 0</code> dans le state <code>PLAYING</code>, comparer les santés restantes, émettre <code>roundResult</code> avec <code>koType: "timeout"</code>.</td><td>🔴 URGENT</td></tr>
-<tr><td><strong>Émission roundResult</strong></td><td>L'event <code>roundResult</code> est émis dans <code>KO_CONFIRMED</code> — mais il faut aussi l'émettre sur time-over.</td><td>🔴</td></tr>
-<tr><td><strong>Tests live SFA2</strong></td><td>Tout le code pixel est théorique — nécessite des vrais combats SFA2 pour calibrer les seuils.</td><td>🟡</td></tr>
-<tr><td><strong>Overlay SFA2</strong></td><td>Pas de <code>charInfo()</code> pertinente pour SFA2 (pas de RAM → pas de noms de persos). L'overlay de fin de match sera minimal.</td><td>🟢</td></tr>
-<tr><td><strong>Autres jeux SNES</strong></td><td>La structure <code>PIXEL_GAME_CONFIGS</code> est prête à accueillir d'autres ROMs. Ajouter SF2, Killer Instinct, etc. = juste une entrée dans le map.</td><td>🟢</td></tr>
-<tr><td><strong>Config charger depuis DB</strong></td><td>Actuellement <code>PIXEL_GAME_CONFIGS</code> est hardcodé. Le game-server a maintenant les vars Turso — on pourrait charger la config pixel depuis <code>duel_games.ram_config</code>.</td><td>🟢</td></tr>
-</tbody></table>
+<tr><td>**Templates portrait**</td><td>Calibrateur collecte mais 1 seul échantillon/match → besoin de 10 matchs ou persistance disque. Script `generate-portrait-templates.mjs` prêt mais colonnes droites tout-noir (grille à ajuster).</td><td>🟡</td></tr>
+<tr><td>**Tests live SFA2**</td><td>Tout le code pixel est testé en CPU auto-fight. Fonctionne 2/3 du temps (timer instable sur ~1/3 des runs).</td><td>🟡</td></tr>
+<tr><td>**Autres jeux SNES**</td><td>La structure `PIXEL_GAME_CONFIGS` est prête. Ajouter un jeu = une entrée.</td><td>🟢</td></tr>
+<tr><td>**Config charger depuis DB**</td><td>Actuellement hardcodé dans `pixel-game-config.ts`.</td><td>🟢</td></tr>
+</tbody>
+</table>
+
 <hr>
 
 <h2>4. Reste du chantier (autres fichiers modifiés)</h2>
@@ -170,7 +176,6 @@
 <li>✅ RAM config KOF98 + KOF2002 stockée en JSON</li>
 <li>⚠️ Config pixel SFA2 pas encore en DB (hardcodé dans <code>PIXEL_GAME_CONFIGS</code>)</li>
 </ul>
-
 <h3>Flow règles — <code>respond/route.ts</code> + <code>confirm-rules/route.ts</code></h3>
 <ul>
 <li>✅ Accept → <code>rules_pending</code> (ne crée plus la session directement)</li>
@@ -178,7 +183,6 @@
 <li>✅ Notifications aux deux joueurs</li>
 <li>✅ Colonnes <code>challenger_rules_accepted</code> / <code>target_rules_accepted</code></li>
 </ul>
-
 <h3>UI Duel — <code>DuelLobby.tsx</code>, <code>DuelScoreHUD.tsx</code>, etc.</h3>
 <ul>
 <li>✅ Filtre joueurs, lien invitation, recovery après refresh</li>
@@ -186,13 +190,11 @@
 <li>✅ i18n étendu (sections rules, pause, wizard, mode)</li>
 <li>✅ Frais d'entrée dynamiques par jeu/mode</li>
 </ul>
-
 <h3>game-server — <code>config.ts</code>, <code>docker-compose</code></h3>
 <ul>
 <li>✅ Support SNES (core snes9x, boutons, résolution)</li>
 <li>✅ Variables Turso dans Docker</li>
 </ul>
-
 <hr>
 
 <h2>5. Plan d'action recommandé</h2>
@@ -202,9 +204,10 @@
   - Lire le timer via readTimerFromFrame()
   - Si lastTimerValue passe de &gt;0 à 0 :
     → comparer p1Health vs p2Health
-    → émettre roundResult avec koType: &quot;timeout&quot;
+    → émettre roundResult avec koType: "timeout"
     → incrémenter p1Losses ou p2Losses
-    → passer en KO_CONFIRMED</code></pre>
+    → passer en KO_CONFIRMED
+</code></pre>
 
 <h3>Étape 2 — Valider live</h3>
 <ul>
@@ -212,18 +215,15 @@
 <li>Vérifier que le time-over est bien détecté</li>
 <li>Vérifier KO, perfect KO, draw</li>
 </ul>
-
 <h3>Étape 3 — Nettoyer et committer</h3>
 <ul>
 <li>Une fois la détection SFA2 complète, committer par lots logiques</li>
 <li>Ne pas mélanger les changements game-runner avec les changements UI</li>
 </ul>
-
 <h3>Étape 4 — KOF98 gauge mode</h3>
 <ul>
 <li>Valider les adresses <code>0x821E</code>/<code>0x841E</code> par diff live (ADVANCED vs EXTRA)</li>
 </ul>
-
 <hr>
 
 <h2>6. Résumé visuel</h2>
@@ -259,7 +259,8 @@
 │                   ✅ Timer OCR (digits lus)                  │
 │                   ❌ Time-over (timer pas utilisé!)          │
 │                                                              │
-└─────────────────────────────────────────────────────────────┘</code></pre>
+└─────────────────────────────────────────────────────────────┘
+</code></pre>
 
 </body>
 </html>
