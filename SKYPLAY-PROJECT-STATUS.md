@@ -1,8 +1,8 @@
 # SKY PLAY — État d'avancement complet
 
-**Date** : 2026-07-17  
-**Branche** : `main` — working tree en cours de commit (détection SFA2 + duel UI + DB)  
-**Dernier commit** : `170d791` — refactor(gameserver): extract pixel detection into separate classes  
+**Date** : 2026-07-20  
+**Branche** : `main` — détection SFA2 complète (state machine, timer, time-over, perfect KO, match_state)  
+**Dernier commit** : `623c6fc` — docs: update SFA2 detection status PDF (July 20)  
 
 ---
 
@@ -125,30 +125,36 @@
 | Continue/revanche | Pièce 0xF2C0 + START | UDP btn | ✅ |
 | RAM config dans DB | JSON via duel_games | — | 🔧 **WD** |
 
-### 3.3 Détection santé SFA2 (pixel — snes9x) 🔧 — sessions live 14→17/07
+### 3.3 Détection santé SFA2 (pixel — snes9x) ✅ — sessions live 14→20/07
+
+**Refactor 17/07** : logique extraite dans `pixel-match-analyzer.ts` (state machine, column scan, timer OCR, templates). `game-runner.ts` garde l'orchestration (ffmpeg, events, WebSocket).
 
 | Détection | Statut | Notes |
 |-----------|--------|-------|
-| Capture stripe ffmpeg (y=110, h=48, scan 24 rangées) | ✅ | `startHealthBarCapture()` |
-| Machine à états (GamePhase) | ✅ | WARMUP→PLAYING→KO_PENDING→KO_CONFIRMED→MATCH_END |
-| **Mesure par comptage de colonnes** (`measureFilledColumns`) | ✅ Validé live | Remplace `measureBarEndX` — les barres SFA2 se vident du bord extérieur vers le centre, l'ancien scan lisait P1 à 100% en permanence |
-| **isHealthPixel v2** | ✅ Validé live | `maxC>120` + exclusion bleu-dominant — le fond de barre vide (bleu 33,49,82) passait l'ancien seuil |
-| **Recalibration fullBarW par round** | ✅ Déployé | Début de round (frames 1-4) + différée au 1er tick timer pour le R1 (le warmup peut finir sur l'écran VS) |
-| Lissage médiane 5 frames + reset à la recalibration | ✅ | `getSmoothedHealth()` |
-| KO (seuil 2%, confirm 5 frames) | ✅ Validé live | |
-| **Anti-fantôme time-over** (`roundTimerWasRunning`) | ✅ Validé live | L'écran de résultat garde barres pleines + « 00 » figé |
-| **Anti-fantôme KO** (timer-decrease liveness gate) | ✅ Validé live | L'écran de victoire re-vide la barre du perdant avec un timer FIGÉ — un round n'est « live » que si le timer décroît |
-| **Garde « filet de vie »** | ✅ Déployé | Barre ≤2% mais joueur vivant : chaque tick du timer reset la confirmation KO (un vrai KO gèle le timer) |
-| **KO rétroactif** (`koPendingMaxTimer` sticky + guérison impossible) | ✅ 1× validé live | Le 99 transitoire du round suivant prouve la fin du round même si les chiffres deviennent illisibles |
-| **Verdict time-over sur santés de combat** | ✅ Validé live | Snapshot pendant timer>0 — l'écran de résultat re-remplit les barres avant la confirmation |
+| Capture stripe ffmpeg (y=110, h=52, intégrée au flux vidéo principal) | ✅ | 4 fps raw rgb24, plus de x11grab séparé |
+| Machine à états (GamePhase) | ✅ | WARMUP→PLAYING→KO_PENDING→KO_CONFIRMED→NEW_ROUND→MATCH_END |
+| **Mesure par comptage de colonnes** (`measureFilledColumns`) | ✅ Validé live | Barres SFA2 se vident du bord extérieur vers le centre |
+| **isHealthPixel v2** | ✅ Validé live | `maxC>120` + exclusion bleu-dominant |
+| **Recalibration fullBarW par round** | ✅ | Frames 1-4 PLAYING + différée au 1er tick timer (R1) + post-glow |
+| Lissage médiane glissante + reset à la recalibration | ✅ | `getSmoothedHealth()` |
+| KO (seuil 10%, confirm 5 frames) + KO rétroactif | ✅ Validé live | `koPendingMaxTimer` sticky + guérison impossible |
+| **Anti-fantôme time-over** (`roundTimerWasRunning`) | ✅ Validé live | Écran résultat = barres pleines + « 00 » figé → ignoré |
+| **Anti-fantôme KO** (timer-decrease liveness gate) | ✅ Validé live | Round « live » seulement si le timer décroît |
+| **Garde « filet de vie »** | ✅ Déployé | Barre ≤10% mais timer vivant → reset confirmation KO |
+| **Time-over** (timer→0 dans round armé) | ✅ Validé live | Compare `lastRunningHealth`, émet `roundResult` avec `koType: "timeout"` |
+| **Bars-vanished KO** (double drop 0%) | ✅ Validé live | Transition écran → KO rétroactif basé sur `lastRunningHealth` |
+| **Bar-stable fallback** | ✅ | Barres ≥80% région pendant 30f sans drop timer → arme le round |
+| **Perfect KO ratio-based** | ✅ Fixé 20/07 | `minFilled/maxFilled ≥ 0.95` (colonnes brutes) — insensible à la dérive fullBarWidth |
 | Draw time-over = aucun point | ✅ Validé live | SFA2 rejoue le round, pas de marque |
-| **Suspension pendant char select** | ✅ Déployé, à valider | Le compte à rebours de sélection passait pour un timer de combat → faux TIME OVER avant le match |
-| Perfect KO (minHealth ≥95%) | ⚠️ 1× détecté live | Problème résiduel : largeur pleine barre variable (273→210 colonnes sans dégâts) — investigation en cours |
-| Timer OCR (template matching 8×12, seuil 160) | ✅ Validé live | Décomptes complets 99→0, récupération de sauts |
-| Match end (winsNeeded=2) + overlay | ✅ Validé live | À égalité parfaite : warn + moins de défaites gagne |
+| **match_state WebSocket** | ✅ 20/07 | PixelMatchAnalyzer → GameRunner → ws-handler, ~205 lectures/test |
+| **Suspension pendant char select** | ✅ Déployé | `⏸️/▶️` + `resetHealthWarmup` dans le guard |
+| Timer OCR (template matching 8×12, seuil 160) | ✅ Validé live | Décomptes 99→0, templates sauvegardés dans `/recordings/templates/` |
+| Match end (winsNeeded=2) + overlay | ✅ Validé live | |
+| Navigation CPU auto end-to-end | ✅ 20/07 | 3× START → char select → 6× A (4s gaps) → combat → rounds → match end |
 | Char select joueur (grille 2×9, D-pad counting) | ✅ Commité | `3395538` |
-| Xvfb persistant + nettoyage lock (entrypoint.sh) | ✅ Validé | Restarts fiables, plus de warmup bloqué à 0% |
-| Overlay SFA2 (noms persos) | ❌ | Détection portraits en pause (tâches #21/#22) |
+| Xvfb persistant + nettoyage lock (entrypoint.sh) | ✅ Validé | |
+| **Portrait capture** (`import -depth 8`) | ✅ Fixé 20/07 | PPM 8-bit, calibrateur collecte 18 échantillons/match (était 0 avec le 16-bit) |
+| Overlay SFA2 (noms persos) | 🔧 | Templates portrait en calibration — script `generate-portrait-templates.mjs` prêt, besoin de 10 matchs ou ajustement grille |
 
 ### 3.4 Config → DB (Turso variables)
 
@@ -313,18 +319,18 @@ Dossier untracké contenant :
 │                                                                   │
 │ 🔧 NON COMMITÉ (working tree)                                     │
 │ ┌─────────────┬──────────────┬─────────────────┬───────────────┐ │
-│ │ SFA2 pixel  │ Time-over ✅ │ Mode gauge KOF98 │ DB registre   │ │
 │ │ Rules flow  │ Confirm-rule │ Recovery lobby   │ Frais dyn.    │ │
 │ │ DuelScore   │ DuelPause    │ DuelWizard      │ Auto-rematch  │ │
-│ │ HeaderAuth  │ Turso conf   │ Config par ROM   │ Lieu partage  │ │
+│ │ HeaderAuth  │ Turso conf   │ DB registre     │ Lieu partage  │ │
+│ │ Mode gauge  │ Pick order   │ SSO Arcade      │               │ │
+│ │ KOF98 (addr)│ dans overlay │ (début)         │               │ │
 │ └─────────────┴──────────────┴─────────────────┴───────────────┘ │
 │                                                                   │
 │ ❌ NON FAIT                                                       │
 │ ┌─────────────┬──────────────┬─────────────────┬───────────────┐ │
-│ │ Tests live  │ Overlay SFA2 │ Northflank swap  │ Secret rotate │ │
-│ │ SFA2        │ (noms persos)│ Railway URLs     │               │ │
-│ │ Pick order  │ SSO Arcade   │ KOF2002 RAM     │ KOF2002 team  │ │
-│ │ dans overlay│ (début)      │ complet          │ & pick order  │ │
+│ │ Templates   │ Northflank   │ Secret rotate   │ KOF2002 RAM   │ │
+│ │ portrait    │ swap URLs    │                 │ complet       │ │
+│ │ SFA2        │              │                 │               │ │
 │ └─────────────┴──────────────┴─────────────────┴───────────────┘ │
 │                                                                   │
 └──────────────────────────────────────────────────────────────────┘
@@ -335,30 +341,28 @@ Dossier untracké contenant :
 ## 12. Priorités restantes
 
 ### 🔴 URGENT
-1. **Valider en match réel les 3 fixes SFA2 déployés** — suspension char select (`⏸️/▶️`), garde filet de vie (`🛡️ KO confirm reset`), recalibration par round (checklist post-reboot dans la mémoire `sfa2-pending-tasks`)
-2. **Résoudre le mystère perfect KO** — largeur pleine barre variable sans dégâts (273→210 colonnes) ; capture en rafale + `analyze-stripe-cols.cjs`, ou passer au ratio min/max du round
-3. **Mode gauge KOF98** — valider adresses `0x821E`/`0x841E` par diff live
+1. **Mode gauge KOF98** — valider adresses `0x821E`/`0x841E` par diff live
+2. **Templates portrait SFA2** — ajuster la grille (colonnes droites tout-noir) + accumuler 10+ matchs pour consensus, ou utiliser `generate-portrait-templates.mjs` avec calibration manuelle
 
 ### 🟡 IMPORTANT
-4. **Committer le working tree** — par lots logiques :
-   - Lot 1 : game-runner + pixel/ (détection SFA2 fiabilisée : anti-fantômes, recalibration, sliver guard, suspension char select)
+3. **Committer le reste du working tree** :
+   - ~~Lot 1 : game-runner + pixel/~~ ✅ Commit `3efcf3e` le 20/07
    - Lot 2 : DB + registre jeux
-   - Lot 3 : Flow règles (respond → confirm-rules, rules_pending_at + timeouts)
+   - Lot 3 : Flow règles (respond → confirm-rules)
    - Lot 4 : UI duel (wizard, pause, score, lobby)
    - Lot 5 : i18n + config SNES + homepage
-5. **Pick order KOF98** — câbler `capturePickOrders()` → `matchMeta()` → overlay
-6. **Overlay SFA2** — au moins le nom du jeu dans le HUD ; portraits en pause (tâches #17/#21/#22)
-7. **Nettoyer 8 escrow_rooms obsolètes** (2000 SKY chacun)
+4. **Pick order KOF98** — câbler `capturePickOrders()` → `matchMeta()` → overlay
+5. **Nettoyer 8 escrow_rooms obsolètes** (2000 SKY chacun)
 
 ### 🟢 SECONDAIRE
-8. **Northflank** — swapper URLs, rotate secrets
-9. **SSO Arcade** — reprendre l'intégration
-10. **KOF2002** — détection complète (team, pick order, perfect)
-11. **Config pixel charger depuis DB** (Turso → game-runner)
+6. **Northflank** — swapper URLs, rotate secrets
+7. **SSO Arcade** — reprendre l'intégration
+8. **KOF2002** — détection complète (team, pick order, perfect)
+9. **Config pixel charger depuis DB** (Turso → game-runner)
 
 ### ⚠️ Infra
 - **Docker Desktop instable** (2 gels backend le 16/07) — remède : kill processus Docker + `wsl --shutdown` + relancer Docker Desktop, puis `docker-compose up -d`
 
 ---
 
-*Document mis à jour le 2026-07-17 — sessions live SFA2 (fiabilisation détection pixel) + nettoyage fichiers.*
+*Document mis à jour le 2026-07-20 — SFA2 détection pixel complète (commitée), portrait capture fixée, docs + PDF régénérés.*
