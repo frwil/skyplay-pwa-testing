@@ -8,6 +8,7 @@ import { GameRunner } from "./game-runner.js";
 import type { ClientMessage } from "./types.js";
 import { FRAME_MAGIC, AUDIO_MAGIC, CODEC_CONFIG_MAGIC } from "./types.js";
 import { getGameConfig, getSnesCharGrid, type SnesCharGrid } from "./game-config.js";
+import { spawnSync } from "child_process";
 
 /** Map sessionId → GameRunner for lifecycle management. */
 const sessionRunners = new Map<string, GameRunner>();
@@ -439,7 +440,7 @@ async function handleInit(
     const startButton = system === "snes" ? 3 : system === "ps1" ? 9 : 5;
     const coinButton = system === "snes" ? null : system === "ps1" ? 8 : 4; // SNES has no coin
     const coinDelay = system === "snes" ? 0 : 15000; // skip coin for SNES
-    const startDelay = system === "snes" ? 18000 : 20000;
+    const startDelay = system === "snes" ? 30000 : 20000;
     const needCoins = coinButton != null;
 
     if (session.mode === "pvp") {
@@ -466,14 +467,16 @@ async function handleInit(
         }, coinDelay);
       }
 
-      // For SNES: auto-start + navigate to ARCADE (mirrors PvP but without P2)
+      // For SNES: auto-start sequence.
+      // SFA2 flow: START at T+30s → skip intro; START at T+48s → select
+      // game mode (first option = ARCADE); backup START at T+63s if the
+      // menu animation took longer. Then the game enters char select
+      // automatically. In char select, A (key 'x') confirms each choice.
       if (system === "snes") {
-        const confirmBtn = 0;     // SNES B
-        const upBtn = 4;          // SNES UP
-        const HOLD_MS = 300;
         const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
-        const tap = (player: number, btn: number, holdMs = HOLD_MS) => {
+        const tap = (player: number, btn: number, holdMs = 200) => {
+          if (session.status !== "running") return;
           runner.ensureFocus();
           runner.injectInput(player, btn, true);
           setTimeout(() => runner.injectInput(player, btn, false), holdMs);
@@ -482,54 +485,41 @@ async function handleInit(
         // Everything before combat (title screen, ATTRACT DEMO, menus, char
         // select) must NOT be analyzed: the attract demo is a real CPU-vs-CPU
         // fight with a live timer and draining bars — it fabricates KOs.
-        // resetHealthWarmup() resumes analysis when combat actually starts.
         runner.suspendPixelAnalysis("pre-combat menus/attract");
 
-        setTimeout(() => {
+        setTimeout(async () => {
           if (session.status !== "running") return;
-          console.log(`[ws] ▶️  Starting game for CPU session ${msg.sessionId} (snes)`);
-          runner.ensureFocus();
-          runner.injectInput(1, startButton, true);
-          setTimeout(() => {
-            runner.injectInput(1, startButton, false);
-            console.log(`[ws] ✅ CPU auto-start complete for ${msg.sessionId}`);
+          // 1) T+30s: START → skip intro, reach main menu
+          console.log(`[ws] ▶️  SFA2 CPU T+30s: START → skip intro for ${msg.sessionId}`);
+          tap(1, startButton, 300);
+          await sleep(18000);
 
-            // ── START spam DISABLED: pressing START during intros can PAUSE
-            //     the game on SNES instead of skipping them. Let the game
-            //     play out naturally — the pixel analyzer handles intro delay.
-            // const startPhases = [1500, 3500, 5500, 7500, 9500];
-            // for (const delay of startPhases) { ... }
+          if (session.status !== "running") return;
+          // 2) T+48s: START → select game mode (ARCADE, first option)
+          console.log(`[ws] ▶️  SFA2 CPU T+48s: START → select game mode for ${msg.sessionId}`);
+          tap(1, startButton, 300);
+          await sleep(15000);
 
-            // Navigate ARCADE mode
-            // START spam can shift the menu cursor; explicitly press UP to
-            // ensure we're on ARCADE (top option) before confirming with B.
-            setTimeout(async () => {
-              if (session.status !== "running") return;
-              console.log(`[ws] 🎮 SNES CPU: UP → ARCADE, B → confirm for ${msg.sessionId}`);
-              // Press UP 3× to guarantee we're at the top of the menu
-              for (let i = 0; i < 3; i++) {
-                tap(1, upBtn, 200);
-                await sleep(300);
-              }
-              tap(1, confirmBtn);
-              await sleep(2500);
+          if (session.status !== "running") return;
+          // 3) T+63s: backup START — in case main menu animation took longer
+          console.log(`[ws] ▶️  SFA2 CPU T+63s: backup START for ${msg.sessionId}`);
+          tap(1, startButton, 300);
+          await sleep(10000);
 
-              if (session.status !== "running") return;
-              const playGrid = getSnesCharGrid(msg.rom);
-              if (playGrid) {
-                console.log(`[ws] 🎮 SNES CPU: entering character select for ${msg.sessionId}`);
-                startCharSelectPhase(session, runner, playGrid);
-              } else {
-                console.log(`[ws] 🎮 SNES CPU: B → select character for ${msg.sessionId}`);
-                tap(1, confirmBtn);
-                await sleep(1500);
-                if (session.status !== "running") return;
-                console.log(`[ws] 🎮 SNES CPU: START → begin match for ${msg.sessionId}`);
-                runner.resetHealthWarmup();
-                tap(1, startButton);
-              }
-            }, 12000);
-          }, 300);
+          if (session.status !== "running") return;
+          // 4) T+73s: Enter char select phase
+          const playGrid = getSnesCharGrid(msg.rom);
+          if (playGrid) {
+            console.log(`[ws] 🎮 SFA2 CPU: entering character select for ${msg.sessionId}`);
+            startCharSelectPhase(session, runner, playGrid);
+          } else {
+            console.log(`[ws] 🎮 SFA2 CPU: no grid — A → advance for ${msg.sessionId}`);
+            tap(1, SNES_A);
+            await sleep(1500);
+            if (session.status !== "running") return;
+            console.log(`[ws] 🎮 SFA2 CPU: A → begin match for ${msg.sessionId}`);
+            runner.resetHealthWarmup();
+          }
         }, startDelay);
       }
 
@@ -539,7 +529,7 @@ async function handleInit(
           console.log(`[ws] 🧠 Starting round detection for ${system} session ${msg.sessionId}`);
           runner.startMemoryWatcher();
         }
-      }, system === "snes" ? 50000 : 25000);
+      }, system === "snes" ? 70000 : 25000);
     }
 
     let lastFrameCount = 0;
@@ -632,6 +622,7 @@ function handleJoin(
 
 /** SNES button indices used during character select. */
 const SNES_B = 0;
+const SNES_A = 8;     // SFA2: confirm/advance (keyboard 'x')
 const SNES_START = 3;
 const SNES_UP = 4;
 const SNES_DOWN = 5;
@@ -686,6 +677,17 @@ function startCharSelectPhase(
   // Result will be available via runner.portraitResult by the time finalizeCharSelect runs.
   runner.captureCharSelectPortraits();
 
+  // Debug: capture full screen during char select for coordinate verification
+  setTimeout(() => {
+    try {
+      spawnSync("import", ["-depth", "8", "-window", "root", "/recordings/char-select-full.ppm"], {
+        env: { ...process.env, DISPLAY: (runner as any).display || ":99" },
+        stdio: "pipe", timeout: 10000,
+      });
+      console.log("[ws] 📸 Char select full screenshot saved");
+    } catch (e) { /* non-fatal */ }
+  }, 2000);
+
   sendToSession(session, { type: "char_select_start", timeout: CHAR_SELECT_TIMEOUT_MS });
 
   // Auto-lock after timeout
@@ -736,6 +738,11 @@ function finalizeCharSelect(
       col: pos.col,
     });
     console.log(`[ws] 🎯 P1 auto-locked: ${session.p1SelectedCharName} (0x${session.p1SelectedCharId.toString(16)})`);
+    // Inject B press into the game so it actually registers the character lock.
+    // Without this the game ignores START and never leaves char select.
+    runner.ensureFocus();
+    runner.injectInput(1, SNES_A, true);
+    setTimeout(() => runner.injectInput(1, SNES_A, false), 200);
   }
 
   // Lock P2 if not already locked (PvP mode only — CPU mode has no P2)
@@ -754,6 +761,9 @@ function finalizeCharSelect(
       col: pos.col,
     });
     console.log(`[ws] 🎯 P2 auto-locked: ${session.p2SelectedCharName} (0x${session.p2SelectedCharId.toString(16)})`);
+    // Inject B press for P2 character lock into the game
+    runner.injectInput(2, SNES_A, true);
+    setTimeout(() => runner.injectInput(2, SNES_A, false), 200);
   }
 
   // ── Portrait diagnostic: cross-check cursor tracking vs pixel detection ──
@@ -798,18 +808,49 @@ function finalizeCharSelect(
     console.log(`[ws] 🖼️ No portrait result available for ${session.id} — skipping cross-check`);
   }
 
-  // Press START for both players to begin the match
-  console.log(`[ws] 🎮 START → begin match for ${session.id} (P1=${session.p1SelectedCharName}, P2=${session.p2SelectedCharName})`);
-  runner.resetHealthWarmup();
-  runner.ensureFocus();
-  runner.injectInput(1, SNES_START, true);
-  setTimeout(() => runner.injectInput(1, SNES_START, false), 300);
-  if (session.mode === "pvp") {
+  // ── Advance through all selection screens ──────────────────────────
+  // SFA2 Arcade-mode flow after character lock:
+  //   Char select → Mode select (Manual/Auto) → Speed select → Stage → VS → Combat
+  //
+  // In SFA2, the A button (SNES btn 8, keyboard 'x') confirms on EVERY screen:
+  // character, mode, speed, stage, and VS. START (Return) is only for the main menu.
+  // We send 6 A presses with 4-second gaps to cover all post-char-select screens.
+  const ADVANCE_DELAY = 3000; // wait 3s after auto-lock for the game to transition
+  setTimeout(() => {
+    if (session.status !== "running") return;
+    console.log(`[ws] 🎮 Advance past char select for ${session.id} (P1=${session.p1SelectedCharName})`);
+
+    const tapA = () => {
+      runner.injectInput(1, SNES_A, true);
+      setTimeout(() => runner.injectInput(1, SNES_A, false), 150);
+    };
+
+    // 6 A presses at t=0, 4, 8, 12, 16, 20 seconds (each advances one screen)
+    tapA();
+    setTimeout(() => tapA(), 4000);
+    setTimeout(() => tapA(), 8000);
+    setTimeout(() => tapA(), 12000);
+    setTimeout(() => tapA(), 16000);
+    setTimeout(() => tapA(), 20000);
+
+    // Take a screenshot for visual confirmation at t=22s
     setTimeout(() => {
-      runner.injectInput(2, SNES_START, true);
-      setTimeout(() => runner.injectInput(2, SNES_START, false), 300);
-    }, 200);
-  }
+      try {
+        const ssPath = "/recordings/combat-screenshot.png";
+        spawnSync("import", ["-depth", "8", "-window", "root", ssPath], {
+          env: { ...process.env, DISPLAY: (runner as any).display || ":99" },
+          stdio: "pipe", timeout: 10000,
+        });
+        console.log(`[ws] 📸 Screenshot saved: ${ssPath}`);
+      } catch (e) { console.warn("[ws] ⚠️ Screenshot failed:", e); }
+    }, 22000);
+
+    // Resume pixel analysis AFTER all selection screens. SFA2 VS + "FIGHT!"
+    // animation takes ~15-18s. We resume at t=35s from first advance press.
+    setTimeout(() => {
+      runner.resetHealthWarmup();
+    }, 38000);
+  }, ADVANCE_DELAY);
 }
 
 function handleInput(
@@ -1198,7 +1239,7 @@ function startGameAutoSequence(
 
       // ── SNES menu navigation (SFA2) ──
       if (system === "snes") {
-        const confirmBtn = 0;  // SNES B = confirm
+        const confirmBtn = 8;     // SNES A (SFA2: confirm/advance, keyboard 'x')
         const downBtn = 5;     // SNES DOWN
         const HOLD_MS = 300;
         const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));

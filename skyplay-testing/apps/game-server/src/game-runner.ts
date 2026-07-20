@@ -1,7 +1,7 @@
 import { spawn, spawnSync, type ChildProcess } from "child_process";
 import { createSocket, type Socket } from "dgram";
 import { EventEmitter } from "events";
-import { writeFileSync, unlinkSync, mkdirSync } from "fs";
+import { writeFileSync, unlinkSync, mkdirSync, existsSync, readFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { SYSTEM_CORES, SYSTEM_RESOLUTIONS, UPSCALE, XDOTOOL_KEY_MAP, XDOTOOL_KEY_MAP_P2, getButtonToRetroarch, buildRetroarchKeyConfig } from "./config.js";
@@ -440,6 +440,28 @@ export class GameRunner extends EventEmitter {
         this.emit("matchEnd", { ...evt, ...this.charInfo(), ...this.matchMeta() });
       });
 
+      // Forward live pixel health as matchState events (SFA2 / pixel-based games).
+      // KOF98 does this via its own RAM health poll (line ~928); this is the
+      // equivalent path for pixel-only games that have no memory map.
+      this.pixelAnalyzer.on("health", (evt: {
+        p1Health: number; p2Health: number; timerValue: number;
+        phase: string; roundTimerWasRunning: boolean;
+        p1FullBarWidth: number; p2FullBarWidth: number;
+      }) => {
+        const ci = this.charInfo();
+        this.emit("matchState", {
+          ...ci,
+          p1Health: evt.p1Health,
+          p2Health: evt.p2Health,
+          timerValue: evt.timerValue,
+          phase: evt.phase,
+          gameStarted: this.gameStarted,
+          roundTimerWasRunning: evt.roundTimerWasRunning,
+          p1FullBarWidth: evt.p1FullBarWidth,
+          p2FullBarWidth: evt.p2FullBarWidth,
+        });
+      });
+
       this.startHealthBarCapture();
     } else {
       console.log(`[game-runner] 🧠 No detection method available for ${this.rom}`);
@@ -488,56 +510,82 @@ export class GameRunner extends EventEmitter {
     const gridW = portrait.cellW * portrait.cols;
     const gridH = portrait.cellH * portrait.rows;
 
-    console.log(`[game-runner] 🖼️  Portrait capture starting: ${gridW}x${gridH} at (${portrait.gridX},${portrait.gridY}), 5 frames`);
-
-    const CAPTURE_TIMEOUT_MS = 3000;
+    console.log(`[game-runner] 🖼️  Portrait capture starting: ${gridW}x${gridH} at (${portrait.gridX},${portrait.gridY}) via import`);
 
     const doCapture = new Promise<PortraitGridResult | null>((resolve) => {
       try {
-        const ffmpeg = spawn("ffmpeg", [
-          "-f", "x11grab",
-          "-framerate", "5",
-          "-video_size", `${gridW}x${gridH}`,
-          "-i", `${this.display}.0+${portrait.gridX},${portrait.gridY}`,
-          "-f", "rawvideo",
-          "-pix_fmt", "rgb24",
-          "-frames", "5",
-          "-loglevel", "quiet",
-          "pipe:1",
-        ], {
-          stdio: ["ignore", "pipe", "ignore"],
+        // Use ImageMagick import (not ffmpeg x11grab) — import -window root
+        // is reliable; ffmpeg x11grab hangs/times out for this use on Xvfb.
+        const tmpPath = `/tmp/portrait-full-${Date.now()}.ppm`;
+        const result = spawnSync("import", ["-depth", "8", "-window", "root", tmpPath], {
           env: { ...process.env, DISPLAY: this.display },
+          stdio: "pipe", timeout: 5000,
         });
 
-        const chunks: Buffer[] = [];
-        const frameSize = gridW * gridH * 3; // RGB24 = 3 bytes/pixel
+        if (result.status !== 0 || !existsSync(tmpPath)) {
+          console.warn(`[game-runner] 🖼️  import failed: status=${result.status} stderr="${result.stderr.toString().slice(0, 200)}"`);
+          resolve(null);
+          return;
+        }
 
-        ffmpeg.stdout?.on("data", (chunk: Buffer) => {
-          chunks.push(chunk);
-        });
+        // Read the PPM and extract the portrait region
+        const raw = readFileSync(tmpPath);
+        try { unlinkSync(tmpPath); } catch { /* best-effort cleanup */ }
 
-        ffmpeg.on("close", (code) => {
-          if (code !== 0 || chunks.length === 0) {
-            console.warn(`[game-runner] 🖼️  Portrait ffmpeg exited with code ${code}, ${chunks.length} chunks`);
-            resolve(null);
-            return;
+        // Parse PPM P6 header to find pixel data start
+        let hdrEnd = 0;
+        let newlines = 0;
+        for (let i = 0; i < Math.min(raw.length, 200); i++) {
+          if (raw[i] === 0x0A) { // newline
+            newlines++;
+            if (newlines >= 3) { hdrEnd = i + 1; break; }
           }
-          const raw = Buffer.concat(chunks);
-          const frames: Buffer[] = [];
-          let offset = 0;
-          while (offset + frameSize <= raw.length) {
-            frames.push(raw.subarray(offset, offset + frameSize));
-            offset += frameSize;
-          }
+        }
+        if (hdrEnd === 0 || raw[0] !== 0x50 /* 'P' */ || raw[1] !== 0x36 /* '6' */) {
+          console.warn("[game-runner] 🖼️  Invalid PPM header from import");
+          resolve(null);
+          return;
+        }
 
-          if (frames.length === 0) {
-            console.warn("[game-runner] 🖼️  Portrait capture: no complete frames");
-            resolve(null);
-            return;
-          }
+        const pixels = raw.subarray(hdrEnd);
+        // Parse header for dimensions
+        const headerStr = raw.subarray(0, hdrEnd).toString("ascii");
+        const hdrParts = headerStr.split(/\s+/).filter(s => s.length > 0 && s !== "P6");
+        const fullW = parseInt(hdrParts[0], 10);
+        const fullH = parseInt(hdrParts[1], 10);
 
-          // ── Calibration: feed raw frames to the calibrator (opt-in) ──
-          if (this.calibrator) {
+        if (!fullW || !fullH || fullW < gridW || fullH < gridH) {
+          console.warn(`[game-runner] 🖼️  Bad PPM dimensions: ${fullW}x${fullH} (need ≥ ${gridW}x${gridH})`);
+          resolve(null);
+          return;
+        }
+
+        // Crop the portrait grid from the full frame
+        const cropped = Buffer.alloc(gridW * gridH * 3);
+        for (let y = 0; y < gridH; y++) {
+          const srcY = portrait.gridY + y;
+          const srcOff = (srcY * fullW + portrait.gridX) * 3;
+          const dstOff = y * gridW * 3;
+          if (srcOff + gridW * 3 <= pixels.length) {
+            pixels.copy(cropped, dstOff, srcOff, srcOff + gridW * 3);
+          }
+        }
+
+        // Single frame (import is slow — we can't do 5fps like ffmpeg)
+        const frames = [cropped];
+
+        // ── Debug: save cropped frame as PPM ──
+        try {
+          const dbgDir = "/recordings/portrait-debug";
+          if (!existsSync(dbgDir)) mkdirSync(dbgDir, { recursive: true });
+          const ppmPath = `${dbgDir}/portrait-capture.ppm`;
+          const header = `P6\n${gridW} ${gridH}\n255\n`;
+          writeFileSync(ppmPath, Buffer.concat([Buffer.from(header, "ascii"), cropped]));
+          console.log(`[game-runner] 🔬 Portrait debug frame saved: ${ppmPath} (${gridW}x${gridH})`);
+        } catch (e) { /* non-fatal */ }
+
+        // ── Calibration: feed raw frames to the calibrator (opt-in) ──
+        if (this.calibrator) {
             const fullCharMap: Array<{ row: number; col: number; charId: number; charName: string }> = [];
             for (let row = 0; row < portrait.rows; row++) {
               for (let col = 0; col < portrait.cols; col++) {
@@ -589,6 +637,7 @@ export class GameRunner extends EventEmitter {
             }
           }
 
+          // ── Run the detector on the captured frame ──
           try {
             const result = detector.processFrames(frames, gridW, gridH);
             console.log(
@@ -599,28 +648,14 @@ export class GameRunner extends EventEmitter {
             console.warn("[game-runner] 🖼️  Portrait analysis failed:", err);
             resolve(null);
           }
-        });
-
-        ffmpeg.on("error", (err) => {
-          console.warn("[game-runner] 🖼️  Portrait ffmpeg spawn error:", err.message);
+        } catch (err) {
+          console.warn("[game-runner] 🖼️  Portrait capture failed:", err);
           resolve(null);
-        });
-      } catch (err) {
-        console.warn("[game-runner] 🖼️  Portrait capture setup failed:", err);
-        resolve(null);
-      }
-    });
+        }
+      });
 
-    // Fire-and-forget with timeout guard: store result when done (or null on timeout).
-    const timeout = new Promise<null>((resolve) => setTimeout(() => {
-      console.warn("[game-runner] 🖼️  Portrait capture timed out after 3000ms");
-      resolve(null);
-    }, CAPTURE_TIMEOUT_MS));
-
-    Promise.race([doCapture, timeout]).then((result) => {
+    doCapture.then((result) => {
       this.portraitCaptureResult = result;
-    }).catch(() => {
-      this.portraitCaptureResult = null;
     });
   }
 
@@ -1803,14 +1838,15 @@ export class GameRunner extends EventEmitter {
   resetHealthWarmup(): void {
     this.healthPollErrorCount = 0;
     this.fastWarmup = true;
-    // Resume pixel analysis if it was suspended for char select
+    // Resume pixel analysis if it was suspended for char select.
+    // Only reset the state machine when transitioning suspended→active —
+    // calling reset() mid-round re-triggers the KO detection path.
     if (this.pixelAnalysisSuspended) {
       this.pixelAnalysisSuspended = false;
       console.log(`[game-runner] ${this.readerTag} ▶️ Pixel analysis resumed (combat starting)`);
-    }
-    // Delegate to pixel analyzer for state-machine games (SFA2, SNES, etc.)
-    if (this.pixelAnalyzer) {
-      this.pixelAnalyzer.reset(true);
+      if (this.pixelAnalyzer) {
+        this.pixelAnalyzer.reset(true);
+      }
     }
     console.log("[game-runner] 🧠 Health warmup reset (combat starting)");
   }

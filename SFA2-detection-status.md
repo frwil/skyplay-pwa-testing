@@ -1,7 +1,7 @@
 # SFA2 — État de la détection pixel & isolation KOF98
 
-> **Date** : 2026-07-14  
-> **Branche** : `main` (27 fichiers modifiés non commités)  
+> **Date** : 2026-07-20  
+> **Branche** : `main`  
 > **Contexte** : Détection pixel pour SFA2 (SNES/snes9x — RAM inaccessible), sans casser KOF98 (RAM Neo Geo/FBNeo)
 
 ---
@@ -86,52 +86,52 @@ PIXEL_GAME_CONFIGS = {
 ### State machine (GamePhase)
 
 ```
-WARMUP ──(24 frames ≥65% healthy)──▶ PLAYING
-  │                                      │
-  │                              (un joueur ≤2%)
-  │                                      ▼
-  │                                KO_PENDING
-  │                                      │
-  │                        (4 frames confirmées)
-  │                                      ▼
-  │                              KO_CONFIRMED ──(losses≥winsNeeded)──▶ MATCH_END
-  │                                      │
-  │                        (2 bars ≥80%, 5 frames)
-  │                                      ▼
-  └────────────────────────────── PLAYING (new round)
+WARMUP ──(timer ≥30 OU bars ≥100 cols)──▶ PLAYING
+  │                                           │
+  │                                   (un joueur ≤10%)
+  │                                           ▼
+  │                                     KO_PENDING
+  │                                           │
+  │                             (5 frames confirmées)
+  │                                           ▼
+  │                                   KO_CONFIRMED ──(losses≥winsNeeded)──▶ MATCH_END
+  │                                           │
+  │                             (2 bars ≥80%, 5 frames)
+  │                                           ▼
+  └────────────────────────────────── PLAYING (new round)
 ```
 
-### Ce qui est fait (dans le code non commité)
+### Ce qui est fait (commits récents — 2026-07-20)
 
 | Détection | Mécanisme | Fichier | Statut |
 |-----------|-----------|---------|--------|
-| Santé P1/P2 | Column scan + saturation couleur | `game-runner.ts:analyzeHealthFrame()` | ✅ Implémenté |
-| Barre calibrée | `p1FullBarWidth`/`p2FullBarWidth` max pendant WARMUP | `game-runner.ts` | ✅ |
-| Lissage | Médiane glissante sur 5 frames | `game-runner.ts:getSmoothedHealth()` | ✅ |
-| Seuil KO | `KO_THRESHOLD = 2%` | `game-runner.ts` | ✅ |
-| Confirmation KO | 4 frames consécutives (`KO_CONFIRM_REQUIRED`) | `game-runner.ts` | ✅ |
-| Grâce début round | 16 frames après entrée PLAYING (`PLAYING_GRACE_FRAMES`) | `game-runner.ts` | ✅ |
-| KO | `KO_PENDING → KO_CONFIRMED`, détermine vainqueur | `game-runner.ts:analyzeHealthFrame()` | ✅ |
-| Perfect KO | `roundP1MinHealth ≥ 95%` ou `roundP2MinHealth ≥ 95%` | `game-runner.ts` | ✅ |
-| Draw | Les deux joueurs KO simultanément, santé égale | `game-runner.ts` | ✅ |
-| Nouveau round | 2 barres ≥ 80% pendant 5 frames → retour PLAYING | `game-runner.ts` | ✅ |
-| Fin de match | `losses ≥ winsNeeded` (2 pour SFA2) | `game-runner.ts` | ✅ |
-| Timer OCR | Template matching 8×12 → digits 0-99 | `game-runner.ts:readTimerFromFrame()` | ✅ |
-| Validation timer | Stabilité N frames, transitions valides | `game-runner.ts:processTimerValue()` | ✅ |
-| Config par ROM | `PIXEL_GAME_CONFIGS` + `getPixelConfig()` | `game-runner.ts` | ✅ |
-| Warmup rapide | `fastWarmup = true` → 8 frames au lieu de 24 | `game-runner.ts:resetHealthWarmup()` | ✅ |
-| Anti-faux-positif | Double-drop simultané ignoré (transition écran) | `game-runner.ts` | ✅ |
+| Santé P1/P2 | Column scan + médiane glissante | `pixel-match-analyzer.ts` | ✅ Stable |
+| Barre calibrée | `p1FullBarWidth` max warmup + recalibration timer-start | `pixel-match-analyzer.ts` | ✅ |
+| Seuil KO | `KO_THRESHOLD = 10%` | `pixel-match-analyzer.ts` | ✅ |
+| Confirmation KO | 5 frames (`KO_CONFIRM_REQUIRED`) | `pixel-match-analyzer.ts` | ✅ |
+| Grâce début round | 16 frames (`PLAYING_GRACE_FRAMES`) | `pixel-match-analyzer.ts` | ✅ |
+| KO | KO_PENDING → KO_CONFIRMED + retroactive KO | `pixel-match-analyzer.ts` | ✅ |
+| Perfect KO | Ratio-based : `minFilled/maxFilled ≥ 0.95` (colonnes brutes) | `pixel-match-analyzer.ts` | ✅ |
+| Draw | Double KO simultané, santé égale | `pixel-match-analyzer.ts` | ✅ |
+| Nouveau round | 2 barres ≥ 80% pendant 5 frames | `pixel-match-analyzer.ts` | ✅ |
+| Fin de match | `losses ≥ winsNeeded` (2 pour SFA2) | `pixel-match-analyzer.ts` | ✅ |
+| Timer OCR | Template matching 8×12 → digits 0-99 | `pixel-match-analyzer.ts` | ✅ |
+| Time-over | timer→0 dans PLAYING armé → compare santé → roundResult | `pixel-match-analyzer.ts` | ✅ Validé live |
+| Bars-vanished KO | Double drop à 0% avec lastRunning sain → KO rétroactif | `pixel-match-analyzer.ts` | ✅ |
+| match_state WebSocket | PixelMatchAnalyzer "health" → GameRunner "matchState" → ws-handler | `game-runner.ts` / `ws-handler.ts` | ✅ |
+| Warmup rapide | `fastWarmup = true` → 8 frames | `pixel-match-analyzer.ts` | ✅ |
+| Anti-fantôme KO | Gardes timer-decrease, thaw détection, KO recovery | `pixel-match-analyzer.ts` | ✅ |
+| Portrait capture | ImageMagick `import -depth 8 -window root` → PPM 8-bit | `game-runner.ts` | ✅ |
+| Portrait calibrator | Collecte 18 échantillons/match, consensus ≥10/perso | `game-runner.ts` | ✅ (collecte OK, pas assez de matchs) |
 
 ### Ce qui MANQUE pour SFA2
 
 | Détection | Problème | Priorité |
 |-----------|----------|----------|
-| **Time-over** | Le timer est LU (OCR → digits) mais **jamais utilisé** pour détecter une fin de round. `processTimerValue()` ne fait que valider et logger. Il faut : détecter `timer → 0` dans le state `PLAYING`, comparer les santés restantes, émettre `roundResult` avec `koType: "timeout"`. | 🔴 URGENT |
-| **Émission roundResult** | L'event `roundResult` est émis dans `KO_CONFIRMED` — mais il faut aussi l'émettre sur time-over. | 🔴 |
-| **Tests live SFA2** | Tout le code pixel est théorique — nécessite des vrais combats SFA2 pour calibrer les seuils. | 🟡 |
-| **Overlay SFA2** | Pas de `charInfo()` pertinente pour SFA2 (pas de RAM → pas de noms de persos). L'overlay de fin de match sera minimal. | 🟢 |
-| **Autres jeux SNES** | La structure `PIXEL_GAME_CONFIGS` est prête à accueillir d'autres ROMs. Ajouter SF2, Killer Instinct, etc. = juste une entrée dans le map. | 🟢 |
-| **Config charger depuis DB** | Actuellement `PIXEL_GAME_CONFIGS` est hardcodé. Le game-server a maintenant les vars Turso — on pourrait charger la config pixel depuis `duel_games.ram_config`. | 🟢 |
+| **Templates portrait** | Calibrateur collecte mais 1 seul échantillon/match → besoin de 10 matchs ou persistance disque. Script `generate-portrait-templates.mjs` prêt mais colonnes droites tout-noir (grille à ajuster). | 🟡 |
+| **Tests live SFA2** | Tout le code pixel est testé en CPU auto-fight. Fonctionne 2/3 du temps (timer instable sur ~1/3 des runs). | 🟡 |
+| **Autres jeux SNES** | La structure `PIXEL_GAME_CONFIGS` est prête. Ajouter un jeu = une entrée. | 🟢 |
+| **Config charger depuis DB** | Actuellement hardcodé dans `pixel-game-config.ts`. | 🟢 |
 
 ---
 
