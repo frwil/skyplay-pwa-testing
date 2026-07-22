@@ -104,6 +104,10 @@ export class PixelMatchAnalyzer extends EventEmitter {
   private roundSawHealthyBars = false;
   /** Last valid (>0) timer reading this round — decrease detection. */
   private roundTimerLastValue = -1;
+  /** Highest timer value seen this round. Must be ≥ 50 before time-over
+   *  is trusted — otherwise we joined mid-round and lack enough data
+   *  to call a winner (produces phantom draws). */
+  private roundTimerMaxSeen = 0;
   /** True when PLAYING was entered from WARMUP: the warmup can complete on
    *  the VS/loading screen, so the frames-1-4 recalibration may measure
    *  garbage (observed: P2 full-bar 282 vs real 210 → perfect KO read as
@@ -321,16 +325,24 @@ export class PixelMatchAnalyzer extends EventEmitter {
       if (p2Health > 0) this.roundP2MinHealth = Math.min(this.roundP2MinHealth, p2Health);
       // Raw filled-column tracking — immune to fullBarWidth calibration drift.
       // A true perfect KO means the bar never shrank, so minFilled ≈ maxFilled.
+      // CRITICAL: max is gated on bar-locked to skip early-round phantom
+      // inflations (observed: P2 read 273 cols during intro, later ~210 stable
+      // → perfect KO misread as 210/273=77%). Min is always tracked so any
+      // pre-lock damage is still captured.
       const p1RegionW = this.p1EndX - this.p1StartX;
       const p2RegionW = this.p2EndX - this.p2StartX;
       if (p1Filled > 0) {
         this.roundP1MinFilled = Math.min(this.roundP1MinFilled, p1Filled);
         // Anti-glow: full-region fill is an artifact (FIGHT! glow, flashes), ignore.
-        if (p1Filled < p1RegionW) this.roundP1MaxFilled = Math.max(this.roundP1MaxFilled, p1Filled);
+        if (p1Filled < p1RegionW && this.p1FullBarLocked) {
+          this.roundP1MaxFilled = Math.max(this.roundP1MaxFilled, p1Filled);
+        }
       }
       if (p2Filled > 0) {
         this.roundP2MinFilled = Math.min(this.roundP2MinFilled, p2Filled);
-        if (p2Filled < p2RegionW) this.roundP2MaxFilled = Math.max(this.roundP2MaxFilled, p2Filled);
+        if (p2Filled < p2RegionW && this.p2FullBarLocked) {
+          this.roundP2MaxFilled = Math.max(this.roundP2MaxFilled, p2Filled);
+        }
       }
     }
 
@@ -385,6 +397,7 @@ export class PixelMatchAnalyzer extends EventEmitter {
     this.roundTimerWasRunning = false;
     this.roundSawHealthyBars = false;
     this.roundTimerLastValue = -1;
+    this.roundTimerMaxSeen = 0;
     this.calibrateOnTimerStart = false;
     this.p1FullBarLocked = false;
     this.p2FullBarLocked = false;
@@ -454,6 +467,7 @@ export class PixelMatchAnalyzer extends EventEmitter {
           this.fastWarmup = false;
           this.calibrateOnTimerStart = true;
           this.roundTimerLastValue = -1;
+          this.roundTimerMaxSeen = 0;
           this.roundTimerWasRunning = false;
           console.log(`[pixel-analyzer] ⏰ Warmup timeout after ${this._warmupFrameCount} frames — forcing PLAYING (bars may be invisible)`);
           break;
@@ -486,6 +500,7 @@ export class PixelMatchAnalyzer extends EventEmitter {
           this.fastWarmup = false;
           this.calibrateOnTimerStart = false;
           this.roundTimerLastValue = timerValue > 0 ? timerValue : -1;
+          this.roundTimerMaxSeen = 0;
           this.roundTimerWasRunning = false;
           this._postTimerCalibFrames = 0;
     this._barStableFrames = 0;
@@ -517,6 +532,7 @@ export class PixelMatchAnalyzer extends EventEmitter {
           // first decrease. roundTimerLastValue is seeded so the dropped
           // calculation works when the timer finally ticks.
           this.roundTimerWasRunning = false;
+          this.roundTimerMaxSeen = 0;
           this._postTimerCalibFrames = 0;
     this._barStableFrames = 0;
           console.log(`[pixel-analyzer] 🎮 Phase: WARMUP → PLAYING (timer=${timerValue}, barW warmup P1=${this.p1FullBarWidth} P2=${this.p2FullBarWidth} — waiting for timer-drop to arm)`);
@@ -606,6 +622,11 @@ export class PixelMatchAnalyzer extends EventEmitter {
 
           this.roundTimerLastValue = timerValue;
           if (this.roundTimerWasRunning) {
+            // Track the highest timer value seen AFTER the round was
+            // confirmed running — transient high readings at screen
+            // transitions (e.g. 73) happen BEFORE the first decrease
+            // and must not inflate the max, or the ≥50 gate fails.
+            if (timerValue > this.roundTimerMaxSeen) this.roundTimerMaxSeen = timerValue;
             this.lastRunningP1Health = p1Health;
             this.lastRunningP2Health = p2Health;
 
@@ -776,6 +797,21 @@ export class PixelMatchAnalyzer extends EventEmitter {
         if (!p1Down && !p2Down && timerValue === 0 && this.roundTimerWasRunning && this.roundSawHealthyBars) {
           this.timeOverConfirmFrames++;
           if (this.timeOverConfirmFrames >= TIME_OVER_CONFIRM_REQUIRED) {
+            // Require at least one lastRunning health capture: the timer must
+            // have been seen > 0 while the round was armed for this to be a
+            // real time-over. Without it, "timer=0" is just the inter-round
+            // screen transition (bars refilled, timer frozen) — not a draw.
+            if (this.lastRunningP1Health < 0 && this.lastRunningP2Health < 0) {
+              this.timeOverConfirmFrames = 0;
+              break;
+            }
+            // Guard: timer must have been seen ≥ 50 at some point this round.
+            // If we joined mid-round (timer already near zero), we lack enough
+            // data to call the winner — produces phantom draws.
+            if (this.roundTimerMaxSeen < 50) {
+              this.timeOverConfirmFrames = 0;
+              break;
+            }
             // Verdict from the last FIGHTING healths (timer still running) —
             // the current frame may already be the result screen (bars refilled).
             const toP1 = this.lastRunningP1Health >= 0 ? this.lastRunningP1Health : p1Health;
@@ -997,6 +1033,7 @@ export class PixelMatchAnalyzer extends EventEmitter {
             this.roundTimerWasRunning = false;
             this.roundSawHealthyBars = false;
             this.roundTimerLastValue = -1;
+            this.roundTimerMaxSeen = 0;
             this.calibrateOnTimerStart = false;
             this.timeOverConfirmFrames = 0;
             this.lastRunningP1Health = -1;
