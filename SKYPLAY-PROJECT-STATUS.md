@@ -332,8 +332,8 @@ Dossier untracké contenant :
 │                                                                   │
 │ ❌ NON FAIT                                                       │
 │ ┌─────────────┬──────────────┬─────────────────┬───────────────┐ │
-│ │ Northflank  │ Secret rotate│ Escrow cleanup  │ KOF2002 RAM   │ │
-│ │ swap URLs   │              │ (exec à faire)  │ complet       │ │
+│ │ Northflank  │ Secret rotate│ KOF2002 RAM    │               │ │
+│ │ swap URLs   │              │ complet        │               │ │
 │ └─────────────┴──────────────┴─────────────────┴───────────────┘ │
 │                                                                   │
 └──────────────────────────────────────────────────────────────────┘
@@ -344,7 +344,7 @@ Dossier untracké contenant :
 ## 12. Priorités restantes
 
 ### 🔴 URGENT
-1. **Nettoyer 8 escrow_rooms obsolètes** (2000 SKY chacun) — dry-run OK (22/07), reste l'exécution : `ADMIN_USER=moderateur ADMIN_PASS=<...> BASE_URL=http://localhost:3001 npx tsx apps/game-server/scripts/cleanup-escrow.ts`
+*Aucune tâche urgente en cours.*
 
 ### 🟡 IMPORTANT
 2. **Committer le reste du working tree** :

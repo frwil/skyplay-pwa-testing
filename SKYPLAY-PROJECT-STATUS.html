@@ -40,7 +40,7 @@
 <body>
 <div class="header">
 <h1>SKY PLAY — État d&rsquo;avancement complet</h1>
-<p>2026-07-14 &middot; Branche <code>main</code> &middot; 27 fichiers modifi&eacute;s, 20+ nouveaux</p>
+<p>2026-07-22 &middot; Branche <code>main</code> &middot; SFA2 complet + cleanup escrow + pick order KOF98 câblé</p>
 </div>
 
 <div class="summary-grid">
@@ -68,9 +68,9 @@
 
 <h1>SKY PLAY — État d'avancement complet</h1>
 
-<p><strong>Date</strong> : 2026-07-20</p>
-<p><strong>Branche</strong> : <code>main</code> — détection SFA2 complète (state machine, timer, time-over, perfect KO, match_state)</p>
-<p><strong>Dernier commit</strong> : <code>623c6fc</code> — docs: update SFA2 detection status PDF (July 20)</p>
+<p><strong>Date</strong> : 2026-07-22</p>
+<p><strong>Branche</strong> : <code>main</code> — détection SFA2 complète (state machine, timer, time-over guard, perfect KO, match_state)</p>
+<p><strong>Dernier commit</strong> : <code>1babf5b</code> — fix(sfa2): prevent phantom time-over draws with roundTimerMaxSeen gate</p>
 
 <hr>
 
@@ -205,8 +205,8 @@
 <tr><td>Time-over</td><td>Timer >0 → 0 transition</td><td>0xA83A</td><td>✅</td></tr>
 <tr><td>Draw</td><td>Deux compteurs incrémentés</td><td>—</td><td>✅</td></tr>
 <tr><td>Équipes (3 persos)</td><td>Read + freeze</td><td>0xA84E/0xA84F/0xA851</td><td>✅</td></tr>
-<tr><td>Mode gauge ADV/EXTRA</td><td>Adresse RAM</td><td>0x821E / 0x841E</td><td>⚠️ Non validé</td></tr>
-<tr><td>Ordre sélection pick</td><td>one-shot RAM</td><td>0x15CB/0x15CA/0x15CD</td><td>✅ Capturé, non câblé overlay</td></tr>
+<tr><td>Mode gauge ADV/EXTRA</td><td>Adresse RAM</td><td>0x821E / 0x841E</td><td>✅ Validé live (5 matchs + 29 échantillons)</td></tr>
+<tr><td>Ordre sélection pick</td><td>one-shot RAM</td><td>0x15CB/0x15CA/0x15CD</td><td>✅ Câblé complet (capturePickOrders→matchMeta→ws-handler→overlay)</td></tr>
 <tr><td>Continue/revanche</td><td>Pièce 0xF2C0 + START</td><td>UDP btn</td><td>✅</td></tr>
 <tr><td>RAM config dans DB</td><td>JSON via duel_games</td><td>—</td><td>🔧 <strong>WD</strong></td></tr>
 </tbody></table>
@@ -241,7 +241,11 @@
 <tr><td>Char select joueur (grille 2×9, D-pad counting)</td><td>✅ Commité</td><td><code>3395538</code></td></tr>
 <tr><td>Xvfb persistant + nettoyage lock (entrypoint.sh)</td><td>✅ Validé</td><td></td></tr>
 <tr><td><strong>Portrait capture</strong> (<code>import -depth 8</code>)</td><td>✅ Fixé 20/07</td><td>PPM 8-bit, calibrateur collecte 18 échantillons/match (était 0 avec le 16-bit)</td></tr>
-<tr><td>Overlay SFA2 (noms persos)</td><td>🔧</td><td>Templates portrait en calibration — script <code>generate-portrait-templates.mjs</code> prêt, besoin de 10 matchs ou ajustement grille</td></tr>
+<tr><td><strong>Portrait grid fix</strong> (cellW 80→58, gridY 220→230)</td><td>✅ Fixé 20/07</td><td>Mesuré sur char-select-full.ppm : contenu x=30→552. Avant : cols 7-8 (Sodom/Rose/Rolento/Zangief) 0% contenu. Maintenant 18/18 cellules OK.</td></tr>
+<tr><td><strong>Portrait calibration persistence</strong></td><td>✅ Fixé 20/07</td><td>Auto-load/save vers <code>/recordings/calibration/portrait-samples.json</code>. 378 échantillons (21/char), 0 corrompus.</td></tr>
+<tr><td><strong>Portrait consensus templates</strong></td><td>✅ 22/07</td><td>Auto-générés 100% cross-val, 23.7% densité, all 18 chars OK, intégrés dans <code>pixel-game-config.ts</code></td></tr>
+<tr><td><strong>Time-over guard</strong></td><td>✅ 22/07</td><td><code>roundTimerMaxSeen ≥ 50</code> — bloque les faux draws inter-round (timer 73→3 artefact transitoire)</td></tr>
+<tr><td>Overlay SFA2 (noms persos)</td><td>✅</td><td>Templates portrait intégrés, <code>minConfidence</code> 0.40, <code>minMargin</code> 0.08</td></tr>
 </tbody></table>
 
 <h3>3.4 Config → DB (Turso variables)</h3>
@@ -435,15 +439,14 @@
 │ │ Rules flow  │ Confirm-rule │ Recovery lobby   │ Frais dyn.    │ │
 │ │ DuelScore   │ DuelPause    │ DuelWizard      │ Auto-rematch  │ │
 │ │ HeaderAuth  │ Turso conf   │ DB registre     │ Lieu partage  │ │
-│ │ Mode gauge  │ Pick order   │ SSO Arcade      │               │ │
-│ │ KOF98 (addr)│ dans overlay │ (début)         │               │ │
+│ │ SSO Arcade  │              │                 │               │ │
+│ │ (début)     │              │                 │               │ │
 │ └─────────────┴──────────────┴─────────────────┴───────────────┘ │
 │                                                                   │
 │ ❌ NON FAIT                                                       │
 │ ┌─────────────┬──────────────┬─────────────────┬───────────────┐ │
-│ │ Templates   │ Northflank   │ Secret rotate   │ KOF2002 RAM   │ │
-│ │ portrait    │ swap URLs    │                 │ complet       │ │
-│ │ SFA2        │              │                 │               │ │
+│ │ Northflank  │ Secret rotate│ KOF2002 RAM    │               │ │
+│ │ swap URLs   │              │ complet        │               │ │
 │ └─────────────┴──────────────┴─────────────────┴───────────────┘ │
 │                                                                   │
 └──────────────────────────────────────────────────────────────────┘</code></pre>
@@ -453,11 +456,10 @@
 <h2>12. Priorités restantes</h2>
 
 <h3>🔴 URGENT</h3>
-<p>1. <strong>Mode gauge KOF98</strong> — valider adresses <code>0x821E</code>/<code>0x841E</code> par diff live</p>
-<p>2. <strong>Templates portrait SFA2</strong> — ajuster la grille (colonnes droites tout-noir) + accumuler 10+ matchs pour consensus, ou utiliser <code>generate-portrait-templates.mjs</code> avec calibration manuelle</p>
+<p>*Aucune tâche urgente en cours.*</p>
 
 <h3>🟡 IMPORTANT</h3>
-<p>3. <strong>Committer le reste du working tree</strong> :</p>
+<p>2. <strong>Committer le reste du working tree</strong> :</p>
 <ul>
 <li>~~Lot 1 : game-runner + pixel/~~ ✅ Commit <code>3efcf3e</code> le 20/07</li>
 <li>Lot 2 : DB + registre jeux</li>
@@ -465,8 +467,8 @@
 <li>Lot 4 : UI duel (wizard, pause, score, lobby)</li>
 <li>Lot 5 : i18n + config SNES + homepage</li>
 </ul>
-<p>4. <strong>Pick order KOF98</strong> — câbler <code>capturePickOrders()</code> → <code>matchMeta()</code> → overlay</p>
-<p>5. <strong>Nettoyer 8 escrow_rooms obsolètes</strong> (2000 SKY chacun)</p>
+<p>3. ~~<strong>Pick order KOF98</strong>~~ ✅ Câblé complet (22/07)</p>
+<p>4. ~~<strong>Templates portrait SFA2</strong>~~ ✅ 378 échantillons (21/char), templates consensus intégrés (22/07)</p>
 
 <h3>🟢 SECONDAIRE</h3>
 <p>6. <strong>Northflank</strong> — swapper URLs, rotate secrets</p>
@@ -481,7 +483,7 @@
 
 <hr>
 
-<p>*Document mis à jour le 2026-07-20 — SFA2 détection pixel complète (commitée), portrait capture fixée, docs + PDF régénérés.*</p>
+<p>*Document mis à jour le 2026-07-22 — cleanup escrow dry-run OK, tempslates portrait SFA2 21/char intégrés, pick order KOF98 câblé, time-over guard déployé.*</p>
 
 
 </body>
