@@ -371,7 +371,11 @@ export class GameRunner extends EventEmitter {
 
     console.log(`[game-runner] R${this.runnerId} Starting ${this.system} — ${displayW}x${displayH}`);
 
-    // 0. Wait for persistent Xvfb (started once at container init by entrypoint.sh)
+    // 0. Kill any orphan retroarch/ffmpeg/parec from a previous session (one session per player rule).
+    //    This guarantees a clean slate — old processes can't starve Xvfb or steal the display.
+    this.killOrphanProcesses();
+
+    // 1. Wait for persistent Xvfb (started once at container init by entrypoint.sh)
     await this.waitForXvfb();
 
     // 3. Start RetroArch (with audio enabled)
@@ -2710,6 +2714,28 @@ export class GameRunner extends EventEmitter {
       // CONTINUE prompt and is simply still picking their team (which can take a while). We just
       // can't observe the fight-load moment yet. Report it as informational, not "stuck on CONTINUE".
       console.log(`[game-runner] ${this.readerTag} ℹ️ continue assist: new fight not yet loaded after ~12s (flag=0x${(this.memMatchFlag < 0 ? 0 : this.memMatchFlag).toString(16)}, loserLost=${loserLost()}) — credit is in; loser is most likely still choosing their team at char-select.`);
+    }
+  }
+
+  /** Kill any orphan retroarch, ffmpeg, and parec processes before starting a new session.
+   *  Enforces the "one session per player" rule — accepting a new duel implicitly ends
+   *  the previous one. Uses SIGKILL on the process group to guarantee cleanup. */
+  private killOrphanProcesses(): void {
+    const targets = ["retroarch", "ffmpeg", "parec"];
+    let killed = 0;
+    for (const name of targets) {
+      try {
+        const result = spawnSync("pkill", ["-9", "-f", name], {
+          env: { ...process.env },
+          stdio: "pipe",
+          timeout: 3000,
+        });
+        // pkill exit code 0 = killed, 1 = no match, >1 = error
+        if (result.status === 0) killed++;
+      } catch { /* best-effort: pkill may not exist or process already gone */ }
+    }
+    if (killed > 0) {
+      console.log(`[game-runner] R${this.runnerId} 🧹 Killed ${killed} orphan process group(s) from previous session`);
     }
   }
 
