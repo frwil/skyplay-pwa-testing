@@ -1,8 +1,8 @@
 # SKY PLAY — État d'avancement complet
 
-**Date** : 2026-07-20  
-**Branche** : `main` — détection SFA2 complète (state machine, timer, time-over, perfect KO, match_state)  
-**Dernier commit** : `623c6fc` — docs: update SFA2 detection status PDF (July 20)  
+**Date** : 2026-07-22  
+**Branche** : `main` — détection SFA2 complète (state machine, timer, time-over guard, perfect KO, match_state)  
+**Dernier commit** : `1babf5b` — fix(sfa2): prevent phantom time-over draws with roundTimerMaxSeen gate  
 
 ---
 
@@ -120,8 +120,8 @@
 | Time-over | Timer >0 → 0 transition | 0xA83A | ✅ |
 | Draw | Deux compteurs incrémentés | — | ✅ |
 | Équipes (3 persos) | Read + freeze | 0xA84E/0xA84F/0xA851 | ✅ |
-| Mode gauge ADV/EXTRA | Adresse RAM | 0x821E / 0x841E | ⚠️ Non validé |
-| Ordre sélection pick | one-shot RAM | 0x15CB/0x15CA/0x15CD | ✅ Capturé, non câblé overlay |
+| Mode gauge ADV/EXTRA | Adresse RAM | 0x821E / 0x841E | ✅ Validé live (5 matchs + 29 échantillons) |
+| Ordre sélection pick | one-shot RAM | 0x15CB/0x15CA/0x15CD | ✅ Câblé complet (capturePickOrders→matchMeta→ws-handler→overlay) |
 | Continue/revanche | Pièce 0xF2C0 + START | UDP btn | ✅ |
 | RAM config dans DB | JSON via duel_games | — | 🔧 **WD** |
 
@@ -155,8 +155,10 @@
 | Xvfb persistant + nettoyage lock (entrypoint.sh) | ✅ Validé | |
 | **Portrait capture** (`import -depth 8`) | ✅ Fixé 20/07 | PPM 8-bit, calibrateur collecte 18 échantillons/match (était 0 avec le 16-bit) |
 | **Portrait grid fix** (cellW 80→58, gridY 220→230) | ✅ Fixé 20/07 | Mesuré sur char-select-full.ppm : contenu x=30→552. Avant : cols 7-8 (Sodom/Rose/Rolento/Zangief) 0% contenu. Maintenant 18/18 cellules OK. |
-| **Portrait calibration persistence** | ✅ Fixé 20/07 | Auto-load/save vers `/recordings/calibration/portrait-samples.json`. 3 samples/char accumulés en 3 matchs (cible 10). |
-| Overlay SFA2 (noms persos) | 🔧 | Templates portrait : 54 samples accumulés, besoin de 10/char pour auto-génération consensus. |
+| **Portrait calibration persistence** | ✅ Fixé 20/07 | Auto-load/save vers `/recordings/calibration/portrait-samples.json`. 378 échantillons (21/char), 0 corrompus. |
+| **Portrait consensus templates** | ✅ 22/07 | Auto-générés 100% cross-val, 23.7% densité, all 18 chars OK, intégrés dans `pixel-game-config.ts` |
+| **Time-over guard** | ✅ 22/07 | `roundTimerMaxSeen ≥ 50` — bloque les faux draws inter-round (timer 73→3 artefact transitoire) |
+| Overlay SFA2 (noms persos) | ✅ | Templates portrait intégrés, `minConfidence` 0.40, `minMargin` 0.08 |
 
 ### 3.4 Config → DB (Turso variables)
 
@@ -324,15 +326,14 @@ Dossier untracké contenant :
 │ │ Rules flow  │ Confirm-rule │ Recovery lobby   │ Frais dyn.    │ │
 │ │ DuelScore   │ DuelPause    │ DuelWizard      │ Auto-rematch  │ │
 │ │ HeaderAuth  │ Turso conf   │ DB registre     │ Lieu partage  │ │
-│ │ Mode gauge  │ Pick order   │ SSO Arcade      │               │ │
-│ │ KOF98 (addr)│ dans overlay │ (début)         │               │ │
+│ │ SSO Arcade  │              │                 │               │ │
+│ │ (début)     │              │                 │               │ │
 │ └─────────────┴──────────────┴─────────────────┴───────────────┘ │
 │                                                                   │
 │ ❌ NON FAIT                                                       │
 │ ┌─────────────┬──────────────┬─────────────────┬───────────────┐ │
-│ │ Templates   │ Northflank   │ Secret rotate   │ KOF2002 RAM   │ │
-│ │ portrait    │ swap URLs    │                 │ complet       │ │
-│ │ SFA2        │              │                 │               │ │
+│ │ Northflank  │ Secret rotate│ Escrow cleanup  │ KOF2002 RAM   │ │
+│ │ swap URLs   │              │ (exec à faire)  │ complet       │ │
 │ └─────────────┴──────────────┴─────────────────┴───────────────┘ │
 │                                                                   │
 └──────────────────────────────────────────────────────────────────┘
@@ -343,18 +344,17 @@ Dossier untracké contenant :
 ## 12. Priorités restantes
 
 ### 🔴 URGENT
-1. **Nettoyer 8 escrow_rooms obsolètes** (2000 SKY chacun) — script `scripts/cleanup-escrow.ts` prêt, ou via page admin `/admin/duel/disputes`
-2. **Templates portrait SFA2** — 54 samples accumulés (3/char), besoin de 10/char pour auto-génération consensus (7 matchs restants)
+1. **Nettoyer 8 escrow_rooms obsolètes** (2000 SKY chacun) — dry-run OK (22/07), reste l'exécution : `ADMIN_USER=moderateur ADMIN_PASS=<...> BASE_URL=http://localhost:3001 npx tsx apps/game-server/scripts/cleanup-escrow.ts`
 
 ### 🟡 IMPORTANT
-3. **Committer le reste du working tree** :
+2. **Committer le reste du working tree** :
    - ~~Lot 1 : game-runner + pixel/~~ ✅ Commit `3efcf3e` le 20/07
    - Lot 2 : DB + registre jeux
    - Lot 3 : Flow règles (respond → confirm-rules)
    - Lot 4 : UI duel (wizard, pause, score, lobby)
    - Lot 5 : i18n + config SNES + homepage
-4. **Pick order KOF98** — câbler `capturePickOrders()` → `matchMeta()` → overlay
-5. **Nettoyer 8 escrow_rooms obsolètes** (2000 SKY chacun)
+3. ~~**Pick order KOF98**~~ ✅ Câblé complet (22/07)
+4. ~~**Templates portrait SFA2**~~ ✅ 378 échantillons (21/char), templates consensus intégrés (22/07)
 
 ### 🟢 SECONDAIRE
 6. **Northflank** — swapper URLs, rotate secrets
@@ -367,4 +367,4 @@ Dossier untracké contenant :
 
 ---
 
-*Document mis à jour le 2026-07-20 — SFA2 détection pixel complète (commitée), portrait capture fixée, docs + PDF régénérés.*
+*Document mis à jour le 2026-07-22 — cleanup escrow dry-run OK, tempslates portrait SFA2 21/char intégrés, pick order KOF98 câblé, time-over guard déployé.*

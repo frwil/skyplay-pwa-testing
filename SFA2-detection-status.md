@@ -1,6 +1,6 @@
 # SFA2 — État de la détection pixel & isolation KOF98
 
-> **Date** : 2026-07-20  
+> **Date** : 2026-07-22  
 > **Branche** : `main`  
 > **Contexte** : Détection pixel pour SFA2 (SNES/snes9x — RAM inaccessible), sans casser KOF98 (RAM Neo Geo/FBNeo)
 
@@ -37,7 +37,7 @@ Ils partagent uniquement des variables de sortie : `p1Losses`, `p2Losses`, `matc
 | Perso actif P1/P2 | Lecture RAM | `0x8256` / `0x8456` | ✅ |
 | Mode gauge | Lecture RAM | `0x821E` / `0x841E` | ✅ Validé (2026-07-09, 5 matchs + 29 échantillons) |
 | Équipes (3 persos) | Lecture RAM + freeze | `0xA84E`/`0xA84F`/`0xA851` (P1) | ✅ Figées au combat |
-| Ordre de sélection | Lecture RAM one-shot | `0x15CB`/`0x15CA`/`0x15CD` (P1) | ✅ Capturé, pas encore câblé dans overlay |
+| Ordre de sélection | Lecture RAM one-shot | `0x15CB`/`0x15CA`/`0x15CD` (P1) | ✅ Capturé + câblé overlay (2026-07-22) |
 | **Compteur de pertes** | **Autoritaire** | **`0xA859` (P1) / `0xA868` (P2)** | ✅ **C'est ça qui drive tout** |
 | Round gagné/perdu | `processLossCounters()` | Diff `prevLost` → `currLost` | ✅ |
 | Time-over | `memTimer16 > 0 → 0` transition | `0xA83A` | ✅ |
@@ -57,7 +57,7 @@ Ils partagent uniquement des variables de sortie : `p1Losses`, `p2Losses`, `matc
 ### ⚠️ Points d'attention KOF98
 
 - **Mode gauge ADVANCED/EXTRA** : adresses `0x821E`/`0x841E` validées live 2026-07-09 (1=ADV, 0=EXT, 5 matchs + 29 échantillons). Anciennes adresses `0x81F0`/`0x83F0` étaient fausses.
-- **Ordre de sélection** : adresses trouvées et validées (`0x15CB`/`0x15CA`/`0x15CD`), mais **pas encore câblé** dans `matchMeta()` pour l'overlay de fin de match
+- **Ordre de sélection** : adresses validées (`0x15CB`/`0x15CA`/`0x15CD`), câblé complet : `capturePickOrders()` → `matchMeta()` → `ws-handler` → `DuelEndOverlay.tsx`
 - **`winsNeeded` hardcodé à 3** dans `processLossCounters()` — si un jour on veut du KOF98 en BO1, il faudra paramétrer
 
 ---
@@ -117,24 +117,26 @@ WARMUP ──(timer ≥30 OU bars ≥100 cols)──▶ PLAYING
 | Fin de match | `losses ≥ winsNeeded` (2 pour SFA2) | `pixel-match-analyzer.ts` | ✅ |
 | Timer OCR | Template matching 8×12 → digits 0-99 | `pixel-match-analyzer.ts` | ✅ |
 | Time-over | timer→0 dans PLAYING armé → compare santé → roundResult | `pixel-match-analyzer.ts` | ✅ Validé live |
+| **Time-over guard** | `roundTimerMaxSeen ≥ 50` — bloque les faux draws inter-round (timer lu 73→3 artefact transitoire). Tracking différé après `roundTimerWasRunning` armé. | `pixel-match-analyzer.ts` | ✅ (2026-07-22) |
 | Bars-vanished KO | Double drop à 0% avec lastRunning sain → KO rétroactif | `pixel-match-analyzer.ts` | ✅ |
 | match_state WebSocket | PixelMatchAnalyzer "health" → GameRunner "matchState" → ws-handler | `game-runner.ts` / `ws-handler.ts` | ✅ |
 | Warmup rapide | `fastWarmup = true` → 8 frames | `pixel-match-analyzer.ts` | ✅ |
 | Anti-fantôme KO | Gardes timer-decrease, thaw détection, KO recovery | `pixel-match-analyzer.ts` | ✅ |
 | Portrait capture | ImageMagick `import -depth 8 -window root` → PPM 8-bit | `game-runner.ts` | ✅ |
-| Portrait calibrator | Collecte 18 échantillons/match, consensus ≥10/perso | `game-runner.ts` | ✅ (collecte OK, pas assez de matchs) |
+| Portrait calibrator | Collecte 18 échantillons/match, consensus ≥10/perso, auto-génération templates | `game-runner.ts` | ✅ (2026-07-20) |
 | Portrait grid fix | cellW 80→58, gridY 220→230 — mesuré sur char-select-full.ppm (content x=30→552) | `pixel-game-config.ts` | ✅ (2026-07-20) |
 | Portrait persistence | Auto-load/save vers `/recordings/calibration/portrait-samples.json` | `game-runner.ts` | ✅ (2026-07-20) |
 | Timer bar-stable fix | Fallback sorti du guard `timerValue>0` + warmup timeout 300f | `pixel-match-analyzer.ts` | ✅ (2026-07-20) |
+| **Templates consensus SFA2** | 378 échantillons (21/char, 0 corrompus), auto-générés 100% cross-val, all 18 chars OK | `pixel-game-config.ts` | ✅ (2026-07-22) |
 
 ### Ce qui MANQUE pour SFA2
 
 | Détection | Problème | Priorité |
 |-----------|----------|----------|
-| **Templates portrait ≥10/char** | Persistance OK (3/char accumulés), besoin de 7 matchs de plus pour auto-génération consensus. | 🟡 |
-| **Tests live SFA2** | 3/3 runs OK depuis fix bar-stable + warmup timeout. À surveiller. | 🟢 |
+| **Tests live SFA2** | 10/10 matchs OK avec `--kill-every 1`. Détection rounds fonctionnelle. | 🟢 |
 | **Autres jeux SNES** | La structure `PIXEL_GAME_CONFIGS` est prête. Ajouter un jeu = une entrée. | 🟢 |
 | **Config charger depuis DB** | Actuellement hardcodé dans `pixel-game-config.ts`. | 🟢 |
+| **Escrow cleanup** | Script `scripts/cleanup-escrow.ts` écrit. Dry-run + exécution à faire. | 🟡 |
 
 ---
 
