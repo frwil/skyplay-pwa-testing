@@ -549,6 +549,38 @@ export class PixelMatchAnalyzer extends EventEmitter {
         //     the timer is clearly in-match (≥30). This catches cases where
         //     the stripe geometry is wrong and bars are never detected.
         if (timerValue >= 30) {
+          // ── Asymmetric calibration guard ───────────────────────────
+          // If warmup captured a KO'd bar as the "full" width (e.g. P1=3
+          // because reset() was called late, after the KO already happened),
+          // the tiny calibration makes health always read 100% (3/3) and
+          // the KO is invisible. SFA2 bars are symmetric — if one bar is
+          // healthy (≥ 80% of its region) and the other is tiny (< 15%),
+          // copy the healthy width. This recovers from late-reset KOs.
+          const p1RegionW = this.p1EndX - this.p1StartX;
+          const p2RegionW = this.p2EndX - this.p2StartX;
+          const healthyFloor1 = Math.floor(p1RegionW * 0.8);
+          const healthyFloor2 = Math.floor(p2RegionW * 0.8);
+          const tinyCeil1 = Math.floor(p1RegionW * 0.15);
+          const tinyCeil2 = Math.floor(p2RegionW * 0.15);
+          if (this.p2FullBarWidth >= healthyFloor2 && this.p1FullBarWidth <= tinyCeil1) {
+            console.log(`[pixel-analyzer] 🔧 P1 bar looks KO'd at warmup (${this.p1FullBarWidth} vs P2=${this.p2FullBarWidth}) — copying P2 width, arming round`);
+            this.p1FullBarWidth = this.p2FullBarWidth;
+            // One bar full + one bar KO'd = fight clearly happened. Arm
+            // immediately so the KO_PENDING path can fire before the
+            // result screen transition. This is safe: intros show BOTH
+            // bars at zero or BOTH bars at full — never asymmetric.
+            this.roundTimerWasRunning = true;
+            this.roundTimerMaxSeen = timerValue;
+            this.lastRunningP1Health = Math.round((p1Filled / this.p1FullBarWidth) * 100);
+            this.lastRunningP2Health = Math.round((p2Filled / this.p2FullBarWidth) * 100);
+          } else if (this.p1FullBarWidth >= healthyFloor1 && this.p2FullBarWidth <= tinyCeil2) {
+            console.log(`[pixel-analyzer] 🔧 P2 bar looks KO'd at warmup (${this.p2FullBarWidth} vs P1=${this.p1FullBarWidth}) — copying P1 width, arming round`);
+            this.p2FullBarWidth = this.p1FullBarWidth;
+            this.roundTimerWasRunning = true;
+            this.roundTimerMaxSeen = timerValue;
+            this.lastRunningP1Health = Math.round((p1Filled / this.p1FullBarWidth) * 100);
+            this.lastRunningP2Health = Math.round((p2Filled / this.p2FullBarWidth) * 100);
+          }
           this.healthHistoryP1 = [];
           this.healthHistoryP2 = [];
           this.gamePhase = GamePhase.PLAYING;
