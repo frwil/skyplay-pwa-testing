@@ -1638,7 +1638,7 @@ export class GameRunner extends EventEmitter {
         this.p2Losses++;
         this.roundNumber++;
         this.koCooldownFrames = KO_COOLDOWN_FRAMES;
-        console.log(`[game-runner] ${this.readerTag} 🧠 DRAW! Double-KO round ${this.roundNumber}. P1=${p1Health}% P2=${p2Health}% prevP1=${this.previousP1Health}% prevP2=${this.previousP2Health}% Score: P1=${this.p1Losses} P2=${this.p2Losses}`);
+        console.log(`[game-runner] ${this.readerTag} 🧠 DRAW! Double-KO round ${this.roundNumber}. P1=${p1Health}% P2=${p2Health}% prevP1=${this.previousP1Health}% prevP2=${this.previousP2Health}% Losses: P1=${this.p1Losses} P2=${this.p2Losses}`);
         this.emit("roundResult", { loser: 0, winner: 0, p1Losses: this.p1Losses, p2Losses: this.p2Losses, koType: "draw", ...this.charInfo() });
       } else if (p1Ko) {
         this.koDetected = true;
@@ -1648,7 +1648,7 @@ export class GameRunner extends EventEmitter {
         const koType = (this.roundP2MinHealth >= PERFECT_HEALTH_THRESHOLD) ? "perfect" : "normal";
         if (koType === "perfect") this.matchPerfectKos++;
         this.creditRoundWin(2);
-        console.log(`[game-runner] ${this.readerTag} 🧠 P1 KO'd! P2 wins round ${this.roundNumber} (${koType}). P1=${p1Health}% P2=${p2Health}% minP2=${this.roundP2MinHealth}% Score: P1=${this.p1Losses} P2=${this.p2Losses}`);
+        console.log(`[game-runner] ${this.readerTag} 🧠 P1 KO'd! P2 wins round ${this.roundNumber} (${koType}). P1=${p1Health}% P2=${p2Health}% minP2=${this.roundP2MinHealth}% Losses: P1=${this.p1Losses} P2=${this.p2Losses}`);
         this.emit("roundResult", { loser: 1, winner: 2, p1Losses: this.p1Losses, p2Losses: this.p2Losses, koType, ...this.charInfo() });
       } else if (p2Ko) {
         this.koDetected = true;
@@ -1658,7 +1658,7 @@ export class GameRunner extends EventEmitter {
         const koType = (this.roundP1MinHealth >= PERFECT_HEALTH_THRESHOLD) ? "perfect" : "normal";
         if (koType === "perfect") this.matchPerfectKos++;
         this.creditRoundWin(1);
-        console.log(`[game-runner] ${this.readerTag} 🧠 P2 KO'd! P1 wins round ${this.roundNumber} (${koType}). P1=${p1Health}% P2=${p2Health}% minP1=${this.roundP1MinHealth}% Score: P1=${this.p1Losses} P2=${this.p2Losses}`);
+        console.log(`[game-runner] ${this.readerTag} 🧠 P2 KO'd! P1 wins round ${this.roundNumber} (${koType}). P1=${p1Health}% P2=${p2Health}% minP1=${this.roundP1MinHealth}% Losses: P1=${this.p1Losses} P2=${this.p2Losses}`);
         this.emit("roundResult", { loser: 2, winner: 1, p1Losses: this.p1Losses, p2Losses: this.p2Losses, koType, ...this.charInfo() });
       }
     }
@@ -1697,7 +1697,7 @@ export class GameRunner extends EventEmitter {
             this.p2Losses++;
             this.roundNumber++;
             this.koCooldownFrames = KO_COOLDOWN_FRAMES;
-            console.log(`[game-runner] ${this.readerTag} 🧠 TIME OVER! P1 wins round ${this.roundNumber} (timer reset). prevP1=${this.previousP1Health}% prevP2=${this.previousP2Health}% Score: P1=${this.p1Losses} P2=${this.p2Losses}`);
+            console.log(`[game-runner] ${this.readerTag} 🧠 TIME OVER! P1 wins round ${this.roundNumber} (timer reset). prevP1=${this.previousP1Health}% prevP2=${this.previousP2Health}% Losses: P1=${this.p1Losses} P2=${this.p2Losses}`);
             this.creditRoundWin(1);
             this.emit("roundResult", { loser: 2, winner: 1, p1Losses: this.p1Losses, p2Losses: this.p2Losses, koType: "timeout", ...this.charInfo() });
           } else if (this.previousP2Health > this.previousP1Health) {
@@ -1705,7 +1705,7 @@ export class GameRunner extends EventEmitter {
             this.p1Losses++;
             this.roundNumber++;
             this.koCooldownFrames = KO_COOLDOWN_FRAMES;
-            console.log(`[game-runner] ${this.readerTag} 🧠 TIME OVER! P2 wins round ${this.roundNumber} (timer reset). prevP1=${this.previousP1Health}% prevP2=${this.previousP2Health}% Score: P1=${this.p1Losses} P2=${this.p2Losses}`);
+            console.log(`[game-runner] ${this.readerTag} 🧠 TIME OVER! P2 wins round ${this.roundNumber} (timer reset). prevP1=${this.previousP1Health}% prevP2=${this.previousP2Health}% Losses: P1=${this.p1Losses} P2=${this.p2Losses}`);
             this.creditRoundWin(2);
             this.emit("roundResult", { loser: 1, winner: 2, p1Losses: this.p1Losses, p2Losses: this.p2Losses, koType: "timeout", ...this.charInfo() });
           } else {
@@ -1720,7 +1720,7 @@ export class GameRunner extends EventEmitter {
               this.p2Losses++;
               this.roundNumber++;
               this.koCooldownFrames = KO_COOLDOWN_FRAMES;
-              console.log(`[game-runner] ${this.readerTag} 🧠 DRAW! Timer reset with equal health. prevP1=${this.previousP1Health}% prevP2=${this.previousP2Health}% Score: P1=${this.p1Losses} P2=${this.p2Losses}`);
+              console.log(`[game-runner] ${this.readerTag} 🧠 DRAW! Timer reset with equal health. prevP1=${this.previousP1Health}% prevP2=${this.previousP2Health}% Losses: P1=${this.p1Losses} P2=${this.p2Losses}`);
               this.emit("roundResult", { loser: 0, winner: 0, p1Losses: this.p1Losses, p2Losses: this.p2Losses, koType: "draw", ...this.charInfo() });
             } else {
               console.log(`[game-runner] ${this.readerTag} ⏭️ Ignored timer-reset draw at full health (transition artifact). prevP1=${this.previousP1Health}% prevP2=${this.previousP2Health}%`);
@@ -1739,7 +1739,7 @@ export class GameRunner extends EventEmitter {
               this.p2Losses++;
               this.roundNumber++;
               this.koCooldownFrames = KO_COOLDOWN_FRAMES;
-              console.log(`[game-runner] ${this.readerTag} 🧠 TIME OVER! P1 wins round ${this.roundNumber} (timeout). prevP1=${this.previousP1Health}% prevP2=${this.previousP2Health}% → both 100% Score: P1=${this.p1Losses} P2=${this.p2Losses}`);
+              console.log(`[game-runner] ${this.readerTag} 🧠 TIME OVER! P1 wins round ${this.roundNumber} (timeout). prevP1=${this.previousP1Health}% prevP2=${this.previousP2Health}% → both 100% Losses: P1=${this.p1Losses} P2=${this.p2Losses}`);
               this.creditRoundWin(1);
               this.emit("roundResult", { loser: 2, winner: 1, p1Losses: this.p1Losses, p2Losses: this.p2Losses, koType: "timeout", ...this.charInfo() });
             } else if (this.previousP2Health > this.previousP1Health) {
@@ -1747,7 +1747,7 @@ export class GameRunner extends EventEmitter {
               this.p1Losses++;
               this.roundNumber++;
               this.koCooldownFrames = KO_COOLDOWN_FRAMES;
-              console.log(`[game-runner] ${this.readerTag} 🧠 TIME OVER! P2 wins round ${this.roundNumber} (timeout). prevP1=${this.previousP1Health}% prevP2=${this.previousP2Health}% → both 100% Score: P1=${this.p1Losses} P2=${this.p2Losses}`);
+              console.log(`[game-runner] ${this.readerTag} 🧠 TIME OVER! P2 wins round ${this.roundNumber} (timeout). prevP1=${this.previousP1Health}% prevP2=${this.previousP2Health}% → both 100% Losses: P1=${this.p1Losses} P2=${this.p2Losses}`);
               this.creditRoundWin(2);
               this.emit("roundResult", { loser: 1, winner: 2, p1Losses: this.p1Losses, p2Losses: this.p2Losses, koType: "timeout", ...this.charInfo() });
             }
@@ -1764,7 +1764,7 @@ export class GameRunner extends EventEmitter {
             this.p2Losses++;
             this.roundNumber++;
             this.koCooldownFrames = KO_COOLDOWN_FRAMES;
-            console.log(`[game-runner] ${this.readerTag} 🧠 DRAW! Both at 31%. prevP1=${this.previousP1Health}% prevP2=${this.previousP2Health}% Score: P1=${this.p1Losses} P2=${this.p2Losses}`);
+            console.log(`[game-runner] ${this.readerTag} 🧠 DRAW! Both at 31%. prevP1=${this.previousP1Health}% prevP2=${this.previousP2Health}% Losses: P1=${this.p1Losses} P2=${this.p2Losses}`);
             this.emit("roundResult", { loser: 0, winner: 0, p1Losses: this.p1Losses, p2Losses: this.p2Losses, koType: "draw", ...this.charInfo() });
           }
 
@@ -1779,7 +1779,7 @@ export class GameRunner extends EventEmitter {
             this.p2Losses++;
             this.roundNumber++;
             this.koCooldownFrames = KO_COOLDOWN_FRAMES;
-            console.log(`[game-runner] ${this.readerTag} 🧠 DRAW! 31% round ended (health→0). prevP1=${this.previousP1Health}% prevP2=${this.previousP2Health}% Score: P1=${this.p1Losses} P2=${this.p2Losses}`);
+            console.log(`[game-runner] ${this.readerTag} 🧠 DRAW! 31% round ended (health→0). prevP1=${this.previousP1Health}% prevP2=${this.previousP2Health}% Losses: P1=${this.p1Losses} P2=${this.p2Losses}`);
             this.emit("roundResult", { loser: 0, winner: 0, p1Losses: this.p1Losses, p2Losses: this.p2Losses, koType: "draw", ...this.charInfo() });
           }
         }
@@ -1806,7 +1806,7 @@ export class GameRunner extends EventEmitter {
       this.p2Losses++;
       this.roundNumber++;
       this.koCooldownFrames = KO_COOLDOWN_FRAMES;
-      console.log(`[game-runner] ${this.readerTag} 🧠 DRAW! 31% timer expired. prevTimer=${this.prevTimer16} prevP1=${this.previousP1Health}% prevP2=${this.previousP2Health}% Score: P1=${this.p1Losses} P2=${this.p2Losses}`);
+      console.log(`[game-runner] ${this.readerTag} 🧠 DRAW! 31% timer expired. prevTimer=${this.prevTimer16} prevP1=${this.previousP1Health}% prevP2=${this.previousP2Health}% Losses: P1=${this.p1Losses} P2=${this.p2Losses}`);
       this.emit("roundResult", { loser: 0, winner: 0, p1Losses: this.p1Losses, p2Losses: this.p2Losses, koType: "draw", ...this.charInfo() });
     }
 
@@ -1833,7 +1833,7 @@ export class GameRunner extends EventEmitter {
       const loser = winner === 0 ? 0 : (winner === 1 ? 2 : 1);
       const totalRounds = this.roundNumber;
       const perfectKos = this.matchPerfectKos;
-      console.log(`[game-runner] ${this.readerTag} 🧠 MATCH #${this.matchNumber} OVER! Winner: P${winner} Score: P1=${this.p1Losses} P2=${this.p2Losses} rounds=${totalRounds} perfectKOs=${perfectKos}`);
+      console.log(`[game-runner] ${this.readerTag} 🧠 MATCH #${this.matchNumber} OVER! Winner: P${winner} Losses: P1=${this.p1Losses} P2=${this.p2Losses} rounds=${totalRounds} perfectKOs=${perfectKos}`);
       this.emit("matchEnd", { winner, loser, p1Losses: this.p1Losses, p2Losses: this.p2Losses, matchNumber: this.matchNumber, totalRounds, perfectKos, ...this.charInfo(), ...this.matchMeta() });
 
       // Match is over. No auto-continue: the game stays on the game-over screen and the
@@ -2390,13 +2390,14 @@ export class GameRunner extends EventEmitter {
       ? [action, "--window", this.retroarchWindowId, xdoKey]
       : [action, xdoKey];
 
-    if (DEBUG_RAM) {
-      if (!this.retroarchWindowId) {
-        console.log(`[game-runner] 🕹️  xdotool ${action} ${xdoKey} (P${player} btn=${button}) [NO WINDOW — may be lost]`);
-      } else {
-        console.log(`[game-runner] 🕹️  xdotool --window ${this.retroarchWindowId} ${action} ${xdoKey} (P${player} btn=${button})`);
-      }
-    }
+    // xdotool logs disabled — too verbose
+    // if (DEBUG_RAM) {
+    //   if (!this.retroarchWindowId) {
+    //     console.log(`[game-runner] 🕹️  xdotool ${action} ${xdoKey} (P${player} btn=${button}) [NO WINDOW — may be lost]`);
+    //   } else {
+    //     console.log(`[game-runner] 🕹️  xdotool --window ${this.retroarchWindowId} ${action} ${xdoKey} (P${player} btn=${button})`);
+    //   }
+    // }
 
     const proc = spawn("xdotool", args, {
       env: { ...process.env, DISPLAY: this.display },

@@ -56,7 +56,7 @@ const KO_RECOVERY = 5;          // health > this after KO_PENDING = false alarm
 const NEW_ROUND_HEALTH = 80;    // both bars ≥ this = new round
 const WARMUP_HEALTHY = 65;      // health ≥ this = "healthy" for warmup counting
 const WARMUP_MIN_RATIO = 0.65;
-const WARMUP_TIMEOUT_FRAMES = 300; // ~75s at 4fps — force-exit if warmup never ends
+const WARMUP_TIMEOUT_FRAMES = 60; // ~15s at 4fps — force-exit if warmup never ends (was 300/75s)
 const PERFECT_HEALTH = 95; // kept for backwards compat, prefer isPerfectKo()
 const PERFECT_RATIO = 0.95; // minFilled / maxFilled must be ≥ this
 const ROUND_START_CALIB_FRAMES = 4; // PLAYING frames over which full-bar width is re-measured (bars are full during the round intro)
@@ -66,6 +66,12 @@ const KO_RECOVERY_CONFIRM_REQUIRED = 3; // consecutive recovered frames to exit 
 const NEW_ROUND_CONFIRM_REQUIRED = 5; // ~2.5s at 2 fps
 const PLAYING_GRACE_FRAMES = 16;      // ~4s at 4 reads/sec — skips FIGHT! overlay
 const TIME_OVER_CONFIRM_REQUIRED = 3; // ~1.5s at 2 fps
+/** Frames to suppress TIME OVER after KO_PENDING recovers to PLAYING as a
+ *  false alarm.  The result screen refills both bars and freezes the timer
+ *  at 0, which would otherwise look exactly like a time-over to the
+ *  detector.  8 frames ≈ 2 s at 4 fps — long enough for the KO result
+ *  screen to resolve but short enough to not delay a genuine time-over. */
+const KO_DISARM_COOLDOWN_FRAMES = 8;
 
 /**
  * Orchestrates pixel-based health + timer detection for a single game.
@@ -135,6 +141,11 @@ export class PixelMatchAnalyzer extends EventEmitter {
    *  result screen has already re-filled both bars to 100%. */
   private lastRunningP1Health = -1;
   private lastRunningP2Health = -1;
+  /** Flag set when KO_PENDING recovers to PLAYING as a false alarm
+   *  (bars refilled on the KO result screen).  Suppresses TIME OVER
+   *  detection during the cooldown so the retroactive‑KO path can fire. */
+  private koRecentlyDisarmed = false;
+  private koDisarmCooldown = 0;
 
   // ── Health bar calibration ─────────────────────────────────────────
   private p1FullBarWidth = 0;
@@ -173,6 +184,9 @@ export class PixelMatchAnalyzer extends EventEmitter {
   private koDetected = false;
   /** One-shot debug flag — saves the full stripe PPM during combat. */
   private _debugStripeSaved = false;
+  /** playingFrameCount when stuck state was first detected (0 = not stuck). */
+  private _playingFrameAtStuck = 0;
+  private _timeOverDiagFired = false;
   /** Post-timer-start calibration countdown (0 = inactive). */
   private _postTimerCalibFrames = 0;
   /** Consecutive frames where both bars are ≥80% without a timer decrease.
@@ -266,17 +280,7 @@ export class PixelMatchAnalyzer extends EventEmitter {
     //     be confirmed running if the template correction jump is too large).
     if (this.roundTimerWasRunning && !this._debugStripeSaved && (p1Filled > 0 || p2Filled > 0)) {
       this._debugStripeSaved = true;
-      try {
-        const dir = "/recordings/calibration";
-        if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-        const ppmPath = join(dir, "debug-stripe-combat.ppm");
-        const header = `P6\n${width} ${height}\n255\n`;
-        writeFileSync(ppmPath, Buffer.concat([Buffer.from(header, "ascii"), frame]));
-        console.log(`[pixel-analyzer] 🔬 Saved combat stripe debug: ${ppmPath} (${width}x${height}, p1Filled=${p1Filled} p2Filled=${p2Filled})`);
-        try { execSync(`convert "${ppmPath}" "${ppmPath.replace('.ppm', '.png')}"`, { stdio: "pipe", timeout: 5000 }); } catch { /* PNG optional — PPM is enough */ }
-      } catch (e) {
-        console.log(`[pixel-analyzer] 🔬 Failed to save combat stripe: ${(e as Error).message}`);
-      }
+      this.saveDebugStripe(frame, width, height, "combat", p1Filled, p2Filled);
     }
 
     // ── Recovery: if fullBarWidth is clearly wrong (filled >> barWidth, ──
@@ -310,14 +314,23 @@ export class PixelMatchAnalyzer extends EventEmitter {
     const p2Health = Math.round(this.getSmoothedHealth(this.healthHistoryP2));
 
     // ── Periodic health debug (every 20 frames ≈ 3-4s) ────────────────
-    this.healthDebugCounter++;
-    if (this.healthDebugCounter % 20 === 1) {
-      console.log(
-        `[health-debug] phase=${this.gamePhase} P1=${p1Health}% (raw ${rawP1}, filled ${p1Filled}/${p1FullW}) ` +
-        `P2=${p2Health}% (raw ${rawP2}, filled ${p2Filled}/${p2FullW}) ` +
-        `lastRunning=${this.lastRunningP1Health}/${this.lastRunningP2Health} timer=${this.timerDetector?.getLastValue() ?? "n/a"}`
-      );
-    }
+    // DISABLED — too verbose for production. Uncomment for debugging.
+    // this.healthDebugCounter++;
+    // if (this.healthDebugCounter % 20 === 1) {
+    //   const barMidY = barStartY + Math.floor(barRows / 2);
+    //   const sampleX1 = this.p1StartX + Math.floor((this.p1EndX - this.p1StartX) / 2);
+    //   const sampleX2 = this.p2StartX + Math.floor((this.p2EndX - this.p2StartX) / 2);
+    //   const p1Idx = (barMidY * width + sampleX1) * 3;
+    //   const p2Idx = (barMidY * width + sampleX2) * 3;
+    //   const p1Rgb = `R${frame[p1Idx]!}G${frame[p1Idx + 1]!}B${frame[p1Idx + 2]!}`;
+    //   const p2Rgb = `R${frame[p2Idx]!}G${frame[p2Idx + 1]!}B${frame[p2Idx + 2]!}`;
+    //   console.log(
+    //     `[health-debug] phase=${this.gamePhase} P1=${p1Health}% (raw ${rawP1}, filled ${p1Filled}/${p1FullW}) ` +
+    //     `P2=${p2Health}% (raw ${rawP2}, filled ${p2Filled}/${p2FullW}) ` +
+    //     `lastRunning=${this.lastRunningP1Health}/${this.lastRunningP2Health} timer=${this.timerDetector?.getLastValue() ?? "n/a"} ` +
+    //     `barRGB P1@${sampleX1},${barMidY}=${p1Rgb} P2@${sampleX2},${barMidY}=${p2Rgb}`
+    //   );
+    // }
 
     // ── Track round min health (for perfect KO detection) ─────────────
     if (this.gamePhase === GamePhase.PLAYING) {
@@ -351,6 +364,19 @@ export class PixelMatchAnalyzer extends EventEmitter {
     let timerValue = -1;
     if (this.timerDetector) {
       timerValue = this.timerDetector.readFromFrame(frame, width, height);
+    }
+
+    // ── Stuck-state debug stripe: when the round was live but bars read
+    //     near-zero for an extended period, save the raw stripe for analysis.
+    if (this.roundTimerWasRunning && this.gamePhase === GamePhase.PLAYING &&
+        timerValue === 0 && p1Filled < 30 && p2Filled < 30 &&
+        this._playingFrameAtStuck === 0) {
+      this._playingFrameAtStuck = this.playingFrameCount;
+    }
+    if (this._playingFrameAtStuck > 0 &&
+        this.playingFrameCount - this._playingFrameAtStuck === 10) {
+      // Save after 10 stuck frames (~2.5s at 4fps) — enough to confirm it's real
+      this.saveDebugStripe(frame, width, height, "stuck", p1Filled, p2Filled);
     }
 
     // ── State machine ────────────────────────────────────────────────
@@ -405,6 +431,8 @@ export class PixelMatchAnalyzer extends EventEmitter {
     this.koPendingMaxTimer = -1;
     this.koPendingLoser = 0;
     this.koRecoveryFrames = 0;
+    this.koRecentlyDisarmed = false;
+    this.koDisarmCooldown = 0;
     this.lastRunningP1Health = -1;
     this.lastRunningP2Health = -1;
     this.roundP1MinHealth = 100;
@@ -418,6 +446,7 @@ export class PixelMatchAnalyzer extends EventEmitter {
     this.koDetected = false;
     this.matchEnded = false;
     this._debugStripeSaved = false;
+    this._playingFrameAtStuck = 0;
     this._postTimerCalibFrames = 0;
     this._barStableFrames = 0;
     this.p1Losses = 0;
@@ -501,10 +530,18 @@ export class PixelMatchAnalyzer extends EventEmitter {
           this.calibrateOnTimerStart = false;
           this.roundTimerLastValue = timerValue > 0 ? timerValue : -1;
           this.roundTimerMaxSeen = 0;
-          this.roundTimerWasRunning = false;
+          // Both bars confirmed visible (≥100 cols each) — arm immediately.
+          // The warmup has proven bars are real, which is a stronger signal
+          // than the old bar-visibility guard (filled>100 for a single bar).
+          // Without this, a fast R1 KO can land before the 30-frame bar-stable
+          // fallback or the first timer decrease, and the bars-vanished KO path
+          // is blocked by !roundTimerWasRunning.
+          this.roundTimerWasRunning = true;
+          this.lastRunningP1Health = rawP1;
+          this.lastRunningP2Health = rawP2;
           this._postTimerCalibFrames = 0;
     this._barStableFrames = 0;
-          console.log(`[pixel-analyzer] 🎮 Phase: WARMUP → PLAYING (bars visible: P1=${this.p1FullBarWidth} P2=${this.p2FullBarWidth} cols — waiting for timer-drop to arm)`);
+          console.log(`[pixel-analyzer] 🎮 Phase: WARMUP → PLAYING (bars visible: P1=${this.p1FullBarWidth} P2=${this.p2FullBarWidth} cols — round armed, health P1=${rawP1}% P2=${rawP2}%)`);
           break;
         }
 
@@ -655,20 +692,25 @@ export class PixelMatchAnalyzer extends EventEmitter {
                     this.healthHistoryP1 = [];
                     this.p1FullBarLocked = true;
                     console.log(`[pixel-analyzer] 📏🔒 P1 post-glow calibrated: fullBarW=${this.p1FullBarWidth} (was ${oldW}, waited ${this._postTimerCalibFrames}f)`);
-                  } else if (timedOut && this.p2FullBarLocked) {
-                    // ── Symmetry fallback ──────────────────────────
-                    // P2 locked correctly but P1 never reached its floor.
-                    const oldW = this.p1FullBarWidth;
-                    this.p1FullBarWidth = this.p2FullBarWidth;
-                    this.healthHistoryP1 = [];
-                    this.p1FullBarLocked = true;
-                    console.log(`[pixel-analyzer] 📏🔒 P1 post-glow calibrated (symmetry fallback): fullBarW=${this.p1FullBarWidth} (was ${oldW}, copied from P2, waited ${this._postTimerCalibFrames}f)`);
-                  } else if (this._postTimerCalibFrames === 60) {
+                  } else if (timedOut) {
+                    // ── Timeout fallback ──────────────────────────
+                    // Bar never reached the 80% floor within 60 frames.
+                    // Use the bar's OWN measured max if available — do NOT
+                    // copy from the other bar (P1/P2 regions may capture
+                    // different widths due to mirroring or positioning).
+                    if (this.roundStartMaxP1Filled > 0) {
+                      const oldW = this.p1FullBarWidth;
+                      this.p1FullBarWidth = this.roundStartMaxP1Filled;
+                      this.healthHistoryP1 = [];
+                      this.p1FullBarLocked = true;
+                      console.log(`[pixel-analyzer] 📏🔒 P1 post-glow calibrated (own measurement): fullBarW=${this.p1FullBarWidth} (was ${oldW}, waited ${this._postTimerCalibFrames}f)`);
+                    } else if (this._postTimerCalibFrames === 60) {
                     // Bar still hasn't reached the floor — do NOT lock a
                     // garbage width (a VS-screen misread can arm the window
                     // while the bars are still invisible). Keep waiting;
                     // the floor check fires whenever the bar finally shows.
                     console.log(`[pixel-analyzer] ⏳ P1 post-glow calib still waiting: max=${this.roundStartMaxP1Filled} < floor=${floor1} (fullBarW stays ${this.p1FullBarWidth})`);
+                    }
                   }
                 }
                 if (!this.p2FullBarLocked) {
@@ -678,17 +720,19 @@ export class PixelMatchAnalyzer extends EventEmitter {
                     this.healthHistoryP2 = [];
                     this.p2FullBarLocked = true;
                     console.log(`[pixel-analyzer] 📏🔒 P2 post-glow calibrated: fullBarW=${this.p2FullBarWidth} (was ${oldW}, waited ${this._postTimerCalibFrames}f)`);
-                  } else if (timedOut && this.p1FullBarLocked) {
-                    // ── Symmetry fallback ──────────────────────────
-                    // P1 locked correctly but P2 never reached its floor.
-                    // SFA2 bars are symmetric — copy P1's width.
-                    const oldW = this.p2FullBarWidth;
-                    this.p2FullBarWidth = this.p1FullBarWidth;
-                    this.healthHistoryP2 = [];
-                    this.p2FullBarLocked = true;
-                    console.log(`[pixel-analyzer] 📏🔒 P2 post-glow calibrated (symmetry fallback): fullBarW=${this.p2FullBarWidth} (was ${oldW}, copied from P1, waited ${this._postTimerCalibFrames}f)`);
-                  } else if (this._postTimerCalibFrames === 60) {
+                  } else if (timedOut) {
+                    // ── Timeout fallback ──────────────────────────
+                    // Bar never reached the 80% floor within 60 frames.
+                    // Use the bar's OWN measured max — do NOT copy P1's width.
+                    if (this.roundStartMaxP2Filled > 0) {
+                      const oldW = this.p2FullBarWidth;
+                      this.p2FullBarWidth = this.roundStartMaxP2Filled;
+                      this.healthHistoryP2 = [];
+                      this.p2FullBarLocked = true;
+                      console.log(`[pixel-analyzer] 📏🔒 P2 post-glow calibrated (own measurement): fullBarW=${this.p2FullBarWidth} (was ${oldW}, waited ${this._postTimerCalibFrames}f)`);
+                    } else if (this._postTimerCalibFrames === 60) {
                     console.log(`[pixel-analyzer] ⏳ P2 post-glow calib still waiting: max=${this.roundStartMaxP2Filled} < floor=${floor2} (fullBarW stays ${this.p2FullBarWidth})`);
+                    }
                   }
                 }
               }
@@ -718,9 +762,27 @@ export class PixelMatchAnalyzer extends EventEmitter {
               this.roundTimerWasRunning = true;
               this.calibrateOnTimerStart = false;
               this._postTimerCalibFrames = 0;
+              // Capture current health as lastRunning so TIME_OVER detection
+              // has valid values even before the first timer decrease.
+              if (this.lastRunningP1Health < 0) this.lastRunningP1Health = p1Health;
+              if (this.lastRunningP2Health < 0) this.lastRunningP2Health = p2Health;
             }
           } else {
             this._barStableFrames = 0;
+          }
+        }
+
+        // ── Fallback lastRunning capture (timer-independent) ──────────
+        // The timer-block above only updates lastRunning when timerValue > 0.
+        // If the timer OCR fails (reads -1/0) but the round is already armed
+        // (e.g. by warmup bar-visible exit), we still need valid lastRunning
+        // values for the bars-vanished KO path. Only update when at least one
+        // bar is meaningfully healthy (> KO_RECOVERY) to avoid overwriting
+        // real values with zeroes on result screens.
+        if (this.roundTimerWasRunning) {
+          if (p1Health > KO_RECOVERY || p2Health > KO_RECOVERY) {
+            this.lastRunningP1Health = p1Health;
+            this.lastRunningP2Health = p2Health;
           }
         }
 
@@ -755,7 +817,7 @@ export class PixelMatchAnalyzer extends EventEmitter {
                 this.newRoundConfirmFrames = 0;
                 const koType = this.isPerfectKo(2) ? "perfect" : "normal";
                 if (koType === "perfect") this.matchPerfectKos++;
-                console.log(`[pixel-analyzer] 🎮 Bars-vanished KO: P1 was ${lrP1}% vs P2 ${lrP2}% → P2 wins (${koType}). Score: P1=${this.p1Losses} P2=${this.p2Losses}`);
+                console.log(`[pixel-analyzer] 🎮 Bars-vanished KO: P1 was ${lrP1}% vs P2 ${lrP2}% → P2 wins (${koType}). Losses: P1=${this.p1Losses} P2=${this.p2Losses}`);
                 this.emit("roundResult", { loser: 1, winner: 2, p1Losses: this.p1Losses, p2Losses: this.p2Losses, koType } satisfies RoundResultEvent);
                 break;
               } else {
@@ -766,7 +828,7 @@ export class PixelMatchAnalyzer extends EventEmitter {
                 this.newRoundConfirmFrames = 0;
                 const koType = this.isPerfectKo(1) ? "perfect" : "normal";
                 if (koType === "perfect") this.matchPerfectKos++;
-                console.log(`[pixel-analyzer] 🎮 Bars-vanished KO: P2 was ${lrP2}% vs P1 ${lrP1}% → P1 wins (${koType}). Score: P1=${this.p1Losses} P2=${this.p2Losses}`);
+                console.log(`[pixel-analyzer] 🎮 Bars-vanished KO: P2 was ${lrP2}% vs P1 ${lrP1}% → P1 wins (${koType}). Losses: P1=${this.p1Losses} P2=${this.p2Losses}`);
                 this.emit("roundResult", { loser: 2, winner: 1, p1Losses: this.p1Losses, p2Losses: this.p2Losses, koType } satisfies RoundResultEvent);
                 break;
               }
@@ -790,10 +852,34 @@ export class PixelMatchAnalyzer extends EventEmitter {
         // once to filter out attract-demo / menu artifacts.
         const roundIsLive = this.timerDetector ? this.roundTimerWasRunning : this.roundSawHealthyBars;
 
+        // ── KO-disarm cooldown ──────────────────────────────────────
+        // When KO_PENDING recently recovered as a false alarm (the KO
+        // result screen refilled bars / froze timer), suppress TIME OVER
+        // detection for a few frames so the retroactive‑KO paths have
+        // time to fire.  Also reset timeOverConfirmFrames so it cannot
+        // accumulate prematurely and fire right after the cooldown expires.
+        if (this.koRecentlyDisarmed) {
+          this.koDisarmCooldown--;
+          if (this.koDisarmCooldown <= 0) {
+            this.koRecentlyDisarmed = false;
+          }
+          this.timeOverConfirmFrames = 0;
+          break; // skip TIME OVER + KO checks this frame
+        }
+
         // ── Time-over detection ──────────────────────────────────────
         // Only armed once the timer was seen running (>0) this round —
         // otherwise the frozen "00" of the previous round's result screen
         // fabricates a phantom time-over.
+        if (timerValue === 0 && this.roundTimerWasRunning) {
+          // Diagnostic: log once per round why TIME_OVER is blocked
+          if (this._timeOverDiagFired === false) {
+            this._timeOverDiagFired = true;
+            console.log(`[pixel-analyzer] 🔍 TIME_OVER check: p1Down=${p1Down} p2Down=${p2Down} sawHealthy=${this.roundSawHealthyBars} lastP1=${this.lastRunningP1Health} lastP2=${this.lastRunningP2Health} maxTimer=${this.roundTimerMaxSeen}`);
+          }
+        } else {
+          this._timeOverDiagFired = false;
+        }
         if (!p1Down && !p2Down && timerValue === 0 && this.roundTimerWasRunning && this.roundSawHealthyBars) {
           this.timeOverConfirmFrames++;
           if (this.timeOverConfirmFrames >= TIME_OVER_CONFIRM_REQUIRED) {
@@ -819,12 +905,12 @@ export class PixelMatchAnalyzer extends EventEmitter {
             if (toP1 > toP2) {
               this.p2Losses++;
               this.roundNumber++;
-              console.log(`[pixel-analyzer] ⏱️ TIME OVER! P1 wins (fighting health P1=${toP1}% > P2=${toP2}%). Score: P1=${this.p1Losses} P2=${this.p2Losses}`);
+              console.log(`[pixel-analyzer] ⏱️ TIME OVER! P1 wins (fighting health P1=${toP1}% > P2=${toP2}%). Losses: P1=${this.p1Losses} P2=${this.p2Losses}`);
               this.emit("roundResult", { loser: 2, winner: 1, p1Losses: this.p1Losses, p2Losses: this.p2Losses, koType: "timeout" } satisfies RoundResultEvent);
             } else if (toP2 > toP1) {
               this.p1Losses++;
               this.roundNumber++;
-              console.log(`[pixel-analyzer] ⏱️ TIME OVER! P2 wins (fighting health P2=${toP2}% > P1=${toP1}%). Score: P1=${this.p1Losses} P2=${this.p2Losses}`);
+              console.log(`[pixel-analyzer] ⏱️ TIME OVER! P2 wins (fighting health P2=${toP2}% > P1=${toP1}%). Losses: P1=${this.p1Losses} P2=${this.p2Losses}`);
               this.emit("roundResult", { loser: 1, winner: 2, p1Losses: this.p1Losses, p2Losses: this.p2Losses, koType: "timeout" } satisfies RoundResultEvent);
             } else {
               // Equal health at time over — DRAW. SFA2 gives NO round mark
@@ -832,7 +918,7 @@ export class PixelMatchAnalyzer extends EventEmitter {
               // the round after a 100%/100% draw), so losses stay unchanged
               // and the game replays the round.
               this.roundNumber++;
-              console.log(`[pixel-analyzer] ⏱️ TIME OVER DRAW! Equal fighting health (P1=${toP1}% P2=${toP2}%) — no round mark, game replays. Score: P1=${this.p1Losses} P2=${this.p2Losses}`);
+              console.log(`[pixel-analyzer] ⏱️ TIME OVER DRAW! Equal fighting health (P1=${toP1}% P2=${toP2}%) — no round mark, game replays. Losses: P1=${this.p1Losses} P2=${this.p2Losses}`);
               this.emit("roundResult", { loser: 0, winner: 0, p1Losses: this.p1Losses, p2Losses: this.p2Losses, koType: "draw" } satisfies RoundResultEvent);
             }
             this.gamePhase = GamePhase.KO_CONFIRMED;
@@ -897,8 +983,12 @@ export class PixelMatchAnalyzer extends EventEmitter {
             const p1Lost = p1Down && !p2Down;
             const p2Lost = p2Down && !p1Down;
             const draw = p1Down && p2Down;
-            const p1WinsRound = p2Lost || (draw && this.previousP1Health > this.previousP2Health);
-            const p2WinsRound = p1Lost || (draw && this.previousP2Health > this.previousP1Health);
+            // Tiebreaker when both bars are equally low (result screen reads both at 0-2%):
+            // use koPendingLoser — the player who went down FIRST when KO_PENDING was entered.
+            const p1WinsRound = p2Lost || (draw && this.previousP1Health > this.previousP2Health)
+              || (draw && this.previousP1Health === this.previousP2Health && this.koPendingLoser === 2);
+            const p2WinsRound = p1Lost || (draw && this.previousP2Health > this.previousP1Health)
+              || (draw && this.previousP1Health === this.previousP2Health && this.koPendingLoser === 1);
 
             this.gamePhase = GamePhase.KO_CONFIRMED;
             this.koDetected = true;
@@ -908,21 +998,21 @@ export class PixelMatchAnalyzer extends EventEmitter {
               this.p1Losses++;
               this.p2Losses++;
               this.roundNumber++;
-              console.log(`[pixel-analyzer] 🎮 KO_CONFIRMED: DRAW! P1=${p1Health}% P2=${p2Health}% Score: P1=${this.p1Losses} P2=${this.p2Losses}`);
+              console.log(`[pixel-analyzer] 🎮 KO_CONFIRMED: DRAW! P1=${p1Health}% P2=${p2Health}% Losses: P1=${this.p1Losses} P2=${this.p2Losses}`);
               this.emit("roundResult", { loser: 0, winner: 0, p1Losses: this.p1Losses, p2Losses: this.p2Losses, koType: "draw" } satisfies RoundResultEvent);
             } else if (p1WinsRound) {
               this.p2Losses++;
               this.roundNumber++;
               const koType = this.isPerfectKo(1) ? "perfect" : "normal";
               if (koType === "perfect") this.matchPerfectKos++;
-              console.log(`[pixel-analyzer] 🎮 KO_CONFIRMED: P2 KO'd! P1 wins (${koType}). P1=${p1Health}% P2=${p2Health}% minP1=${this.roundP1MinHealth}% Score: P1=${this.p1Losses} P2=${this.p2Losses}`);
+              console.log(`[pixel-analyzer] 🎮 KO_CONFIRMED: P2 KO'd! P1 wins (${koType}). P1=${p1Health}% P2=${p2Health}% minP1=${this.roundP1MinHealth}% Losses: P1=${this.p1Losses} P2=${this.p2Losses}`);
               this.emit("roundResult", { loser: 2, winner: 1, p1Losses: this.p1Losses, p2Losses: this.p2Losses, koType } satisfies RoundResultEvent);
             } else if (p2WinsRound) {
               this.p1Losses++;
               this.roundNumber++;
               const koType = this.isPerfectKo(2) ? "perfect" : "normal";
               if (koType === "perfect") this.matchPerfectKos++;
-              console.log(`[pixel-analyzer] 🎮 KO_CONFIRMED: P1 KO'd! P2 wins (${koType}). P1=${p1Health}% P2=${p2Health}% minP2=${this.roundP2MinHealth}% Score: P1=${this.p1Losses} P2=${this.p2Losses}`);
+              console.log(`[pixel-analyzer] 🎮 KO_CONFIRMED: P1 KO'd! P2 wins (${koType}). P1=${p1Health}% P2=${p2Health}% minP2=${this.roundP2MinHealth}% Losses: P1=${this.p1Losses} P2=${this.p2Losses}`);
               this.emit("roundResult", { loser: 1, winner: 2, p1Losses: this.p1Losses, p2Losses: this.p2Losses, koType } satisfies RoundResultEvent);
             }
           } else {
@@ -954,13 +1044,13 @@ export class PixelMatchAnalyzer extends EventEmitter {
               this.p1Losses++;
               const koType = this.isPerfectKo(2) ? "perfect" : "normal";
               if (koType === "perfect") this.matchPerfectKos++;
-              console.log(`[pixel-analyzer] 🎮 KO_CONFIRMED (retroactive, ${signal}): P1 KO'd! P2 wins (${koType}). Score: P1=${this.p1Losses} P2=${this.p2Losses}`);
+              console.log(`[pixel-analyzer] 🎮 KO_CONFIRMED (retroactive, ${signal}): P1 KO'd! P2 wins (${koType}). Losses: P1=${this.p1Losses} P2=${this.p2Losses}`);
               this.emit("roundResult", { loser: 1, winner: 2, p1Losses: this.p1Losses, p2Losses: this.p2Losses, koType } satisfies RoundResultEvent);
             } else {
               this.p2Losses++;
               const koType = this.isPerfectKo(1) ? "perfect" : "normal";
               if (koType === "perfect") this.matchPerfectKos++;
-              console.log(`[pixel-analyzer] 🎮 KO_CONFIRMED (retroactive, ${signal}): P2 KO'd! P1 wins (${koType}). Score: P1=${this.p1Losses} P2=${this.p2Losses}`);
+              console.log(`[pixel-analyzer] 🎮 KO_CONFIRMED (retroactive, ${signal}): P2 KO'd! P1 wins (${koType}). Losses: P1=${this.p1Losses} P2=${this.p2Losses}`);
               this.emit("roundResult", { loser: 2, winner: 1, p1Losses: this.p1Losses, p2Losses: this.p2Losses, koType } satisfies RoundResultEvent);
             }
             this.koPendingTimerAtStart = -1;
@@ -972,6 +1062,12 @@ export class PixelMatchAnalyzer extends EventEmitter {
             if (this.koRecoveryFrames >= KO_RECOVERY_CONFIRM_REQUIRED) {
               console.log(`[pixel-analyzer] 🎮 Phase: KO_PENDING → PLAYING (false alarm — P1=${p1Health}% P2=${p2Health}%, ${this.koRecoveryFrames} recovered frames)`);
               this.gamePhase = GamePhase.PLAYING;
+              // Arm the KO-disarm cooldown: the KO result screen refills both
+              // bars to 100% and freezes the timer at 0, which would otherwise
+              // look exactly like a time-over.  Suppress TIME OVER detection for
+              // KO_DISARM_COOLDOWN_FRAMES so the retroactive-KO path can fire.
+              this.koRecentlyDisarmed = true;
+              this.koDisarmCooldown = KO_DISARM_COOLDOWN_FRAMES;
               this.koConfirmFrames = 0;
               this.koPendingTimerAtStart = -1;
               this.koPendingMaxTimer = -1;
@@ -1005,7 +1101,7 @@ export class PixelMatchAnalyzer extends EventEmitter {
             winner = this.p1Losses >= winsNeeded ? 2 : 1;
           }
           const loser = winner === 1 ? 2 : 1;
-          console.log(`[pixel-analyzer] 🎮 Phase: KO_CONFIRMED → MATCH_END. Winner: P${winner} Score: P1=${this.p1Losses} P2=${this.p2Losses}`);
+          console.log(`[pixel-analyzer] 🎮 Phase: KO_CONFIRMED → MATCH_END. Winner: P${winner} Losses: P1=${this.p1Losses} P2=${this.p2Losses}`);
           this.emit("matchEnd", {
             winner, loser,
             p1Losses: this.p1Losses, p2Losses: this.p2Losses,
@@ -1038,8 +1134,20 @@ export class PixelMatchAnalyzer extends EventEmitter {
             this.timeOverConfirmFrames = 0;
             this.lastRunningP1Health = -1;
             this.lastRunningP2Health = -1;
+            this._debugStripeSaved = false; // allow fresh stripe per round
+            this._playingFrameAtStuck = 0;
+            // Unlock bar calibration so round-start tracking + bar-stable
+            // fallback can re-arm for the new round. Without this reset the
+            // round stays permanently locked from R1 — timer=0 on the result
+            // screen + locked bars = zero paths to re-arm (stuck forever).
+            this.p1FullBarLocked = false;
+            this.p2FullBarLocked = false;
+            this.roundStartMaxP1Filled = 0;
+            this.roundStartMaxP2Filled = 0;
+            this._barStableFrames = 0;
+            this._postTimerCalibFrames = 0;
             this.timerDetector?.reset();
-            console.log(`[pixel-analyzer] 🎮 Phase: KO_CONFIRMED → PLAYING (new round). P1=${p1Health}% P2=${p2Health}% Score: P1=${this.p1Losses} P2=${this.p2Losses}`);
+            console.log(`[pixel-analyzer] 🎮 Phase: KO_CONFIRMED → PLAYING (new round). P1=${p1Health}% P2=${p2Health}% Losses: P1=${this.p1Losses} P2=${this.p2Losses}`);
           }
         } else {
           this.newRoundConfirmFrames = 0;
@@ -1067,6 +1175,21 @@ export class PixelMatchAnalyzer extends EventEmitter {
     return (maxC - minC) > 30   // has color saturation (not gray/white UI)
         && maxC > 120           // bright — SFA2 empty-bar bg is dark blue (max ~82-107)
         && !(b >= r && b >= g); // not blue-dominant — excludes the empty-bar blue even under flash tint
+  }
+
+  /** Save the raw health-bar stripe as a PPM (and PNG if ImageMagick is available). */
+  private saveDebugStripe(frame: Buffer, width: number, height: number, tag: string, p1Filled: number, p2Filled: number): void {
+    try {
+      const dir = "/recordings/calibration";
+      if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+      const ppmPath = join(dir, `debug-stripe-${tag}.ppm`);
+      const header = `P6\n${width} ${height}\n255\n`;
+      writeFileSync(ppmPath, Buffer.concat([Buffer.from(header, "ascii"), frame]));
+      console.log(`[pixel-analyzer] 🔬 Saved ${tag} stripe: ${ppmPath} (${width}x${height}, p1Filled=${p1Filled} p2Filled=${p2Filled})`);
+      try { execSync(`convert "${ppmPath}" "${ppmPath.replace('.ppm', '.png')}"`, { stdio: "pipe", timeout: 5000 }); } catch { /* optional */ }
+    } catch (e) {
+      console.log(`[pixel-analyzer] 🔬 Failed to save ${tag} stripe: ${(e as Error).message}`);
+    }
   }
 
   /**
