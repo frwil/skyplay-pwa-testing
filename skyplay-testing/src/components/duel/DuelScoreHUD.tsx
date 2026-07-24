@@ -13,6 +13,9 @@ export interface DuelScoreHUDProps {
   /** Accent colors per side. */
   p1Color?: string;
   p2Color?: string;
+  /** Character names selected by each player (from char select phase). */
+  p1CharName?: string | null;
+  p2CharName?: string | null;
 }
 
 /**
@@ -29,12 +32,14 @@ export default function DuelScoreHUD({
   player2Name,
   p1Color = "#00c8ff",
   p2Color = "#f15bb5",
+  p1CharName,
+  p2CharName,
 }: DuelScoreHUDProps) {
   const p1Wins = matchHistory.filter((r) => r.winner === 1).length;
   const p2Wins = matchHistory.filter((r) => r.winner === 2).length;
 
-  // Hide until at least one match has finished
-  if (matchHistory.length === 0) return null;
+  // Show the HUD when a match result exists, OR when character names are known
+  if (matchHistory.length === 0 && !p1CharName && !p2CharName) return null;
 
   return (
     <div
@@ -50,9 +55,12 @@ export default function DuelScoreHUD({
           color: "#fff",
         }}
       >
-        {/* P1 Name */}
-        <span className="truncate max-w-[100px]" style={{ color: p1Color }}>
-          {player1Name}
+        {/* P1 Name + Character */}
+        <span className="truncate max-w-[100px] text-right" style={{ color: p1Color }}>
+          <div className="leading-tight">{player1Name}</div>
+          {p1CharName && (
+            <div className="text-[10px] opacity-60 leading-tight">{p1CharName}</div>
+          )}
         </span>
 
         {/* Score */}
@@ -65,9 +73,12 @@ export default function DuelScoreHUD({
           )}
         </span>
 
-        {/* P2 Name */}
-        <span className="truncate max-w-[100px]" style={{ color: p2Color }}>
-          {player2Name}
+        {/* P2 Name + Character */}
+        <span className="truncate max-w-[100px] text-left" style={{ color: p2Color }}>
+          <div className="leading-tight">{player2Name}</div>
+          {p2CharName && (
+            <div className="text-[10px] opacity-60 leading-tight">{p2CharName}</div>
+          )}
         </span>
       </div>
     </div>

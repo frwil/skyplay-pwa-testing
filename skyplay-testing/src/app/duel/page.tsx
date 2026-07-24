@@ -359,12 +359,18 @@ export default function DuelPage() {
 
   // ── Exit game ──────────────────────────────────────────────────
   const handleExit = useCallback(() => {
-    emu.exit();
+    // Tell server to destroy the session FIRST, then cleanup + reload.
+    // stopDuel sends "stop_duel" → server calls stopSession() → session_closed → cleanup.
+    emu.stopDuel();
     lobby.clearChallenge();
-    // Re-join lobby then reload to fresh state
-    lobby.joinLobby();
-    setTimeout(() => window.location.reload(), 500);
-  }, [emu.exit, lobby.clearChallenge, lobby.joinLobby]);
+    // Give the server time to fully destroy the session before reload.
+    // stopSession has a setTimeout cleanup (runner.stop + removeSession).
+    setTimeout(() => {
+      emu.exit();
+      lobby.joinLobby();
+      window.location.reload();
+    }, 2000);
+  }, [emu.exit, emu.stopDuel, lobby.clearChallenge, lobby.joinLobby]);
 
   // ── Post-game summary (shown after session ends) ──────────────
   const [postGame, setPostGame] = useState<{
@@ -1351,6 +1357,8 @@ export default function DuelPage() {
                 totalMatches={duelFormat?.matchCount ?? 1}
                 player1Name={p1Name}
                 player2Name={p2Name}
+                p1CharName={emu.p1CharName}
+                p2CharName={emu.p2CharName}
               />
             );
           })()}

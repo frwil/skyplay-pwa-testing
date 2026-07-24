@@ -248,6 +248,8 @@ async function handleInit(
   // Header: magic(1) + width(u16) + height(u16) + frameId(u32) + nalLength(u32) = 13 bytes
   runner.on("frame", (nalUnit: Buffer, width: number, height: number) => {
     session.frameCount++;
+    // Keep session alive during CPU matches (no client messages after init)
+    resetIdleTimer(session);
     if (!nalUnit || nalUnit.length === 0) return;
 
     const header = Buffer.alloc(13);
@@ -311,6 +313,46 @@ async function handleInit(
     // RetroArch crashed or exited unexpectedly — clean up to prevent leaked UDP readers,
     // orphaned timers, and stale session state. stopSession is idempotent.
     stopSession(msg.sessionId);
+  });
+
+  // ── Match started (pixel analyzer entered PLAYING for the first time) ──
+  runner.on("matchStarted", (data: { p1Health?: number; p2Health?: number; timerValue?: number; p1FullBarWidth?: number; p2FullBarWidth?: number; p1Char?: string; p2Char?: string }) => {
+    // Resolve character names from all available sources:
+    // 1. Cursor tracking (D-pad counting during char select)
+    // 2. Portrait pixel detection (ground truth from screen capture)
+    const cursorP1 = session.p1SelectedCharName ?? "?";
+    const cursorP2 = session.p2SelectedCharName ?? "?";
+    let portraitP1 = "?";
+    let portraitP2 = "?";
+    const pr = session.portraitResults;
+    if (pr) {
+      const p1Cell = pr.cells[session.p1CursorRow]?.[session.p1CursorCol];
+      if (p1Cell?.isReliable) portraitP1 = p1Cell.charName ?? "?";
+      if (session.mode === "pvp") {
+        const p2Cell = pr.cells[session.p2CursorRow]?.[session.p2CursorCol];
+        if (p2Cell?.isReliable) portraitP2 = p2Cell.charName ?? "?";
+      }
+    }
+
+    console.log(
+      `[ws] 🎬 MATCH STARTED — ` +
+      `P1 = ${cursorP1} (cursor) / ${portraitP1} (portrait) | ` +
+      `P2 = ${cursorP2} (cursor) / ${portraitP2} (portrait) | ` +
+      `mode=${session.mode} system=${session.system}`
+    );
+
+    // Forward to client so the frontend can show character names
+    sendToSession(session, {
+      type: "match_started",
+      p1CharName: cursorP1 !== "?" ? cursorP1 : (portraitP1 !== "?" ? portraitP1 : undefined),
+      p2CharName: cursorP2 !== "?" ? cursorP2 : (portraitP2 !== "?" ? portraitP2 : undefined),
+      p1PixelCharName: portraitP1 !== "?" ? portraitP1 : undefined,
+      p2PixelCharName: portraitP2 !== "?" ? portraitP2 : undefined,
+      p1Health: data.p1Health,
+      p2Health: data.p2Health,
+      p1FullBarWidth: data.p1FullBarWidth,
+      p2FullBarWidth: data.p2FullBarWidth,
+    });
   });
 
   // ── Round win/loss detection (memory watcher) ──
@@ -420,6 +462,11 @@ async function handleInit(
   runner.on("matchState", (data) => {
     sendToSession(session, { type: "match_state", ...data });
   });
+
+  // Suspend pixel analysis BEFORE starting ffmpeg so attract/demo mode
+  // frames never reach the analyzer. Analysis is resumed later by
+  // resetHealthWarmup() once the game actually enters combat.
+  runner.suspendPixelAnalysis("pre-combat menus/attract");
 
   // Start the game
   runner.start().then(({ width, height }) => {
@@ -629,13 +676,14 @@ const SNES_DOWN = 5;
 const SNES_LEFT = 6;
 const SNES_RIGHT = 7;
 
-/** How long players have to pick characters before auto-lock (ms). */
+/** How long KOF98 players have to pick characters before auto-lock (ms). */
 const CHAR_SELECT_TIMEOUT_MS = 30_000;
 
 /**
- * Enter character select phase. Resets cursors, notifies clients, and arms
- * the auto-lock timeout. When both players lock in (or the timeout fires),
- * the match begins automatically.
+ * Enter character select phase. Resets cursors, notifies clients.
+ * The match begins when both players lock in — for KOF98 (neogeo),
+ * an auto-lock timeout fires after 30s. SFA2 (snes) has no timeout
+ * because the game stays on char select indefinitely.
  */
 function startCharSelectPhase(
   session: Session,
@@ -676,7 +724,8 @@ function startCharSelectPhase(
   session.p1SelectedCharName = "";
   session.p2SelectedCharName = "";
 
-  console.log(`[ws] 🎯 Char select STARTED for ${session.id} — grid ${grid.rows}×${grid.cols}, timeout ${CHAR_SELECT_TIMEOUT_MS}ms`);
+  const hasTimeout = session.system === "neogeo";
+  console.log(`[ws] 🎯 Char select STARTED for ${session.id} — grid ${grid.rows}×${grid.cols}${hasTimeout ? `, timeout ${CHAR_SELECT_TIMEOUT_MS}ms` : " (no timeout)"}`);
 
   // Enable calibration mode so every char-select capture feeds the calibrator.
   // Idempotent — only creates the calibrator once, subsequent calls are no-ops.
@@ -697,35 +746,17 @@ function startCharSelectPhase(
     } catch (e) { /* non-fatal */ }
   }, 2000);
 
-  sendToSession(session, { type: "char_select_start", timeout: CHAR_SELECT_TIMEOUT_MS });
+  sendToSession(session, { type: "char_select_start", timeout: hasTimeout ? CHAR_SELECT_TIMEOUT_MS : 0 });
 
-  // ── D-pad wiggle to prevent game auto-select ─────────────────────
-  // SFA2 SNES has a built-in char-select timer (~10s): if no input is
-  // received, the game auto-selects the highlighted character (Ryu by
-  // default for P1). Send a quick RIGHT→LEFT wiggle every 8 seconds to
-  // reset the game's timer without net cursor movement.
-  const wiggleMs = 8000;
-  const wiggleTimer = setInterval(() => {
-    if (!session.charSelectActive) {
-      clearInterval(wiggleTimer);
-      return;
-    }
-    // RIGHT press
-    runner.injectInput(1, SNES_RIGHT, true);
-    setTimeout(() => runner.injectInput(1, SNES_RIGHT, false), 80);
-    // LEFT press (returns cursor to original column)
-    setTimeout(() => {
-      runner.injectInput(1, SNES_LEFT, true);
-      setTimeout(() => runner.injectInput(1, SNES_LEFT, false), 80);
-    }, 120);
-  }, wiggleMs);
-
-  // Auto-lock after timeout
-  session.charSelectTimer = setTimeout(() => {
-    if (!session.charSelectActive) return;
-    console.log(`[ws] ⏰ Char select TIMEOUT for ${session.id} — auto-locking`);
-    finalizeCharSelect(session, runner, grid);
-  }, CHAR_SELECT_TIMEOUT_MS);
+  // ── Auto-lock timeout (KOF98 only) ───────────────────────────────
+  // KOF98 has an in-game char-select timer; SFA2 does not.
+  if (hasTimeout) {
+    session.charSelectTimer = setTimeout(() => {
+      if (!session.charSelectActive) return;
+      console.log(`[ws] ⏰ Char select TIMEOUT for ${session.id} — auto-locking`);
+      finalizeCharSelect(session, runner, grid);
+    }, CHAR_SELECT_TIMEOUT_MS);
+  }
 }
 
 /**
@@ -771,9 +802,18 @@ function finalizeCharSelect(
         col: pos.col,
       });
       console.log(`[ws] 🎯 P1 auto-locked: ${session.p1SelectedCharName} (0x${session.p1SelectedCharId.toString(16)})`);
+
+      // CPU mode: inject A press to confirm P1's character selection in-game.
+      // (In PvP mode, players press A manually — no auto-injection needed.)
+      if (session.mode === "cpu") {
+        console.log(`[ws] 🎯 CPU mode — injecting A press to confirm P1 selection in-game`);
+        runner.ensureFocus();
+        runner.injectInput(1, SNES_A, true);
+        setTimeout(() => {
+          runner.injectInput(1, SNES_A, false);
+        }, 200);
+      }
     }
-    // A press NOT auto-injected — players must manually press A to lock.
-    // The advance sequence will lock any remaining unlocked players when it fires.
   }
 
   // Lock P2 if not already locked (PvP mode only — CPU mode has no P2, skip empty cells)
@@ -842,12 +882,26 @@ function finalizeCharSelect(
     console.log(`[ws] 🖼️ No portrait result available for ${session.id} — skipping cross-check`);
   }
 
-  // ── Post-char-select: no A injected, ever. ───────────────────────────
-  // Players (or the game itself) must advance through Mode→Speed→Stage→VS→combat.
+  // ── Post-char-select: advance through menus to combat ─────────────────
+  // CPU mode: inject follow-up A presses to skip Speed/Stage select screens.
+  // PvP mode: players advance manually (or the game auto-advances).
   const ADVANCE_DELAY = 5000;
   setTimeout(() => {
     if (session.status !== "running") return;
-    console.log(`[ws] 🎮 Post-char-select phase for ${session.id} (P1=${session.p1SelectedCharName}) — waiting for game to advance`);
+    console.log(`[ws] 🎮 Post-char-select phase for ${session.id} (P1=${session.p1SelectedCharName}) — advancing to combat`);
+
+    if (session.mode === "cpu") {
+      // Follow-up A presses to skip Speed select / Stage select that may appear
+      // after character confirmation in arcade mode. Harmless in combat (light punch).
+      [0, 3000, 6000].forEach((ms) => {
+        setTimeout(() => {
+          if (session.status !== "running") return;
+          runner.ensureFocus();
+          runner.injectInput(1, SNES_A, true);
+          setTimeout(() => runner.injectInput(1, SNES_A, false), 200);
+        }, ms);
+      });
+    }
 
     // Screenshot for visual confirmation at t=30s
     setTimeout(() => {
@@ -861,8 +915,10 @@ function finalizeCharSelect(
       } catch (e) { console.warn("[ws] ⚠️ Screenshot failed:", e); }
     }, 30000);
 
-    // Resume pixel analysis after a generous delay
-    setTimeout(() => { runner.resetHealthWarmup(); }, 90000);
+    // Resume pixel analysis. CPU mode: 15s is enough for char confirm → VS → FIGHT.
+    // PvP mode: keep the generous 90s to account for human decision time.
+    const resumeDelay = session.mode === "cpu" ? 15000 : 90000;
+    setTimeout(() => { runner.resetHealthWarmup(); }, resumeDelay);
   }, ADVANCE_DELAY);
 }
 
@@ -988,8 +1044,9 @@ function handleInput(
         }
       }
 
-      // START is blocked during char select — match starts only after both lock in
-      if (msg.button === SNES_START) {
+      // START is blocked during char select for NeoGeo only (auto-sequence handles it).
+      // SNES allows START for manual pause and for starting the match if auto-lock fails.
+      if (msg.button === SNES_START && session.system === "neogeo") {
         console.log(`[ws] 🚫 START blocked during char select for P${msg.player} in ${info.sessionId}`);
         return;
       }

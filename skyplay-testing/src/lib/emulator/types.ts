@@ -154,6 +154,9 @@ export interface EmulatorState {
   requestAutoRematch: (matchNumber: number, totalMatches: number) => void;
   /** Duel pause state: who paused + remaining countdown. null when game is running. */
   pauseState: { pausedBy: 1 | 2; countdown: number } | null;
+  /** Character names selected by each player (from char_selected / match_end messages). */
+  p1CharName: string | null;
+  p2CharName: string | null;
 }
 
 /** Live in-match state for the on-canvas HUD (cloud/neogeo only). */

@@ -1,7 +1,7 @@
-import { spawn, spawnSync, type ChildProcess } from "child_process";
+import { spawn, spawnSync, execSync, type ChildProcess } from "child_process";
 import { createSocket, type Socket } from "dgram";
 import { EventEmitter } from "events";
-import { writeFileSync, unlinkSync, mkdirSync, existsSync, readFileSync } from "fs";
+import { writeFileSync, unlinkSync, mkdirSync, existsSync, readFileSync, readdirSync, statSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { SYSTEM_CORES, SYSTEM_RESOLUTIONS, UPSCALE, XDOTOOL_KEY_MAP, XDOTOOL_KEY_MAP_P2, getButtonToRetroarch, buildRetroarchKeyConfig } from "./config.js";
@@ -11,6 +11,7 @@ import { getPixelConfig } from "./pixel/pixel-game-config.js";
 import { PixelMatchAnalyzer, GamePhase, type RoundResultEvent, type MatchEndEvent } from "./pixel/pixel-match-analyzer.js";
 import { PortraitDetector, type PortraitGridResult } from "./pixel/portrait-detector.js";
 import { TemplateCalibrator } from "./pixel/template-calibrator.js";
+import { TextEventDetector, type TextOverlayEvent } from "./pixel/text-event-detector.js";
 export { GamePhase } from "./pixel/pixel-match-analyzer.js";
 
 // Verbose per-frame / per-input RAM-detection tracing. OFF by default: those logs fire
@@ -138,6 +139,7 @@ export class GameRunner extends EventEmitter {
   private healthReadTimer: ReturnType<typeof setInterval> | null = null; // health polling timer (250ms)
   private healthPollEnabled = false;
   private healthFrameBuf = Buffer.alloc(0);
+  private textFrameBuf = Buffer.alloc(0);
   private healthPollErrorCount = 0;
   private previousP1Health = -1;
   private previousP2Health = -1;
@@ -175,6 +177,8 @@ export class GameRunner extends EventEmitter {
   // ── Pixel-based detection (SFA2, SNES, etc.) ──
   /** Pixel-match analyzer for the current ROM (null = RAM-based detection). */
   private pixelAnalyzer: PixelMatchAnalyzer | null = null;
+  /** Text overlay detector for center-screen event text (KO, ROUND, PERFECT, etc.). */
+  private textEventDetector: TextEventDetector | null = null;
   /** Portrait detector for character select screen (null = no portrait config for this ROM). */
   private portraitDetector: PortraitDetector | null = null;
   /** Latest portrait grid capture result (set by captureCharSelectPortraits, consumed by ws-handler). */
@@ -347,6 +351,10 @@ export class GameRunner extends EventEmitter {
         const p = pixelConfig.portrait;
         console.log(`[game-runner] 🖼️  Portrait detector initialized: ${p.cols}×${p.rows} grid at (${p.gridX},${p.gridY}), cell ${p.cellW}×${p.cellH}, ${p.templates.length} templates`);
       }
+      if (pixelConfig.textEvents) {
+        this.textEventDetector = new TextEventDetector(pixelConfig.textEvents);
+        console.log(`[game-runner] 📝 Text overlay detector initialized: crop y=${pixelConfig.textEvents.textY} h=${pixelConfig.textEvents.textH} threshold=${pixelConfig.textEvents.binarizeThreshold}`);
+      }
     }
   }
 
@@ -371,7 +379,9 @@ export class GameRunner extends EventEmitter {
 
     console.log(`[game-runner] R${this.runnerId} Starting ${this.system} — ${displayW}x${displayH}`);
 
-    // 0. Kill any orphan retroarch/ffmpeg/parec from a previous session (one session per player rule).
+    // 0. Create session lock BEFORE cleanup so other sessions don't kill our processes.
+    this.createSessionLock();
+    // 1. Kill any orphan retroarch/ffmpeg/parec from a previous session (one session per player rule).
     //    This guarantees a clean slate — old processes can't starve Xvfb or steal the display.
     this.killOrphanProcesses();
 
@@ -434,6 +444,11 @@ export class GameRunner extends EventEmitter {
         this.emit("roundResult", { ...evt, ...this.charInfo() });
       });
 
+      this.pixelAnalyzer.on("matchStarted", (evt: { p1Health: number; p2Health: number; timerValue: number; p1FullBarWidth: number; p2FullBarWidth: number }) => {
+        // Forward match-started so ws-handler can log character names
+        this.emit("matchStarted", { ...evt, ...this.charInfo() });
+      });
+
       this.pixelAnalyzer.on("matchEnd", (evt: MatchEndEvent) => {
         this.p1Losses = evt.p1Losses;
         this.p2Losses = evt.p2Losses;
@@ -465,6 +480,19 @@ export class GameRunner extends EventEmitter {
           p2FullBarWidth: evt.p2FullBarWidth,
         });
       });
+
+      // Wire text overlay detector events → logs + pixel analyzer
+      if (this.textEventDetector) {
+        this.textEventDetector.on("textOverlayAppeared", (evt: TextOverlayEvent) => {
+          console.log(`[game-runner] 📝 Text overlay APPEARED — peakRatio=${(evt.peakRatio * 100).toFixed(1)}% confirmFrames=${evt.confirmFrames}`);
+          // Forward to pixel analyzer for state machine integration
+          this.pixelAnalyzer?.onTextOverlayAppeared(evt);
+        });
+        this.textEventDetector.on("textOverlayCleared", () => {
+          console.log(`[game-runner] 📝 Text overlay CLEARED`);
+          this.pixelAnalyzer?.onTextOverlayCleared();
+        });
+      }
 
       this.startHealthBarCapture();
     } else {
@@ -1863,11 +1891,16 @@ export class GameRunner extends EventEmitter {
     // Resume pixel analysis if it was suspended for char select.
     // Only reset the state machine when transitioning suspended→active —
     // calling reset() mid-round re-triggers the KO detection path.
-    if (this.pixelAnalysisSuspended) {
+    // Never reset after a match has ended (matchEnded flag prevents
+    // phantom rounds from attract/demo mode).
+    if (this.pixelAnalysisSuspended && !this.matchEnded) {
       this.pixelAnalysisSuspended = false;
       console.log(`[game-runner] ${this.readerTag} ▶️ Pixel analysis resumed (combat starting)`);
       if (this.pixelAnalyzer) {
         this.pixelAnalyzer.reset(true);
+      }
+      if (this.textEventDetector) {
+        this.textEventDetector.reset();
       }
     }
     console.log("[game-runner] 🧠 Health warmup reset (combat starting)");
@@ -2099,6 +2132,7 @@ export class GameRunner extends EventEmitter {
     // SECOND x11grab that gets starved on the shared X server (observed:
     // separate 2fps stripe ffmpeg delivered frames 2+ minutes late).
     let hasStripeOutput = false;
+    let hasTextOutput = false;
     if (pixelConfig) {
       args.push(
         "-map", "0:v",
@@ -2110,10 +2144,29 @@ export class GameRunner extends EventEmitter {
         "pipe:3",
       );
       hasStripeOutput = true;
+
+      // Output 3 (fd 4): center-screen text overlay crop — raw rgb24.
+      // Captures ROUND, KO, PERFECT, DRAW GAME, TIME OVER, FIGHT! text
+      // for brightness-spike detection as a secondary signal.
+      if (pixelConfig.textEvents) {
+        const te = pixelConfig.textEvents;
+        args.push(
+          "-map", "0:v",
+          "-vf", `crop=${te.textW}:${te.textH}:${te.textX}:${te.textY}`,
+          "-c:v", "rawvideo",
+          "-pix_fmt", "rgb24",
+          "-f", "rawvideo",
+          "-flush_packets", "1",
+          "pipe:4",
+        );
+        hasTextOutput = true;
+      }
     }
 
     this.ffmpegVideo = spawn("ffmpeg", args, {
-      stdio: ["ignore", "pipe", "pipe", hasStripeOutput ? "pipe" : "ignore"],
+      stdio: ["ignore", "pipe", "pipe",
+              hasStripeOutput ? "pipe" : "ignore",
+              hasTextOutput ? "pipe" : "ignore"],
       env: { ...process.env, DISPLAY: this.display },
     });
 
@@ -2146,6 +2199,33 @@ export class GameRunner extends EventEmitter {
         });
       }
       console.log(`[game-runner] 🧠 Health bar capture: stripe from main ffmpeg (${w}x${stripeH} at y=${stripeY})`);
+    }
+
+    // Read text overlay frames from fd 4 (if text event detection is active)
+    if (hasTextOutput && pixelConfig?.textEvents) {
+      const textW = pixelConfig.textEvents.textW;
+      const textH = pixelConfig.textEvents.textH;
+      const textX = pixelConfig.textEvents.textX;
+      const textY = pixelConfig.textEvents.textY;
+      const textFd: any = (this.ffmpegVideo as any).stdio?.[4];
+      if (textFd && this.textEventDetector) {
+        this.textFrameBuf = Buffer.alloc(0);
+        textFd.on("data", (chunk: Buffer) => {
+          this.textFrameBuf = Buffer.concat([this.textFrameBuf, chunk]);
+          const frameSize = textW * textH * 3;
+          while (this.textFrameBuf.length >= frameSize) {
+            const frame = this.textFrameBuf.subarray(0, frameSize);
+            this.textFrameBuf = this.textFrameBuf.subarray(frameSize);
+            if (!this.pixelAnalysisSuspended) {
+              this.textEventDetector?.processFrame(frame, textW, textH);
+            }
+          }
+          if (this.textFrameBuf.length > frameSize * 3) {
+            this.textFrameBuf = Buffer.alloc(0);
+          }
+        });
+      }
+      console.log(`[game-runner] 📝 Text overlay capture: crop from main ffmpeg (${textW}x${textH} at ${textX},${textY})`);
     }
 
     this.ffmpegVideo.stderr?.on("data", (data: Buffer) => {
@@ -2461,12 +2541,18 @@ export class GameRunner extends EventEmitter {
     });
   }
 
-  /** Fire-and-forget PAUSE_TOGGLE on the health socket (sending needs no reply, so it's
-   *  reliable; only the GET_STATUS read can be lost). */
+  /** Toggle pause via xdotool (f12 = RetroArch pause hotkey).
+   *  Also sends PAUSE_TOGGLE via UDP as fallback for cores that support it (FBNeo). */
   private raPauseToggle(): void {
     try {
-      this.healthUdp?.send(Buffer.from("PAUSE_TOGGLE\n"), RA_CMD_PORT, "127.0.0.1");
-    } catch { /* ok */ }
+      // Primary: xdotool f12 — works with all cores, no UDP dependency
+      execSync("xdotool key f12", { timeout: 1000, env: { ...process.env, DISPLAY: this.display || ":99" } });
+    } catch {
+      // Fallback: UDP PAUSE_TOGGLE for cores that support network commands (FBNeo)
+      try {
+        this.healthUdp?.send(Buffer.from("PAUSE_TOGGLE\n"), RA_CMD_PORT, "127.0.0.1");
+      } catch { /* ok */ }
+    }
   }
 
   /** One-shot RAM byte read over a dedicated short-lived UDP socket (kept separate from
@@ -2720,8 +2806,40 @@ export class GameRunner extends EventEmitter {
 
   /** Kill any orphan retroarch, ffmpeg, and parec processes before starting a new session.
    *  Enforces the "one session per player" rule — accepting a new duel implicitly ends
-   *  the previous one. Uses SIGKILL on the process group to guarantee cleanup. */
+   *  the previous one. Uses SIGKILL on the process group to guarantee cleanup.
+   *
+   *  SAFETY: Only kills when there are NO other active lock files. This prevents the
+   *  race condition where a new session's start() kills processes belonging to another
+   *  session that's still running (loop tests, concurrent duels). */
   private killOrphanProcesses(): void {
+    // Check for other active session lock files before doing any cleanup.
+    const lockDir = "/tmp/game-runner-locks";
+    let otherSessionsActive = false;
+    try {
+      if (existsSync(lockDir)) {
+        const files = readdirSync(lockDir);
+        const myLock = `${this.sessionId}.lock`;
+        for (const f of files) {
+          if (f !== myLock && f.endsWith(".lock")) {
+            // Check if the lock is fresh (written in the last hour).
+            // Stale locks from crashed sessions are safe to ignore.
+            try {
+              const stat = statSync(join(lockDir, f));
+              if (Date.now() - stat.mtimeMs < 3600_000) {
+                otherSessionsActive = true;
+                break;
+              }
+            } catch { /* lock file disappeared */ }
+          }
+        }
+      }
+    } catch { /* best-effort — if we can't check, don't kill anything */ }
+
+    if (otherSessionsActive) {
+      console.log(`[game-runner] R${this.runnerId} ⏭️ Skipping orphan cleanup — other active session(s) detected`);
+      return;
+    }
+
     const targets = ["retroarch", "ffmpeg", "parec"];
     let killed = 0;
     for (const name of targets) {
@@ -2731,19 +2849,36 @@ export class GameRunner extends EventEmitter {
           stdio: "pipe",
           timeout: 3000,
         });
-        // pkill exit code 0 = killed, 1 = no match, >1 = error
         if (result.status === 0) killed++;
-      } catch { /* best-effort: pkill may not exist or process already gone */ }
+      } catch { /* best-effort */ }
     }
     if (killed > 0) {
       console.log(`[game-runner] R${this.runnerId} 🧹 Killed ${killed} orphan process group(s) from previous session`);
     }
   }
 
+  /** Create a session lock file so other sessions don't kill our processes. */
+  private createSessionLock(): void {
+    const lockDir = "/tmp/game-runner-locks";
+    try {
+      if (!existsSync(lockDir)) mkdirSync(lockDir, { recursive: true });
+      writeFileSync(join(lockDir, `${this.sessionId}.lock`), String(process.pid));
+    } catch { /* best-effort */ }
+  }
+
+  /** Remove the session lock file on clean shutdown. */
+  private removeSessionLock(): void {
+    try {
+      const lockFile = join("/tmp/game-runner-locks", `${this.sessionId}.lock`);
+      if (existsSync(lockFile)) unlinkSync(lockFile);
+    } catch { /* best-effort */ }
+  }
+
   stop(): void {
     console.log(`[game-runner] Stopping all processes for session ${this.sessionId}`);
     this.running = false;
     this.stopRequested = true;
+    this.removeSessionLock();
 
     // Stop health watcher
     this.stopHealthWatcher();

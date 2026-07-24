@@ -252,39 +252,49 @@ export interface SnesCharGrid {
 /**
  * Hardcoded character grids for SNES games.
  *
- * SFA2 (Street Fighter Alpha 2) on SNES has 18 characters arranged in a 2×9 grid.
- * Cursor starts on Ryu (top-left). Order matches the in-game character select screen
- * (GameFAQs roster order, verified against screenshots when available).
+ * SFA2 (Street Fighter Alpha 2) on SNES has 18 characters arranged in a 5×4 grid.
+ * Row 3 has only 3 characters (cols 2-4), cols 1 & 5 are empty.
+ * Cursor starts on Ryu (top-left). Order verified against in-game char select screen.
  */
 export const SNES_CHAR_GRIDS: Record<string, SnesCharGrid> = {
   "Street Fighter Alpha 2 (Europe).sfc": {
     rom: "Street Fighter Alpha 2 (Europe).sfc",
-    rows: 2,
-    cols: 9,
+    rows: 4,
+    cols: 5,
     startRow: 0,
     startCol: 0,
     grid: [
+      // Row 0: Ryu, Adon, Chun-Li, Guy, Ken
       [
         { id: 0x00, name: "Ryu" },
-        { id: 0x01, name: "Ken" },
-        { id: 0x02, name: "Chun-Li" },
         { id: 0x03, name: "Adon" },
+        { id: 0x02, name: "Chun-Li" },
         { id: 0x04, name: "Guy" },
-        { id: 0x05, name: "Akuma" },
-        { id: 0x06, name: "Charlie" },
-        { id: 0x07, name: "Sodom" },
-        { id: 0x08, name: "Rose" },
+        { id: 0x01, name: "Ken" },
       ],
+      // Row 1: Dhalsim, Gen, Sakura, Rolento, Zangief
       [
-        { id: 0x09, name: "Birdie" },
-        { id: 0x0A, name: "Sagat" },
-        { id: 0x0B, name: "M. Bison" },
-        { id: 0x0C, name: "Dan" },
         { id: 0x0D, name: "Dhalsim" },
         { id: 0x0E, name: "Gen" },
         { id: 0x0F, name: "Sakura" },
         { id: 0x10, name: "Rolento" },
         { id: 0x11, name: "Zangief" },
+      ],
+      // Row 2: Charlie, Birdie, Rose, Sodom, Sagat
+      [
+        { id: 0x06, name: "Charlie" },
+        { id: 0x09, name: "Birdie" },
+        { id: 0x08, name: "Rose" },
+        { id: 0x07, name: "Sodom" },
+        { id: 0x0A, name: "Sagat" },
+      ],
+      // Row 3: empty, Akuma, M. Bison, Dan, empty
+      [
+        { id: -1, name: "" },
+        { id: 0x05, name: "Akuma" },
+        { id: 0x0B, name: "M. Bison" },
+        { id: 0x0C, name: "Dan" },
+        { id: -1, name: "" },
       ],
     ],
   },

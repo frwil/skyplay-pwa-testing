@@ -87,6 +87,35 @@ export interface PixelGameConfig {
   };
   /** Portrait detection config for character select screens (absent → no pixel portraits). */
   portrait?: PortraitConfig;
+  /** Text event detection regions — for confirming KO, Perfect, Draw Game, etc.
+   *  Each region is defined in the DISPLAY frame (768×672 for SFA2 SNES). */
+  textEvents?: TextEventConfig;
+}
+
+/** Configuration for detecting in-game text overlays (KO, Perfect, Draw Game, etc.)
+ *  via brightness-spike heuristics on a center-screen crop region.
+ *  Coordinates are in the upscaled display frame (e.g. 768×672 for SFA2 3x). */
+export interface TextEventConfig {
+  /** X offset of the text detection crop within the display frame. */
+  textX: number;
+  /** Y offset of the text detection crop within the display frame. */
+  textY: number;
+  /** Width of the text detection crop in pixels. */
+  textW: number;
+  /** Height of the text detection crop in pixels. */
+  textH: number;
+  /** Absolute brightness threshold for binarization — pixels above this are "bright" (0-255). */
+  binarizeThreshold: number;
+  /** Minimum bright-pixel ratio in the crop (0-1) to signal a text overlay. */
+  minBrightRatio: number;
+  /** Consecutive frames with bright ratio above minBrightRatio to confirm a text event. */
+  confirmFrames: number;
+  /** Cooldown frames after a detected event before re-arming (avoids double-fires). */
+  cooldownFrames: number;
+  /** If true, pauses RetroArch (xdotool key p) on text detection for template capture. */
+  pauseOnDetect?: boolean;
+  /** Auto-unpause delay in ms when pauseOnDetect is active (default 2000). */
+  pauseDurationMs?: number;
 }
 
 export const PIXEL_GAME_CONFIGS: Record<string, PixelGameConfig> = {
@@ -122,6 +151,24 @@ export const PIXEL_GAME_CONFIGS: Record<string, PixelGameConfig> = {
       digitYOffset: 8, // digit top at y=118 relative to stripeY=110
       binarizeThreshold: 160, // absolute threshold — white digits (~255) on dark bg
       minBrightRatio: 0.10,
+    },
+    textEvents: {
+      // Narrow center-screen crop — focuses on the text overlay zone while
+      // excluding character sprites at the edges. At 3x upscale (768×672):
+      //   "FIGHT!"      nat 80-100 → 240-300
+      //   "PERFECT"     nat 70-85  → 210-255
+      //   "ROUND 1/2/3" nat 90-120 → 270-360
+      //   "KO"          nat 88-125 → 264-375
+      //   "DRAW GAME"   nat 88-125 → 264-375
+      //   "TIME OVER"   nat 88-125 → 264-375
+      // 400×100 crop at y=240 covers all texts. Threshold tuned from live
+      // data (2026-07-24): 2% full-width = noise, 5% narrow = missed ROUND X.
+      textX: 184, textY: 240, textW: 400, textH: 100,
+      binarizeThreshold: 180,
+      minBrightRatio: 0.035,
+      confirmFrames: 8,
+      cooldownFrames: 180,
+      pauseOnDetect: true,  // dev: pause RetroArch on each text detection for template capture
     },
     portrait: {
       // Measured from char-select-full.ppm: portrait content x=30→552, y=230→450 at 3x upscale.

@@ -105,6 +105,9 @@ export function useEmulator(system: SystemType = "nes") {
   const [autoRematch, setAutoRematch] = useState<{ matchNumber: number; totalMatches: number } | null>(null);
   // Duel pause state: who paused + remaining countdown. null when not paused.
   const [pauseState, setPauseState] = useState<{ pausedBy: 1 | 2; countdown: number } | null>(null);
+  /** Character names selected by each player (from char_selected / match_end messages). */
+  const [p1CharName, setP1CharName] = useState<string | null>(null);
+  const [p2CharName, setP2CharName] = useState<string | null>(null);
 
   // ── Duel callbacks (stable refs) ──────────────────────────────────
   const duelCallbacksRef = useRef({
@@ -120,12 +123,16 @@ export function useEmulator(system: SystemType = "nes") {
         p1SelectOrder?: number[]; p2SelectOrder?: number[];
         p1Mode?: "ADVANCED" | "EXTRA"; p2Mode?: "ADVANCED" | "EXTRA";
         p1CharWins?: Record<number, number>; p2CharWins?: Record<number, number>;
+        p1CharName?: string; p2CharName?: string;
       },
     ) => {
       console.log(`[useEmulator] 🏁 Match #${matchNumber || "?"} over! P${winner} wins. P1=${p1Losses} P2=${p2Losses} perfectKOs=${perfectKos || 0}`);
       const result = { winner, loser, p1Losses, p2Losses, matchNumber, totalRounds, perfectKos, ...(meta || {}) };
       setDuelMatchResult(result);
       setDuelMatchHistory((prev) => [...prev, result]);
+      // Capture character names from match_end payload
+      if (meta?.p1CharName) setP1CharName(meta.p1CharName);
+      if (meta?.p2CharName) setP2CharName(meta.p2CharName);
       // Keep status as "running" — same-session; a rematch just unlocks input.
     },
     onRematchStarting: () => {
@@ -174,6 +181,13 @@ export function useEmulator(system: SystemType = "nes") {
     },
     onMatchState: (data: MatchStateData) => {
       setMatchState(data);
+    },
+    onCharSelected: (player: 1 | 2, _charId: number, charName: string) => {
+      if (player === 1) {
+        setP1CharName(charName);
+      } else {
+        setP2CharName(charName);
+      }
     },
     onPlayerEvent: (event: "player_joined" | "player_disconnected", player: number) => {
       if (event === "player_disconnected") {
@@ -491,6 +505,7 @@ export function useEmulator(system: SystemType = "nes") {
             onRoundResult: duelCallbacksRef.current.onRoundResult,
             onMatchEnd: duelCallbacksRef.current.onMatchEnd,
             onMatchState: duelCallbacksRef.current.onMatchState,
+            onCharSelected: duelCallbacksRef.current.onCharSelected,
             onRematchStarting: duelCallbacksRef.current.onRematchStarting,
             onSessionClosed: duelCallbacksRef.current.onSessionClosed,
             onRematchRequested: duelCallbacksRef.current.onRematchRequested,
@@ -518,6 +533,7 @@ export function useEmulator(system: SystemType = "nes") {
             onRoundResult: duelCallbacksRef.current.onRoundResult,
             onMatchEnd: duelCallbacksRef.current.onMatchEnd,
             onMatchState: duelCallbacksRef.current.onMatchState,
+            onCharSelected: duelCallbacksRef.current.onCharSelected,
             onRematchStarting: duelCallbacksRef.current.onRematchStarting,
             onSessionClosed: duelCallbacksRef.current.onSessionClosed,
             onRematchRequested: duelCallbacksRef.current.onRematchRequested,
@@ -537,9 +553,10 @@ export function useEmulator(system: SystemType = "nes") {
           onRoundResult: duelCallbacksRef.current.onRoundResult,
           onMatchEnd: duelCallbacksRef.current.onMatchEnd,
           onMatchState: duelCallbacksRef.current.onMatchState,
+          onCharSelected: duelCallbacksRef.current.onCharSelected,
           onRematchStarting: duelCallbacksRef.current.onRematchStarting,
           onSessionClosed: duelCallbacksRef.current.onSessionClosed,
-            onRematchRequested: duelCallbacksRef.current.onRematchRequested,
+          onRematchRequested: duelCallbacksRef.current.onRematchRequested,
             onRematchAccepted: duelCallbacksRef.current.onRematchAccepted,
             onRematchDeclined: duelCallbacksRef.current.onRematchDeclined,
             onPlayerEvent: duelCallbacksRef.current.onPlayerEvent,
@@ -804,6 +821,7 @@ export function useEmulator(system: SystemType = "nes") {
         onRoundResult: duelCallbacksRef.current.onRoundResult,
         onMatchEnd: duelCallbacksRef.current.onMatchEnd,
         onMatchState: duelCallbacksRef.current.onMatchState,
+        onCharSelected: duelCallbacksRef.current.onCharSelected,
         onRematchStarting: duelCallbacksRef.current.onRematchStarting,
         onSessionClosed: duelCallbacksRef.current.onSessionClosed,
             onRematchRequested: duelCallbacksRef.current.onRematchRequested,
@@ -832,6 +850,7 @@ export function useEmulator(system: SystemType = "nes") {
         onRoundResult: duelCallbacksRef.current.onRoundResult,
         onMatchEnd: duelCallbacksRef.current.onMatchEnd,
         onMatchState: duelCallbacksRef.current.onMatchState,
+        onCharSelected: duelCallbacksRef.current.onCharSelected,
         onRematchStarting: duelCallbacksRef.current.onRematchStarting,
         onSessionClosed: duelCallbacksRef.current.onSessionClosed,
             onRematchRequested: duelCallbacksRef.current.onRematchRequested,
@@ -924,6 +943,8 @@ export function useEmulator(system: SystemType = "nes") {
     opponentAbandoned,
     autoRematch,
     pauseState,
+    p1CharName,
+    p2CharName,
     clearOpponentAbandoned: useCallback(() => setOpponentAbandoned(null), []),
     stopDuel: useCallback(() => {
       const adapter = adapterRef.current;

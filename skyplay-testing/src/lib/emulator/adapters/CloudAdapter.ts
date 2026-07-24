@@ -29,6 +29,11 @@ export class CloudAdapter implements EmulatorAdapter {
   private rtmpUrl: string | null = null;
   private lastFrameId: number = 0;
   private pingInterval: ReturnType<typeof setInterval> | null = null;
+  /** Character names selected by each player (received via char_selected / match_end). */
+  private p1CharName: string | null = null;
+  private p2CharName: string | null = null;
+  private p1CharId: number = -1;
+  private p2CharId: number = -1;
 
   // WebCodecs — Video
   private videoDecoder: VideoDecoder | null = null;
@@ -686,15 +691,18 @@ export class CloudAdapter implements EmulatorAdapter {
         }
         case "round_result": {
           const rrData = msg as unknown as { loser: number; winner: number; p1Losses: number; p2Losses: number; koType?: string };
-          console.log(`[Cloud:${this.systemType}] 🏆 Round result: P${rrData.winner} wins! P${rrData.loser} KO (${rrData.koType || "normal"}). Score: P1=${rrData.p1Losses} P2=${rrData.p2Losses}`);
+          console.log(`[Cloud:${this.systemType}] 🏆 Round result: P${rrData.winner} wins! P${rrData.loser} KO (${rrData.koType || "normal"}). Losses: P1=${rrData.p1Losses} P2=${rrData.p2Losses}`);
           this.callbacks.onRoundResult?.(
             rrData.loser, rrData.winner, rrData.p1Losses, rrData.p2Losses, rrData.koType,
           );
           break;
         }
         case "match_end": {
-          const meData = msg as unknown as { winner: number; loser: number; p1Losses: number; p2Losses: number; matchNumber?: number; totalRounds?: number; perfectKos?: number; p1TeamIds?: number[]; p2TeamIds?: number[]; p1SelectOrder?: number[]; p2SelectOrder?: number[]; p1Mode?: "ADVANCED" | "EXTRA"; p2Mode?: "ADVANCED" | "EXTRA"; p1CharWins?: Record<number, number>; p2CharWins?: Record<number, number> };
-          console.log(`[Cloud:${this.systemType}] 🏁 MATCH #${meData.matchNumber || "?"} OVER! P${meData.winner} wins! Score: P1=${meData.p1Losses} P2=${meData.p2Losses}`);
+          const meData = msg as unknown as { winner: number; loser: number; p1Losses: number; p2Losses: number; matchNumber?: number; totalRounds?: number; perfectKos?: number; p1TeamIds?: number[]; p2TeamIds?: number[]; p1SelectOrder?: number[]; p2SelectOrder?: number[]; p1Mode?: "ADVANCED" | "EXTRA"; p2Mode?: "ADVANCED" | "EXTRA"; p1CharWins?: Record<number, number>; p2CharWins?: Record<number, number>; p1CharName?: string; p2CharName?: string };
+          console.log(`[Cloud:${this.systemType}] 🏁 MATCH #${meData.matchNumber || "?"} OVER! P${meData.winner} wins! Losses: P1=${meData.p1Losses} P2=${meData.p2Losses}`);
+          // Capture character names from match_end for stat display
+          if (meData.p1CharName) { this.p1CharName = meData.p1CharName; }
+          if (meData.p2CharName) { this.p2CharName = meData.p2CharName; }
           this.callbacks.onMatchEnd?.(
             meData.winner, meData.loser, meData.p1Losses, meData.p2Losses, meData.matchNumber, meData.totalRounds, meData.perfectKos,
             {
@@ -702,6 +710,7 @@ export class CloudAdapter implements EmulatorAdapter {
               p1SelectOrder: meData.p1SelectOrder, p2SelectOrder: meData.p2SelectOrder,
               p1Mode: meData.p1Mode, p2Mode: meData.p2Mode,
               p1CharWins: meData.p1CharWins, p2CharWins: meData.p2CharWins,
+              p1CharName: meData.p1CharName, p2CharName: meData.p2CharName,
             },
           );
           break;
@@ -740,6 +749,19 @@ export class CloudAdapter implements EmulatorAdapter {
         }
         case "match_state": {
           this.callbacks.onMatchState?.(msg as unknown as MatchStateData);
+          break;
+        }
+        case "char_selected": {
+          const csData = msg as unknown as { player: 1 | 2; charId: number; charName: string; row?: number; col?: number };
+          if (csData.player === 1) {
+            this.p1CharName = csData.charName;
+            this.p1CharId = csData.charId;
+          } else {
+            this.p2CharName = csData.charName;
+            this.p2CharId = csData.charId;
+          }
+          console.log(`[Cloud:${this.systemType}] 🎯 P${csData.player} selected: ${csData.charName} (0x${csData.charId.toString(16).padStart(2, "0")})`);
+          this.callbacks.onCharSelected?.(csData.player, csData.charId, csData.charName);
           break;
         }
         case "paused": {
@@ -975,6 +997,11 @@ export class CloudAdapter implements EmulatorAdapter {
     }
     this.sessionId = sessionId;
     this._roomCode = roomCode;
+    // Reset character selections for the new session
+    this.p1CharName = null;
+    this.p2CharName = null;
+    this.p1CharId = -1;
+    this.p2CharId = -1;
     // _player stays the same (1=host, 2=guest)
     const mode = this._player === 1 ? "init" : "join";
     await this.connectWebSocket(wsUrl, mode);
@@ -1064,6 +1091,7 @@ export interface CloudCallbacks {
       p1SelectOrder?: number[]; p2SelectOrder?: number[];
       p1Mode?: "ADVANCED" | "EXTRA"; p2Mode?: "ADVANCED" | "EXTRA";
       p1CharWins?: Record<number, number>; p2CharWins?: Record<number, number>;
+      p1CharName?: string; p2CharName?: string;
     },
   ) => void;
   /** Called when the opponent requests a rematch. */
@@ -1080,6 +1108,8 @@ export interface CloudCallbacks {
   onSessionClosed?: () => void;
   /** Live in-match state (teams, active char, gauge mode) — about every 500ms during combat. */
   onMatchState?: (data: MatchStateData) => void;
+  /** Called when a player locks in a character during the character select phase. */
+  onCharSelected?: (player: 1 | 2, charId: number, charName: string) => void;
   /** Called when the game is paused (by either player). player = who initiated, countdown = initial seconds. */
   onPaused?: (player: 1 | 2, countdown: number) => void;
   /** Called when the game resumes after a pause. */

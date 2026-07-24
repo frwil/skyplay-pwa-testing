@@ -25,7 +25,7 @@ export class TimerDetector {
   /** Frame counter for periodic debug logging. */
   private debugFrameCount = 0;
   /** Dump raw digit bitmaps every N read attempts. */
-  private readonly DEBUG_DUMP_INTERVAL = 10;
+  private readonly DEBUG_DUMP_INTERVAL = 0; // disabled — too verbose
   /** One-shot PPM dump flag — saves stripe + digit regions on first frame. */
   private debugPpmSaved = false;
   /** Set of "L-7", "R-3" keys already saved as templates — one sample per digit per position. */

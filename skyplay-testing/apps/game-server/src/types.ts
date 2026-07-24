@@ -254,6 +254,25 @@ export interface ResumedMessage {
   initiator: 1 | 2 | 0;
 }
 
+/** Match has started (pixel analyzer entered PLAYING) — character names for verification. */
+export interface MatchStartedMessage {
+  type: "match_started";
+  /** Cursor-tracked character name for P1 (SNES) or RAM-based name (KOF98). */
+  p1CharName?: string;
+  /** Cursor-tracked character name for P2 (SNES) or RAM-based name (KOF98). */
+  p2CharName?: string;
+  /** Portrait/pixel-detected character name for P1 (diagnostic ground truth). */
+  p1PixelCharName?: string;
+  /** Portrait/pixel-detected character name for P2 (diagnostic ground truth). */
+  p2PixelCharName?: string;
+  /** Initial health percentages at match start. */
+  p1Health?: number;
+  p2Health?: number;
+  /** Calibrated full-bar widths at match start. */
+  p1FullBarWidth?: number;
+  p2FullBarWidth?: number;
+}
+
 /** Character select phase has started — show the character select UI overlay. */
 export interface CharSelectStartMessage {
   type: "char_select_start";
@@ -291,6 +310,7 @@ export type ServerMessage =
   | RematchStartingMessage
   | SessionClosedMessage
   | MatchStateMessage
+  | MatchStartedMessage
   | AutoRematchServerMessage
   | PausedMessage
   | ResumedMessage

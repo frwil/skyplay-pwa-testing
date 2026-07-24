@@ -39,7 +39,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Missing system or rom" }, { status: 400 });
     }
 
-    if (system !== "neogeo" && system !== "ps1") {
+    if (system !== "neogeo" && system !== "ps1" && system !== "snes") {
       return NextResponse.json({ error: `System '${system}' is not cloud-enabled` }, { status: 400 });
     }
 
