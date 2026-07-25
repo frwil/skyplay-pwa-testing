@@ -8,11 +8,9 @@ import { SYSTEM_CORES, SYSTEM_RESOLUTIONS, UPSCALE, XDOTOOL_KEY_MAP, XDOTOOL_KEY
 import { isRecordingEnabled, isStreamingEnabled, recordingDir, recorderFfmpegArgs, streamerFfmpegArgs, uploadRecording } from "./recording.js";
 import type { RamConfig } from "./game-config.js";
 import { getPixelConfig } from "./pixel/pixel-game-config.js";
-import { PixelMatchAnalyzer, GamePhase, type RoundResultEvent, type MatchEndEvent } from "./pixel/pixel-match-analyzer.js";
 import { PortraitDetector, type PortraitGridResult } from "./pixel/portrait-detector.js";
 import { TemplateCalibrator } from "./pixel/template-calibrator.js";
-import { TextEventDetector, type TextOverlayEvent } from "./pixel/text-event-detector.js";
-export { GamePhase } from "./pixel/pixel-match-analyzer.js";
+import { TemplateMatcher } from "./pixel/template-matcher.js";
 
 // Verbose per-frame / per-input RAM-detection tracing. OFF by default: those logs fire
 // dozens of times per second during a live round and each console.log to the Docker
@@ -34,7 +32,7 @@ const RA_CMD_PORT = 55355;
 
 /** Known memory addresses for health bars in RetroArch core memory (offsets from work RAM base).
  *  For NeoGeo/FBNeo: full health is typically 0x67 (103 decimal). */
-const HEALTH_MEMORY_MAP: Record<string, { p1: number; p2: number; size: number; maxHealth: number; timer: number; timerAlt: number; p1Char: number; p2Char: number; p1Mode: number; p2Mode: number; altChars?: number[]; teamSlots?: number[]; /** Discovered via RAM scan: team roster base at 0xA84E (P1) and 0xA85E (P2) */ p1TeamBase?: number; p2TeamBase?: number; /** Byte offsets from team base to each of the 3 slots (irregular, with separator gaps) */ p1TeamOffsets?: number[]; p2TeamOffsets?: number[]; /** Active character slot index (0-2) */ p1ActiveIdx?: number; p2ActiveIdx?: number; /** Currently-fighting character ID address (0x8256 P1 / 0x8456 P2), discovered via multi-snapshot diff */ p1Active?: number; p2Active?: number; /** Match state flag at 0xA840 (0x40 = in-match, 0x00 = char select) */ matchFlag?: number; /** Per-player "characters lost" counters (0xA859 P1 / 0xA868 P2), 0→3, draw-inclusive — the authoritative match-end signal (health heuristics give the wrong time-over winner and misread the 31% draw-replay) */ p1Lost?: number; p2Lost?: number; /** Pick-order (fight order) buffer in the player struct — [1st, 2nd, 3rd] absolute addresses. P1 0x15CB/0x15CA/0x15CD, P2 mirror +0x200 0x17CB/0x17CA/0x17CD (sep 0x00 at +0xCC). Discovered + validated via controlled diff on 3 distinct orders (2026-07-10). This is the REAL selection order (≠ set-order 0xA84E). Reliable in stable combat; read once + freeze. */ p1PickOrder?: number[]; p2PickOrder?: number[] }> = {
+const HEALTH_MEMORY_MAP: Record<string, { p1: number; p2: number; size: number; maxHealth: number; timer: number; timerAlt: number; p1Char: number; p2Char: number; p1Mode: number; p2Mode: number; altChars?: number[]; teamSlots?: number[]; /** Discovered via RAM scan: team roster base at 0xA84E (P1) and 0xA85E (P2) */ p1TeamBase?: number; p2TeamBase?: number; /** Byte offsets from team base to each of the 3 slots (irregular, with separator gaps) */ p1TeamOffsets?: number[]; p2TeamOffsets?: number[]; /** Active character slot index (0-2) */ p1ActiveIdx?: number; p2ActiveIdx?: number; /** Currently-fighting character ID address (0x8256 P1 / 0x8456 P2), discovered via multi-snapshot diff */ p1Active?: number; p2Active?: number; /** Match state flag at 0xA840 (0x40 = in-match, 0x00 = char select) */ matchFlag?: number; /** Per-player "characters lost" counters (0xA859 P1 / 0xA868 P2), 0→3, draw-inclusive — the authoritative match-end signal (health heuristics give the wrong time-over winner and misread the 31% draw-replay) */ p1Lost?: number; p2Lost?: number; /** Pick-order (fight order) buffer in the player struct — [1st, 2nd, 3rd] absolute addresses. P1 0x15CB/0x15CA/0x15CD, P2 mirror +0x200 0x17CB/0x17CA/0x17CD (sep 0x00 at +0xCC). Discovered + validated via controlled diff on 3 distinct orders (2026-07-10). This is the REAL selection order (≠ set-order 0xA84E). Reliable in stable combat; read once + freeze. */ p1PickOrder?: number[]; p2PickOrder?: number[]; /** SFA2 play mode: 0=Manual, 1=Auto. P1 at 0x1C2A, P2 at 0x1C2B (+1 offset, S-DD1 interleaved). Confirmed 2026-07-26 via Manual→Auto diff. */ p1PlayMode?: number; p2PlayMode?: number }> = {
   "kof98.zip":   {
     p1: 0x8238, p2: 0x8438, size: 1, maxHealth: 0x67,
     timer: 0xA83A, timerAlt: 0x85D2,
@@ -73,6 +71,19 @@ const HEALTH_MEMORY_MAP: Record<string, { p1: number; p2: number; size: number; 
     p1PickOrder: [0x15CB, 0x15CA, 0x15CD], p2PickOrder: [0x17CB, 0x17CA, 0x17CD],
   },
   "kof2002.zip": { p1: 0x8238, p2: 0x8438, size: 1, maxHealth: 0x67, timer: 0xA83A, timerAlt: 0x85D2, p1Char: 0x823F, p2Char: 0x843F, p1Mode: 0x81F0, p2Mode: 0x83F0 },
+  // SFA2 SNES (Europe) — RAM addresses discovered 2026-07-25 via full WRAM scans + live match differential.
+  // Health: 4-byte block (P1 real, P1 visual, P2 real, P2 visual), max 96 (0x60), P2 offset +2.
+  // Timer: BCD-encoded at 0x1B7D (0x57 = 57s), sub-second counter at 0x1B7E. Confirmed 99→0.
+  // Char IDs: P1 at 0x1C07, P2 at 0x1C08 (+1 offset). Confirmed via double-match differential:
+  //   Ryu(0x00)→Ken(0x01)→Chun-Li(0x04). Mirrors at 0x07A2/0x07CA (P1) and 0x0A22/0x0A4A (P2).
+  // Play Mode: P1=0x1C2A, P2=0x1C2B (+1 offset). 0=Manual, 1=Auto. Confirmed 2026-07-26.
+  "Street Fighter Alpha 2 (Europe).sfc": {
+    p1: 0x1D3D, p2: 0x1D3F, size: 1, maxHealth: 0x60,
+    timer: 0x1B7D, timerAlt: 0x1B7D,       // BCD-encoded seconds (0x00–0x99)
+    p1Char: 0x1C07, p2Char: 0x1C08,       // P1 char ID, P2 char ID (offset +1)
+    p1Mode: 0x1D3D, p2Mode: 0x1D3D,       // not yet discovered — placeholder
+    p1PlayMode: 0x1C2A, p2PlayMode: 0x1C2B, // 0=Manual, 1=Auto
+  },
 };
 
 /** KOF '98 character ID → name mapping. */
@@ -90,6 +101,19 @@ const KOF98_CHARACTERS: Record<number, string> = {
   0x1E: "Heidern",          0x1F: "Takuma Sakazaki",   0x20: "Saisyu Kusanagi",
   0x21: "Heavy D!",         0x22: "Lucky Glauber",     0x23: "Brian Battler",
   0x24: "Rugal Bernstein",  0x25: "Shingo Yabuki",
+};
+
+/** SFA2 (Street Fighter Alpha 2) SNES character ID → name mapping.
+ *  IDs follow the ROM's internal CPS2 ordering, NOT the visual char select grid.
+ *  Full 18-character roster (0x00–0x11). Validated 2026-07-25 via RAM double-match
+ *  differential against the EU ROM. */
+const SFA2_CHARACTERS: Record<number, string> = {
+  0x00: "Ryu",       0x01: "Ken",        0x02: "Akuma",
+  0x03: "Charlie",   0x04: "Chun-Li",    0x05: "Adon",
+  0x06: "Sakura",    0x07: "Guy",        0x08: "Birdie",
+  0x09: "Sodom",     0x0A: "Rose",       0x0B: "Dan",
+  0x0C: "M. Bison",  0x0D: "Sagat",      0x0E: "Rolento",
+  0x0F: "Dhalsim",   0x10: "Zangief",    0x11: "Gen",
 };
 
 /**
@@ -133,12 +157,9 @@ export class GameRunner extends EventEmitter {
   private configPath: string | null = null;
 
   // ── Round win/loss detection (shared between RAM + pixel paths) ──
-  private lastHealthFrameAt = 0;
-  // Note: health stripe is now extracted from ffmpegVideo fd 3 — no separate ffmpeg needed.
   private healthPollTimer: ReturnType<typeof setInterval> | null = null; // debug log timer (10s)
   private healthReadTimer: ReturnType<typeof setInterval> | null = null; // health polling timer (250ms)
   private healthPollEnabled = false;
-  private healthFrameBuf = Buffer.alloc(0);
   private textFrameBuf = Buffer.alloc(0);
   private healthPollErrorCount = 0;
   private previousP1Health = -1;
@@ -165,20 +186,24 @@ export class GameRunner extends EventEmitter {
   private lcPrevTimer16 = -1;
   /** After auto-continue, use a shorter warmup since we already validated the readings. */
   private fastWarmup = false;
-  /** True while pixel analysis is suspended (char select). Frames are
-   *  dropped instead of feeding the state machine. */
-  private pixelAnalysisSuspended = false;
   /** Fallback health-heuristic warmup (non-loss-counter RAM games). */
   private healthDetectionArmed = false;
   private healthStableFrames = 0;
   private healthStableFramesHealthy = 0;
   /** KO cooldown frames for the fallback health heuristic. */
   private koCooldownFrames = 0;
-  // ── Pixel-based detection (SFA2, SNES, etc.) ──
-  /** Pixel-match analyzer for the current ROM (null = RAM-based detection). */
-  private pixelAnalyzer: PixelMatchAnalyzer | null = null;
-  /** Text overlay detector for center-screen event text (KO, ROUND, PERFECT, etc.). */
-  private textEventDetector: TextEventDetector | null = null;
+  // ── Pixel-based text detection (SFA2, SNES) ──
+  /** Template matcher — OpenCV bridge for identifying text overlays (FIGHT!, KO, PERFECT, etc.). */
+  private templateMatcher: TemplateMatcher | null = null;
+  /** Whether a template-matching request is currently in-flight (backpressure). */
+  private templateMatchInFlight = false;
+  /** Latest raw text-crop frame pending for template matching (replaced by each new frame). */
+  private latestTextFrame: Buffer | null = null;
+  private latestTextFrameW = 0;
+  private latestTextFrameH = 0;
+  /** Cooldown: last detected text name + timestamp to suppress duplicate fires. */
+  private lastTextEvent: { name: string; time: number } | null = null;
+  private readonly TEXT_COOLDOWN_MS = 2000;
   /** Portrait detector for character select screen (null = no portrait config for this ROM). */
   private portraitDetector: PortraitDetector | null = null;
   /** Latest portrait grid capture result (set by captureCharSelectPortraits, consumed by ws-handler). */
@@ -206,6 +231,8 @@ export class GameRunner extends EventEmitter {
   private memP2Char = -1;
   private memP1Mode = -1;
   private memP2Mode = -1;
+  private memP1PlayMode = -1;
+  private memP2PlayMode = -1;
   /** Discovered team slots (3 per player): P1 @0xA84E/A84F/A851, P2 @0xA85E/A860/A861. */
   private p1TeamSlots: number[] = [];
   private p2TeamSlots: number[] = [];
@@ -273,13 +300,14 @@ export class GameRunner extends EventEmitter {
 
   /** Build character info for event payloads using the locked team (frozen at char select). */
   private charInfo() {
-    const p1Name = KOF98_CHARACTERS[this.memP1Char] || "?";
-    const p2Name = KOF98_CHARACTERS[this.memP2Char] || "?";
+    const charMap = this.healthMemMap?.maxHealth === 0x60 ? SFA2_CHARACTERS : KOF98_CHARACTERS;
+    const p1Name = charMap[this.memP1Char] || "?";
+    const p2Name = charMap[this.memP2Char] || "?";
     // Prefer the locked team; fall back to current raw slots if we never captured char select.
     const p1Src = this.p1LockedTeam ?? this.p1TeamSlots;
     const p2Src = this.p2LockedTeam ?? this.p2TeamSlots;
-    const p1Team = p1Src.filter(c => c >= 0 && c <= 0x25).map(c => KOF98_CHARACTERS[c] || "?");
-    const p2Team = p2Src.filter(c => c >= 0 && c <= 0x25).map(c => KOF98_CHARACTERS[c] || "?");
+    const p1Team = p1Src.filter(c => c >= 0 && c <= 0x25).map(c => charMap[c] || "?");
+    const p2Team = p2Src.filter(c => c >= 0 && c <= 0x25).map(c => charMap[c] || "?");
     return { p1Char: p1Name, p2Char: p2Name, p1Team, p2Team };
   }
   /**
@@ -295,13 +323,19 @@ export class GameRunner extends EventEmitter {
       for (const [id, n] of m) o[id] = n;
       return o;
     };
+    const maxHealth = this.healthMemMap?.maxHealth ?? 0x67;
+    const isSfa2 = maxHealth === 0x60;
     return {
       p1TeamIds: ids(this.p1LockedTeam, this.p1TeamSlots),
       p2TeamIds: ids(this.p2LockedTeam, this.p2TeamSlots),
       p1SelectOrder: this.p1SelectOrder.slice(),
       p2SelectOrder: this.p2SelectOrder.slice(),
-      p1Mode: this.memP1Mode === 1 ? "ADVANCED" : "EXTRA",
-      p2Mode: this.memP2Mode === 1 ? "ADVANCED" : "EXTRA",
+      // KOF98 gauge mode (undefined for SFA2 — health addresses double as mode addrs, garbage data)
+      p1Mode: isSfa2 ? undefined : (this.memP1Mode === 1 ? "ADVANCED" : "EXTRA"),
+      p2Mode: isSfa2 ? undefined : (this.memP2Mode === 1 ? "ADVANCED" : "EXTRA"),
+      // SFA2 play mode (undefined for KOF98)
+      p1PlayMode: isSfa2 ? (this.memP1PlayMode === 1 ? "Auto" : "Manual") : undefined,
+      p2PlayMode: isSfa2 ? (this.memP2PlayMode === 1 ? "Auto" : "Manual") : undefined,
       p1CharWins: wins(this.p1CharWins),
       p2CharWins: wins(this.p2CharWins),
     };
@@ -344,16 +378,15 @@ export class GameRunner extends EventEmitter {
     // Look up the per-ROM pixel detection config (only used when no RAM map available).
     const pixelConfig = getPixelConfig(this.rom);
     if (pixelConfig) {
-      this.pixelAnalyzer = new PixelMatchAnalyzer(pixelConfig);
-      console.log(`[game-runner] 🎯 Pixel analyzer initialized for ${this.rom}: P1 x=${pixelConfig.p1StartX}-${pixelConfig.p1EndX} P2 x=${pixelConfig.p2StartX}-${pixelConfig.p2EndX} wins=${pixelConfig.winsNeeded} stripe y=${pixelConfig.stripeY} h=${pixelConfig.stripeH}${pixelConfig.timer ? " ⏱️timer" : ""}`);
       if (pixelConfig.portrait) {
         this.portraitDetector = new PortraitDetector(pixelConfig.portrait);
         const p = pixelConfig.portrait;
         console.log(`[game-runner] 🖼️  Portrait detector initialized: ${p.cols}×${p.rows} grid at (${p.gridX},${p.gridY}), cell ${p.cellW}×${p.cellH}, ${p.templates.length} templates`);
       }
       if (pixelConfig.textEvents) {
-        this.textEventDetector = new TextEventDetector(pixelConfig.textEvents);
-        console.log(`[game-runner] 📝 Text overlay detector initialized: crop y=${pixelConfig.textEvents.textY} h=${pixelConfig.textEvents.textH} threshold=${pixelConfig.textEvents.binarizeThreshold}`);
+        this.templateMatcher = new TemplateMatcher();
+        const te = pixelConfig.textEvents;
+        console.log(`[game-runner] 🏷️  Template matcher initialized for ${this.rom}: crop ${te.textW}×${te.textH} at (${te.textX},${te.textY})`);
       }
     }
   }
@@ -431,70 +464,8 @@ export class GameRunner extends EventEmitter {
     }
     if (this.healthMemMap) {
       this.startMemoryHealthReader();
-    } else if (this.pixelAnalyzer) {
-      console.log(`[game-runner] 🧠 No memory map for ${this.rom}, using pixel analysis`);
-
-      // Proxy events from PixelMatchAnalyzer → GameRunner, augmenting with char info.
-      this.pixelAnalyzer.on("roundResult", (evt: RoundResultEvent) => {
-        // Sync shared state from the analyzer's event
-        this.p1Losses = evt.p1Losses;
-        this.p2Losses = evt.p2Losses;
-        this.koDetected = true;
-        // Re-emit with any available char info (empty for pixel-only games like SFA2)
-        this.emit("roundResult", { ...evt, ...this.charInfo() });
-      });
-
-      this.pixelAnalyzer.on("matchStarted", (evt: { p1Health: number; p2Health: number; timerValue: number; p1FullBarWidth: number; p2FullBarWidth: number }) => {
-        // Forward match-started so ws-handler can log character names
-        this.emit("matchStarted", { ...evt, ...this.charInfo() });
-      });
-
-      this.pixelAnalyzer.on("matchEnd", (evt: MatchEndEvent) => {
-        this.p1Losses = evt.p1Losses;
-        this.p2Losses = evt.p2Losses;
-        this.matchEnded = true;
-        this.matchNumber = evt.matchNumber;
-        this.roundNumber = evt.totalRounds;
-        this.matchPerfectKos = evt.perfectKos;
-        this.emit("matchEnd", { ...evt, ...this.charInfo(), ...this.matchMeta() });
-      });
-
-      // Forward live pixel health as matchState events (SFA2 / pixel-based games).
-      // KOF98 does this via its own RAM health poll (line ~928); this is the
-      // equivalent path for pixel-only games that have no memory map.
-      this.pixelAnalyzer.on("health", (evt: {
-        p1Health: number; p2Health: number; timerValue: number;
-        phase: string; roundTimerWasRunning: boolean;
-        p1FullBarWidth: number; p2FullBarWidth: number;
-      }) => {
-        const ci = this.charInfo();
-        this.emit("matchState", {
-          ...ci,
-          p1Health: evt.p1Health,
-          p2Health: evt.p2Health,
-          timerValue: evt.timerValue,
-          phase: evt.phase,
-          gameStarted: this.gameStarted,
-          roundTimerWasRunning: evt.roundTimerWasRunning,
-          p1FullBarWidth: evt.p1FullBarWidth,
-          p2FullBarWidth: evt.p2FullBarWidth,
-        });
-      });
-
-      // Wire text overlay detector events → logs + pixel analyzer
-      if (this.textEventDetector) {
-        this.textEventDetector.on("textOverlayAppeared", (evt: TextOverlayEvent) => {
-          console.log(`[game-runner] 📝 Text overlay APPEARED — peakRatio=${(evt.peakRatio * 100).toFixed(1)}% confirmFrames=${evt.confirmFrames}`);
-          // Forward to pixel analyzer for state machine integration
-          this.pixelAnalyzer?.onTextOverlayAppeared(evt);
-        });
-        this.textEventDetector.on("textOverlayCleared", () => {
-          console.log(`[game-runner] 📝 Text overlay CLEARED`);
-          this.pixelAnalyzer?.onTextOverlayCleared();
-        });
-      }
-
-      this.startHealthBarCapture();
+    } else if (this.templateMatcher) {
+      console.log(`[game-runner] 🧠 No memory map for ${this.rom}, using template-matching text detection`);
     } else {
       console.log(`[game-runner] 🧠 No detection method available for ${this.rom}`);
     }
@@ -511,15 +482,6 @@ export class GameRunner extends EventEmitter {
    * ffmpeg (see startFfmpegVideo, output fd 3). The separate x11grab was
    * starved by the 60fps main grab — frames arrived 2+ min late.
    *
-   * This method is kept as a no-op solely for call-site compatibility.
-   * The capture actually happens in startFfmpegVideo().
-   */
-  private startHealthBarCapture(): void {
-    this.displayW = (SYSTEM_RESOLUTIONS[this.system]?.w ?? 320) * UPSCALE;
-    this.displayH = (SYSTEM_RESOLUTIONS[this.system]?.h ?? 224) * UPSCALE;
-    // Capture is already set up in startFfmpegVideo (fd 3 output).
-  }
-
   // ── Portrait capture (diagnostic metadata for character select) ──
 
   /**
@@ -706,6 +668,80 @@ export class GameRunner extends EventEmitter {
     return this.portraitCaptureResult;
   }
 
+  // ── Template matching (text overlay detection) ──────────────────────
+
+  /**
+   * Process a single text-crop frame through the OpenCV template matcher.
+   *
+   * Uses backpressure: if a matching request is already in-flight, the new
+   * frame replaces the pending frame data (so the bridge always works on the
+   * freshest frame). When the in-flight request completes, if a newer frame
+   * arrived, it is immediately dispatched.
+   *
+   * On match: logs the event and emits a "textEvent" with cooldown to avoid
+   * duplicate fires for the same text.
+   */
+  private pendingTextFrame: Buffer | null = null;
+  private pendingTextFrameW = 0;
+  private pendingTextFrameH = 0;
+
+  private processTextFrame(frame: Buffer, w: number, h: number): void {
+    if (!this.templateMatcher) return;
+
+    // Store frame for potential retry / debug saves
+    this.latestTextFrame = Buffer.from(frame);
+    this.latestTextFrameW = w;
+    this.latestTextFrameH = h;
+
+    if (this.templateMatchInFlight) {
+      // Replace pending frame — only the freshest matters
+      this.pendingTextFrame = Buffer.from(frame);
+      this.pendingTextFrameW = w;
+      this.pendingTextFrameH = h;
+      return;
+    }
+
+    this.templateMatchInFlight = true;
+    this.doSendTextFrame(frame, w, h);
+  }
+
+  private async doSendTextFrame(frame: Buffer, w: number, h: number): Promise<void> {
+    try {
+      const result = await this.templateMatcher!.identify(frame, w, h);
+
+      // Check if a newer frame arrived while we were waiting
+      if (this.pendingTextFrame) {
+        const nextFrame = this.pendingTextFrame;
+        const nextW = this.pendingTextFrameW;
+        const nextH = this.pendingTextFrameH;
+        this.pendingTextFrame = null;
+        this.doSendTextFrame(nextFrame, nextW, nextH);
+        return;
+      }
+
+      this.templateMatchInFlight = false;
+
+      if (!result || !result.name) return;
+
+      const now = Date.now();
+      // Cooldown: suppress duplicate fires of the same text within the window
+      if (this.lastTextEvent?.name === result.name &&
+          now - this.lastTextEvent.time < this.TEXT_COOLDOWN_MS) {
+        return;
+      }
+
+      this.lastTextEvent = { name: result.name, time: now };
+      const pct = (result.confidence * 100).toFixed(1);
+      console.log(`[game-runner] 🎯 "${result.name}" detected (conf=${pct}%)`);
+
+      // Emit simple text event — no round/match tracking for now
+      this.emit("textEvent", { name: result.name, confidence: result.confidence });
+    } catch (err) {
+      this.templateMatchInFlight = false;
+      this.pendingTextFrame = null;
+    }
+  }
+
   // ── Calibration (template self-training) ────────────────────────────
 
   /**
@@ -779,6 +815,8 @@ export class GameRunner extends EventEmitter {
     const maxHealth = map.maxHealth;
     // Read a single chunk covering the lowest to highest address (health, chars, timer).
     const allAddrs = [map.p1, map.p2, map.timer, map.timerAlt, map.p1Char, map.p2Char, map.p1Mode, map.p2Mode];
+    if (map.p1PlayMode != null) allAddrs.push(map.p1PlayMode);
+    if (map.p2PlayMode != null) allAddrs.push(map.p2PlayMode);
     if (map.altChars) allAddrs.push(...map.altChars);
     if (map.teamSlots) allAddrs.push(...map.teamSlots);
     if (map.p1Active != null) allAddrs.push(map.p1Active);
@@ -800,6 +838,8 @@ export class GameRunner extends EventEmitter {
     const p2CharOffset = (map.p2Char - minAddr) * 2;
     const p1ModeOffset = (map.p1Mode - minAddr) * 2;
     const p2ModeOffset = (map.p2Mode - minAddr) * 2;
+    const p1PlayModeOff = map.p1PlayMode != null ? (map.p1PlayMode - minAddr) * 2 : -1;
+    const p2PlayModeOff = map.p2PlayMode != null ? (map.p2PlayMode - minAddr) * 2 : -1;
     const p1TeamOff = map.p1TeamBase != null ? (map.p1TeamBase - minAddr) * 2 : -1;
     const p2TeamOff = map.p2TeamBase != null ? (map.p2TeamBase - minAddr) * 2 : -1;
     const p1SlotOffs = map.p1TeamOffsets ?? [0, 1, 2];
@@ -858,10 +898,16 @@ export class GameRunner extends EventEmitter {
             const tHi = parseInt(hexBytes.substring(2, 4), 16);
             this.memTimer16 = tLo | (tHi << 8);
             this.memTimer = tLo;
+            // SFA2 SNES: timer is BCD-encoded. Decode to decimal seconds.
+            if (maxHealth === 0x60 && this.memTimer <= 0x99 && (this.memTimer >> 4) <= 9 && (this.memTimer & 0xF) <= 9) {
+              const bcdSeconds = ((this.memTimer >> 4) * 10) + (this.memTimer & 0xF);
+              this.memTimer16 = bcdSeconds;
+              this.memTimer = bcdSeconds;
+            }
             this.prevTimer16 = this.memTimer16;
             timerPollCount++;
             if (DEBUG_RAM && (timerPollCount <= 3 || timerPollCount % 30 === 0)) {
-              console.log(`[game-runner] ${this.readerTag} ⏱️ timer-only poll #${timerPollCount}: A83A=${this.memTimer} 16bit=${this.memTimer16}`);
+              console.log(`[game-runner] ${this.readerTag} ⏱️ timer-only poll #${timerPollCount}: timer=${this.memTimer} 16bit=${this.memTimer16}`);
             }
           }
           continue;
@@ -885,11 +931,19 @@ export class GameRunner extends EventEmitter {
           this.memHealthP2 = Math.min(100, Math.round((p2Raw / maxHealth) * 100));
           this.memTimer = parseInt(timerHex, 16);
           this.memTimer16 = parseInt(timerHex, 16) | (parseInt(timerHexHi, 16) << 8); // 16-bit LE: A83A | A83B<<8
+          // SFA2 SNES: timer is BCD-encoded (e.g. 0x57 = 57s). Decode to decimal seconds.
+          if (maxHealth === 0x60 && this.memTimer <= 0x99 && (this.memTimer >> 4) <= 9 && (this.memTimer & 0xF) <= 9) {
+            const bcdSeconds = ((this.memTimer >> 4) * 10) + (this.memTimer & 0xF);
+            this.memTimer = bcdSeconds;
+            this.memTimer16 = bcdSeconds;
+          }
           this.memTimerAlt = parseInt(timerAltHex, 16);
           this.memP1Char = parseInt(p1CharHex, 16);
           this.memP2Char = parseInt(p2CharHex, 16);
           this.memP1Mode = parseInt(p1ModeHex, 16);
           this.memP2Mode = parseInt(p2ModeHex, 16);
+          if (p1PlayModeOff >= 0) this.memP1PlayMode = parseInt(hexBytes.substring(p1PlayModeOff, p1PlayModeOff + 2), 16);
+          if (p2PlayModeOff >= 0) this.memP2PlayMode = parseInt(hexBytes.substring(p2PlayModeOff, p2PlayModeOff + 2), 16);
           // Match state flag (0x00 = char select, 0x40+ = in combat / round transition)
           if (matchFlagOff >= 0) {
             this.memMatchFlag = parseInt(hexBytes.substring(matchFlagOff, matchFlagOff + 2), 16);
@@ -1015,8 +1069,12 @@ export class GameRunner extends EventEmitter {
               p2Team: ci.p2Team,
               p1Active: this.memP1Active,
               p2Active: this.memP2Active,
+              p1ActiveName: ci.p1Char,
+              p2ActiveName: ci.p2Char,
               p1Mode: this.memP1Mode === 1 ? "ADVANCED" : "EXTRA",
               p2Mode: this.memP2Mode === 1 ? "ADVANCED" : "EXTRA",
+              p1PlayMode: maxHealth === 0x60 ? (this.memP1PlayMode === 1 ? "Auto" : "Manual") : undefined,
+              p2PlayMode: maxHealth === 0x60 ? (this.memP2PlayMode === 1 ? "Auto" : "Manual") : undefined,
               p1Health: this.memHealthP1,
               p2Health: this.memHealthP2,
               matchFlag: this.memMatchFlag,
@@ -1026,15 +1084,20 @@ export class GameRunner extends EventEmitter {
 
           // Verbose logging for first 100 reads (25s) to capture ephemeral team data during char select
           if (DEBUG_RAM && (successCount <= 100 || successCount % 30 === 0)) {
-            const p1Name = KOF98_CHARACTERS[this.memP1Char] || "?";
-            const p2Name = KOF98_CHARACTERS[this.memP2Char] || "?";
-            const p1Mode = this.memP1Mode === 1 ? "ADVANCED" : "EXTRA";
-            const p2Mode = this.memP2Mode === 1 ? "ADVANCED" : "EXTRA";
-            const p1LockStr = this.p1LockedTeam ? this.p1LockedTeam.map(c => KOF98_CHARACTERS[c] || `0x${c.toString(16)}`).join(",") : "unlocked";
-            const p2LockStr = this.p2LockedTeam ? this.p2LockedTeam.map(c => KOF98_CHARACTERS[c] || `0x${c.toString(16)}`).join(",") : "unlocked";
+            const charMap = maxHealth === 0x60 ? SFA2_CHARACTERS : KOF98_CHARACTERS;
+            const p1Name = charMap[this.memP1Char] || `0x${this.memP1Char.toString(16)}`;
+            const p2Name = charMap[this.memP2Char] || `0x${this.memP2Char.toString(16)}`;
+            const p1Mode = maxHealth === 0x60
+              ? (this.memP1PlayMode === 1 ? "Auto" : "Manual")
+              : (this.memP1Mode === 1 ? "ADVANCED" : "EXTRA");
+            const p2Mode = maxHealth === 0x60
+              ? (this.memP2PlayMode === 1 ? "Auto" : "Manual")
+              : (this.memP2Mode === 1 ? "ADVANCED" : "EXTRA");
+            const p1LockStr = this.p1LockedTeam ? this.p1LockedTeam.map(c => charMap[c] || `0x${c.toString(16)}`).join(",") : "unlocked";
+            const p2LockStr = this.p2LockedTeam ? this.p2LockedTeam.map(c => charMap[c] || `0x${c.toString(16)}`).join(",") : "unlocked";
             // Show discovered team slots from roster area
-            const p1SlotStr = this.p1TeamSlots.length === 3 ? this.p1TeamSlots.map(id => KOF98_CHARACTERS[id] || `0x${id.toString(16)}`).join("|") : "?";
-            const p2SlotStr = this.p2TeamSlots.length === 3 ? this.p2TeamSlots.map(id => KOF98_CHARACTERS[id] || `0x${id.toString(16)}`).join("|") : "?";
+            const p1SlotStr = this.p1TeamSlots.length === 3 ? this.p1TeamSlots.map(id => charMap[id] || `0x${id.toString(16)}`).join("|") : "?";
+            const p2SlotStr = this.p2TeamSlots.length === 3 ? this.p2TeamSlots.map(id => charMap[id] || `0x${id.toString(16)}`).join("|") : "?";
             // Log alternative character addresses for debugging
             let altStr = "";
             if (map.altChars) {
@@ -1084,7 +1147,7 @@ export class GameRunner extends EventEmitter {
                 hexDump += ` | P2 83E0-8400: ${p2TeamStr.trim()}`;
               }
             }
-            const nmC = (id: number) => KOF98_CHARACTERS[id] || `0x${id.toString(16)}`;
+            const nmC = (id: number) => charMap[id] || `0x${id.toString(16)}`;
             const p1ActiveStr = this.memP1Active >= 0 ? nmC(this.memP1Active) : "?";
             const p2ActiveStr = this.memP2Active >= 0 ? nmC(this.memP2Active) : "?";
             const p1OrderStr = this.p1SelectOrder.length ? this.p1SelectOrder.map(nmC).join(">") : "?";
@@ -1848,7 +1911,7 @@ export class GameRunner extends EventEmitter {
 
     // ── Check match end ─────────────────────────────────────────
     // Wins needed: per-ROM config, system default, or 3 as ultimate fallback.
-    const winsNeeded = getPixelConfig(this.rom)?.winsNeeded ?? (this.system === "snes" ? 2 : 3);
+    const winsNeeded = (this.system === "snes" ? 2 : 3);
     if (!this.matchEnded && (this.p1Losses >= winsNeeded || this.p2Losses >= winsNeeded)) {
       this.matchEnded = true;
       this.matchNumber++;
@@ -1874,38 +1937,6 @@ export class GameRunner extends EventEmitter {
     this.previousP2Health = p2Health;
   }
 
-  /** Suspend pixel analysis (frames dropped). Used during char select, where
-   *  the portrait grid + selection countdown fabricate rounds. Resumed by
-   *  resetHealthWarmup() when combat starts. */
-  suspendPixelAnalysis(reason: string): void {
-    if (this.pixelAnalysisSuspended) return;
-    this.pixelAnalysisSuspended = true;
-    console.log(`[game-runner] ${this.readerTag} ⏸️ Pixel analysis suspended (${reason})`);
-  }
-
-  /** Reset health bar warmup counters. Delegates to PixelMatchAnalyzer for pixel-based games.
-   *  For KOF98 (RAM-based), this is a no-op — the memory reader handles its own state. */
-  resetHealthWarmup(): void {
-    this.healthPollErrorCount = 0;
-    this.fastWarmup = true;
-    // Resume pixel analysis if it was suspended for char select.
-    // Only reset the state machine when transitioning suspended→active —
-    // calling reset() mid-round re-triggers the KO detection path.
-    // Never reset after a match has ended (matchEnded flag prevents
-    // phantom rounds from attract/demo mode).
-    if (this.pixelAnalysisSuspended && !this.matchEnded) {
-      this.pixelAnalysisSuspended = false;
-      console.log(`[game-runner] ${this.readerTag} ▶️ Pixel analysis resumed (combat starting)`);
-      if (this.pixelAnalyzer) {
-        this.pixelAnalyzer.reset(true);
-      }
-      if (this.textEventDetector) {
-        this.textEventDetector.reset();
-      }
-    }
-    console.log("[game-runner] 🧠 Health warmup reset (combat starting)");
-  }
-
   /** Start the debug health log timer. Actual detection runs continuously via TCP health reader.
    *  Does NOT interfere with the health reader's polling interval. */
   startMemoryWatcher(): void {
@@ -1923,11 +1954,10 @@ export class GameRunner extends EventEmitter {
     this.healthPollTimer = setInterval(() => {
       if (!this.running || this.matchEnded) return;
       if (this.previousP1Health >= 0) {
-        const p1Name = KOF98_CHARACTERS[this.memP1Char] || "?";
-        const p2Name = KOF98_CHARACTERS[this.memP2Char] || "?";
-        const lastTimer = this.pixelAnalyzer?.getTimerValue() ?? -1;
-        const pixelTimer = lastTimer >= 0 ? ` ⏱️pix=${lastTimer}` : "";
-        console.log(`[game-runner] 🧠 Health: P1=${this.previousP1Health}% ${p1Name} P2=${this.previousP2Health}% ${p2Name} ⏱️A83A=${this.memTimer}(16b=${this.memTimer16}) 85D2=${this.memTimerAlt}${pixelTimer} ko=${this.koDetected} losses: P1=${this.p1Losses} P2=${this.p2Losses}`);
+        const charMap = this.healthMemMap?.maxHealth === 0x60 ? SFA2_CHARACTERS : KOF98_CHARACTERS;
+        const p1Name = charMap[this.memP1Char] || `0x${this.memP1Char.toString(16)}`;
+        const p2Name = charMap[this.memP2Char] || `0x${this.memP2Char.toString(16)}`;
+        console.log(`[game-runner] 🧠 Health: P1=${this.previousP1Health}% ${p1Name} P2=${this.previousP2Health}% ${p2Name} ⏱️=${this.memTimer}s losses: P1=${this.p1Losses} P2=${this.p2Losses}`);
       }
     }, 10000);
   }
@@ -2128,44 +2158,24 @@ export class GameRunner extends EventEmitter {
       "pipe:1",
     ];
 
-    // Output 2 (fd 3): health bar stripe — crop + raw rgb24. This avoids a
-    // SECOND x11grab that gets starved on the shared X server (observed:
-    // separate 2fps stripe ffmpeg delivered frames 2+ minutes late).
-    let hasStripeOutput = false;
+    // Output 2 (fd 3): center-screen text overlay crop — raw rgb24 for template matching.
     let hasTextOutput = false;
-    if (pixelConfig) {
+    if (pixelConfig?.textEvents) {
+      const te = pixelConfig.textEvents;
       args.push(
         "-map", "0:v",
-        "-vf", `crop=${w}:${pixelConfig.stripeH}:0:${pixelConfig.stripeY}`,
+        "-vf", `crop=${te.textW}:${te.textH}:${te.textX}:${te.textY}`,
         "-c:v", "rawvideo",
         "-pix_fmt", "rgb24",
         "-f", "rawvideo",
         "-flush_packets", "1",
         "pipe:3",
       );
-      hasStripeOutput = true;
-
-      // Output 3 (fd 4): center-screen text overlay crop — raw rgb24.
-      // Captures ROUND, KO, PERFECT, DRAW GAME, TIME OVER, FIGHT! text
-      // for brightness-spike detection as a secondary signal.
-      if (pixelConfig.textEvents) {
-        const te = pixelConfig.textEvents;
-        args.push(
-          "-map", "0:v",
-          "-vf", `crop=${te.textW}:${te.textH}:${te.textX}:${te.textY}`,
-          "-c:v", "rawvideo",
-          "-pix_fmt", "rgb24",
-          "-f", "rawvideo",
-          "-flush_packets", "1",
-          "pipe:4",
-        );
-        hasTextOutput = true;
-      }
+      hasTextOutput = true;
     }
 
     this.ffmpegVideo = spawn("ffmpeg", args, {
       stdio: ["ignore", "pipe", "pipe",
-              hasStripeOutput ? "pipe" : "ignore",
               hasTextOutput ? "pipe" : "ignore"],
       env: { ...process.env, DISPLAY: this.display },
     });
@@ -2174,58 +2184,30 @@ export class GameRunner extends EventEmitter {
       this.handleVideoChunk(chunk);
     });
 
-    // Read health bar stripe from fd 3 (if pixel analysis is active)
-    if (hasStripeOutput && pixelConfig) {
-      const stripeH = pixelConfig.stripeH;
-      const stripeY = pixelConfig.stripeY;
-      const stripeFd: any = (this.ffmpegVideo as any).stdio?.[3];
-      if (stripeFd) {
-        this.healthFrameBuf = Buffer.alloc(0);
-        this.lastHealthFrameAt = Date.now();
-        stripeFd.on("data", (chunk: Buffer) => {
-          this.lastHealthFrameAt = Date.now();
-          this.healthFrameBuf = Buffer.concat([this.healthFrameBuf, chunk]);
-          const frameSize = w * stripeH * 3;
-          while (this.healthFrameBuf.length >= frameSize) {
-            const frame = this.healthFrameBuf.subarray(0, frameSize);
-            this.healthFrameBuf = this.healthFrameBuf.subarray(frameSize);
-            if (!this.pixelAnalysisSuspended) {
-              this.pixelAnalyzer?.processFrame(frame, w, stripeH);
-            }
-          }
-          if (this.healthFrameBuf.length > frameSize * 3) {
-            this.healthFrameBuf = Buffer.alloc(0);
-          }
-        });
-      }
-      console.log(`[game-runner] 🧠 Health bar capture: stripe from main ffmpeg (${w}x${stripeH} at y=${stripeY})`);
-    }
-
-    // Read text overlay frames from fd 4 (if text event detection is active)
-    if (hasTextOutput && pixelConfig?.textEvents) {
-      const textW = pixelConfig.textEvents.textW;
-      const textH = pixelConfig.textEvents.textH;
-      const textX = pixelConfig.textEvents.textX;
-      const textY = pixelConfig.textEvents.textY;
-      const textFd: any = (this.ffmpegVideo as any).stdio?.[4];
-      if (textFd && this.textEventDetector) {
+    // Read text overlay frames from fd 3 — feed directly to template matcher
+    if (hasTextOutput && pixelConfig?.textEvents && this.templateMatcher) {
+      const te = pixelConfig.textEvents;
+      const textFd: any = (this.ffmpegVideo as any).stdio?.[3];
+      if (textFd) {
         this.textFrameBuf = Buffer.alloc(0);
         textFd.on("data", (chunk: Buffer) => {
           this.textFrameBuf = Buffer.concat([this.textFrameBuf, chunk]);
-          const frameSize = textW * textH * 3;
+          const frameSize = te.textW * te.textH * 3;
           while (this.textFrameBuf.length >= frameSize) {
             const frame = this.textFrameBuf.subarray(0, frameSize);
             this.textFrameBuf = this.textFrameBuf.subarray(frameSize);
-            if (!this.pixelAnalysisSuspended) {
-              this.textEventDetector?.processFrame(frame, textW, textH);
-            }
+            // Store latest frame + trigger template matching (with backpressure)
+            this.latestTextFrame = Buffer.from(frame);
+            this.latestTextFrameW = te.textW;
+            this.latestTextFrameH = te.textH;
+            this.processTextFrame(frame, te.textW, te.textH);
           }
           if (this.textFrameBuf.length > frameSize * 3) {
             this.textFrameBuf = Buffer.alloc(0);
           }
         });
       }
-      console.log(`[game-runner] 📝 Text overlay capture: crop from main ffmpeg (${textW}x${textH} at ${textX},${textY})`);
+      console.log(`[game-runner] 📝 Text overlay capture: crop from main ffmpeg (${te.textW}x${te.textH} at ${te.textX},${te.textY})`);
     }
 
     this.ffmpegVideo.stderr?.on("data", (data: Buffer) => {
@@ -2713,8 +2695,9 @@ export class GameRunner extends EventEmitter {
     this.healthStableFrames = 0;
     this.healthStableFramesHealthy = 0;
     this.fastWarmup = true;
-    // Reset pixel state-machine detection (delegates to PixelMatchAnalyzer)
-    this.pixelAnalyzer?.reset(true);
+    // Reset pixel text detection state (cooldown, in-flight flag)
+    this.lastTextEvent = null;
+    this.templateMatchInFlight = false;
     // Resume LAST, once all scoring/team state is clean and re-armed. Await convergence so
     // callers (ws-handler) know the game is actually running before injecting coin/START.
     await this.resume();

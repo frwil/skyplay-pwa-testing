@@ -159,17 +159,23 @@ export interface EmulatorState {
   p2CharName: string | null;
 }
 
-/** Live in-match state for the on-canvas HUD (cloud/neogeo only). */
+/** Live in-match state for the on-canvas HUD (cloud/neogeo/snes only). */
 export interface MatchStateData {
   /** Team rosters as character names, in-game roster order. */
   p1Team: string[];
   p2Team: string[];
-  /** Currently-fighting character IDs (0x00-0x25); -1 when unknown. */
+  /** Currently-fighting character IDs (0x00-0x25 KOF, 0x00-0x11 SFA2); -1 when unknown. */
   p1Active: number;
   p2Active: number;
-  /** Gauge mode per player. */
+  /** Currently-fighting character display name (resolved server-side, game-aware). */
+  p1ActiveName?: string;
+  p2ActiveName?: string;
+  /** Gauge mode per player (KOF98/2002). */
   p1Mode: "ADVANCED" | "EXTRA";
   p2Mode: "ADVANCED" | "EXTRA";
+  /** Play mode per player (SFA2: "Auto" or "Manual"). */
+  p1PlayMode?: "Auto" | "Manual";
+  p2PlayMode?: "Auto" | "Manual";
   /** Health percentages (0-100). */
   p1Health: number;
   p2Health: number;
@@ -204,9 +210,12 @@ export interface DuelMatchResult {
   /** Character IDs in the order each player selected them. */
   p1SelectOrder?: number[];
   p2SelectOrder?: number[];
-  /** Gauge mode per player. */
+  /** Gauge mode per player (KOF98/2002 only; undefined for SFA2). */
   p1Mode?: "ADVANCED" | "EXTRA";
   p2Mode?: "ADVANCED" | "EXTRA";
+  /** Play mode per player (SFA2 only: "Auto" or "Manual"; undefined for KOF98). */
+  p1PlayMode?: "Auto" | "Manual";
+  p2PlayMode?: "Auto" | "Manual";
   /** Rounds won per character (charId → win count) for the end-match overlay tally. */
   p1CharWins?: Record<number, number>;
   p2CharWins?: Record<number, number>;

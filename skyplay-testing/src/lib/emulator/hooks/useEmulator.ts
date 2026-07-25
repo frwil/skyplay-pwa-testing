@@ -122,6 +122,7 @@ export function useEmulator(system: SystemType = "nes") {
         p1TeamIds?: number[]; p2TeamIds?: number[];
         p1SelectOrder?: number[]; p2SelectOrder?: number[];
         p1Mode?: "ADVANCED" | "EXTRA"; p2Mode?: "ADVANCED" | "EXTRA";
+        p1PlayMode?: "Auto" | "Manual"; p2PlayMode?: "Auto" | "Manual";
         p1CharWins?: Record<number, number>; p2CharWins?: Record<number, number>;
         p1CharName?: string; p2CharName?: string;
       },

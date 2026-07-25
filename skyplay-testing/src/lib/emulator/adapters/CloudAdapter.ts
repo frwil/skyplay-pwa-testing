@@ -698,7 +698,7 @@ export class CloudAdapter implements EmulatorAdapter {
           break;
         }
         case "match_end": {
-          const meData = msg as unknown as { winner: number; loser: number; p1Losses: number; p2Losses: number; matchNumber?: number; totalRounds?: number; perfectKos?: number; p1TeamIds?: number[]; p2TeamIds?: number[]; p1SelectOrder?: number[]; p2SelectOrder?: number[]; p1Mode?: "ADVANCED" | "EXTRA"; p2Mode?: "ADVANCED" | "EXTRA"; p1CharWins?: Record<number, number>; p2CharWins?: Record<number, number>; p1CharName?: string; p2CharName?: string };
+          const meData = msg as unknown as { winner: number; loser: number; p1Losses: number; p2Losses: number; matchNumber?: number; totalRounds?: number; perfectKos?: number; p1TeamIds?: number[]; p2TeamIds?: number[]; p1SelectOrder?: number[]; p2SelectOrder?: number[]; p1Mode?: "ADVANCED" | "EXTRA"; p2Mode?: "ADVANCED" | "EXTRA"; p1PlayMode?: "Auto" | "Manual"; p2PlayMode?: "Auto" | "Manual"; p1CharWins?: Record<number, number>; p2CharWins?: Record<number, number>; p1CharName?: string; p2CharName?: string };
           console.log(`[Cloud:${this.systemType}] 🏁 MATCH #${meData.matchNumber || "?"} OVER! P${meData.winner} wins! Losses: P1=${meData.p1Losses} P2=${meData.p2Losses}`);
           // Capture character names from match_end for stat display
           if (meData.p1CharName) { this.p1CharName = meData.p1CharName; }
@@ -709,6 +709,7 @@ export class CloudAdapter implements EmulatorAdapter {
               p1TeamIds: meData.p1TeamIds, p2TeamIds: meData.p2TeamIds,
               p1SelectOrder: meData.p1SelectOrder, p2SelectOrder: meData.p2SelectOrder,
               p1Mode: meData.p1Mode, p2Mode: meData.p2Mode,
+              p1PlayMode: meData.p1PlayMode, p2PlayMode: meData.p2PlayMode,
               p1CharWins: meData.p1CharWins, p2CharWins: meData.p2CharWins,
               p1CharName: meData.p1CharName, p2CharName: meData.p2CharName,
             },
@@ -1090,6 +1091,7 @@ export interface CloudCallbacks {
       p1TeamIds?: number[]; p2TeamIds?: number[];
       p1SelectOrder?: number[]; p2SelectOrder?: number[];
       p1Mode?: "ADVANCED" | "EXTRA"; p2Mode?: "ADVANCED" | "EXTRA";
+      p1PlayMode?: "Auto" | "Manual"; p2PlayMode?: "Auto" | "Manual";
       p1CharWins?: Record<number, number>; p2CharWins?: Record<number, number>;
       p1CharName?: string; p2CharName?: string;
     },

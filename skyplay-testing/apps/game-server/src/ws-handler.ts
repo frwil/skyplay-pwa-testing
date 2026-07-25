@@ -376,7 +376,7 @@ async function handleInit(
     }
   });
 
-  runner.on("matchEnd", (data: { winner: number; loser: number; p1Losses: number; p2Losses: number; matchNumber?: number; totalRounds?: number; perfectKos?: number; p1TeamIds?: number[]; p2TeamIds?: number[]; p1SelectOrder?: number[]; p2SelectOrder?: number[]; p1Mode?: string; p2Mode?: string; p1CharWins?: Record<number, number>; p2CharWins?: Record<number, number> }) => {
+  runner.on("matchEnd", (data: { winner: number; loser: number; p1Losses: number; p2Losses: number; matchNumber?: number; totalRounds?: number; perfectKos?: number; p1TeamIds?: number[]; p2TeamIds?: number[]; p1SelectOrder?: number[]; p2SelectOrder?: number[]; p1Mode?: string; p2Mode?: string; p1PlayMode?: string; p2PlayMode?: string; p1CharWins?: Record<number, number>; p2CharWins?: Record<number, number> }) => {
     const resultLabel = data.winner === 0 ? "DRAW!" : `P${data.winner} wins!`;
     console.log(`[ws] 🏁 MATCH OVER! ${resultLabel} Losses: P1=${data.p1Losses} P2=${data.p2Losses}`);
 
@@ -422,6 +422,8 @@ async function handleInit(
       p2SelectOrder: data.p2SelectOrder,
       p1Mode: data.p1Mode as "ADVANCED" | "EXTRA" | undefined,
       p2Mode: data.p2Mode as "ADVANCED" | "EXTRA" | undefined,
+      p1PlayMode: data.p1PlayMode as "Auto" | "Manual" | undefined,
+      p2PlayMode: data.p2PlayMode as "Auto" | "Manual" | undefined,
       p1CharWins: data.p1CharWins,
       p2CharWins: data.p2CharWins,
       p1CharName: snesP1Name,
@@ -463,12 +465,7 @@ async function handleInit(
     sendToSession(session, { type: "match_state", ...data });
   });
 
-  // Suspend pixel analysis BEFORE starting ffmpeg so attract/demo mode
-  // frames never reach the analyzer. Analysis is resumed later by
-  // resetHealthWarmup() once the game actually enters combat.
-  runner.suspendPixelAnalysis("pre-combat menus/attract");
-
-  // Start the game
+  // Start the game (text detector always runs, auto-resumes health analysis on FIGHT!)
   runner.start().then(({ width, height }) => {
     // Guard: if stop() was called during async setup (player disconnected while
     // waiting for RetroArch), this runner is stopped — don't proceed.
@@ -532,7 +529,8 @@ async function handleInit(
         // Everything before combat (title screen, ATTRACT DEMO, menus, char
         // select) must NOT be analyzed: the attract demo is a real CPU-vs-CPU
         // fight with a live timer and draining bars — it fabricates KOs.
-        runner.suspendPixelAnalysis("pre-combat menus/attract");
+        // Text detector is always running; roundActive guard prevents
+        // attract-mode KOs from fabricating rounds (FIGHT! never seen).
 
         setTimeout(async () => {
           if (session.status !== "running") return;
@@ -565,7 +563,6 @@ async function handleInit(
             await sleep(1500);
             if (session.status !== "running") return;
             console.log(`[ws] 🎮 SFA2 CPU: A → begin match for ${msg.sessionId}`);
-            runner.resetHealthWarmup();
           }
         }, startDelay);
       }
@@ -702,8 +699,7 @@ function startCharSelectPhase(
   session.charSelectActive = true;
   // Suspend pixel analysis: the portrait grid reads as "healthy bars" and the
   // selection countdown ticks like a fight timer → fabricated rounds.
-  // Resumed by runner.resetHealthWarmup() when combat starts.
-  runner.suspendPixelAnalysis("char select");
+  // Text detector always runs — no need to suspend during char select.
   session.p1CursorRow = grid.startRow;
   session.p1CursorCol = grid.startCol;
   // P2 starts at the RIGHT side of the grid (mirror of P1).
@@ -748,14 +744,27 @@ function startCharSelectPhase(
 
   sendToSession(session, { type: "char_select_start", timeout: hasTimeout ? CHAR_SELECT_TIMEOUT_MS : 0 });
 
-  // ── Auto-lock timeout (KOF98 only) ───────────────────────────────
-  // KOF98 has an in-game char-select timer; SFA2 does not.
+  // ── Auto-lock timeout ─────────────────────────────────────────
+  // KOF98: in-game timer, auto-lock after 30s.
+  // SFA2 CPU: no in-game timer, auto-lock after 5s (enough for portrait capture).
+  // SFA2 PvP: no timeout — players confirm manually. Text overlay detector
+  // runs continuously and auto-resumes pixel analysis when FIGHT! is detected,
+  // so no timer-based resume guesswork is needed.
   if (hasTimeout) {
     session.charSelectTimer = setTimeout(() => {
       if (!session.charSelectActive) return;
       console.log(`[ws] ⏰ Char select TIMEOUT for ${session.id} — auto-locking`);
       finalizeCharSelect(session, runner, grid);
     }, CHAR_SELECT_TIMEOUT_MS);
+  } else if (session.mode === "cpu") {
+    // SFA2 CPU: auto-lock after portrait capture completes
+    const cpuAutoLockMs = 5000;
+    console.log(`[ws] 🤖 CPU auto-lock scheduled in ${cpuAutoLockMs}ms for ${session.id}`);
+    session.charSelectTimer = setTimeout(() => {
+      if (!session.charSelectActive) return;
+      console.log(`[ws] 🤖 CPU auto-lock firing for ${session.id}`);
+      finalizeCharSelect(session, runner, grid);
+    }, cpuAutoLockMs);
   }
 }
 
@@ -915,10 +924,8 @@ function finalizeCharSelect(
       } catch (e) { console.warn("[ws] ⚠️ Screenshot failed:", e); }
     }, 30000);
 
-    // Resume pixel analysis. CPU mode: 15s is enough for char confirm → VS → FIGHT.
-    // PvP mode: keep the generous 90s to account for human decision time.
-    const resumeDelay = session.mode === "cpu" ? 15000 : 90000;
-    setTimeout(() => { runner.resetHealthWarmup(); }, resumeDelay);
+    // Text detector auto-resumes health analysis when FIGHT! is detected —
+    // no timer-based resume needed.
   }, ADVANCE_DELAY);
 }
 
@@ -1344,18 +1351,13 @@ function startGameAutoSequence(
         };
 
         // ── START spam DISABLED: pressing START during intros can PAUSE the
-        //     game on SNES instead of skipping them. The timer-based WARMUP
-        //     exit in pixel-match-analyzer handles the intro delay without
-        //     needing button presses. Let the game play out naturally.
+        //     game on SNES instead of skipping them. Let the intro play out;
+        //     template matching detects FIGHT! text when combat starts.
+        //     No button presses needed for intro skip.
         // const startPhases = [1500, 3500, 5500, 7500, 9500];
         // for (const delay of startPhases) { ... }
 
-        // Everything before combat (title screen, ATTRACT DEMO, menus, char
-        // select) must NOT be analyzed: the attract demo is a real CPU-vs-CPU
-        // fight with a live timer and draining bars — it fabricates KOs.
-        // resetHealthWarmup() resumes analysis when combat actually starts.
-        runner.suspendPixelAnalysis("pre-combat menus/attract");
-
+        // Text detector always runs — auto-resumes health analysis on FIGHT! detection.
         const navDelay = 6000;
         setTimeout(async () => {
           if (session.status !== "running") return;
@@ -1390,7 +1392,6 @@ function startGameAutoSequence(
               await sleep(1500);
               if (session.status !== "running") return;
               console.log(`[ws] 🎮 SNES: START → begin match for ${sessionId}`);
-              runner.resetHealthWarmup();
               tap(1, startButton);
               await sleep(200);
               tap(2, startButton);

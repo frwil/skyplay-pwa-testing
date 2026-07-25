@@ -527,7 +527,7 @@ export default function DuelPage() {
       setRevengePhase("stats");
       // Draw match (winner 0) auto-returns to the Cage after a short countdown;
       // decisive matches keep the (test-frozen) 30 so players can read the stats.
-      setCountdown(emu.duelMatchResult.winner === 0 ? 10 : 30);
+      setCountdown(emu.duelMatchResult.winner === 0 ? 20 : 60);
     } else {
       setRevengePhase(null);
       setBalanceAnim(null);
@@ -535,7 +535,7 @@ export default function DuelPage() {
   }, [emu.duelMatchResult]);
 
   // Countdown while showing stats (no revenge in progress) → back to lobby at 0.
-  // Décisif : 30 s pour lire les stats puis retour Cage. Nul (winner 0) : 10 s (voir setCountdown).
+  // Décisif : 60 s pour lire les stats puis retour Cage. Nul (winner 0) : 20 s (voir setCountdown).
   // Le passage en "requesting"/"incoming" (revanche) stoppe le décompte via la garde
   // revengePhase !== "stats".
   useEffect(() => {

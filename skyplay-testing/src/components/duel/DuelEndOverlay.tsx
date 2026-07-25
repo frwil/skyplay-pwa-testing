@@ -3,6 +3,7 @@
 import { useState } from "react";
 import type { DuelMatchResult } from "@/lib/emulator/types";
 import { charName } from "@/lib/emulator/kof98Characters";
+import { sfa2CharName, SFA2_CHAR_ID_MIN, SFA2_CHAR_ID_MAX } from "@/lib/emulator/sfa2Characters";
 import { useTranslation } from "@/lib/i18n/TranslationContext";
 import type { Dictionary } from "@/lib/i18n/types";
 import AnimatedNumber from "./AnimatedNumber";
@@ -62,10 +63,14 @@ interface DuelEndOverlayProps {
  * Ordered roster for display: the full team (3 slots — reliable) ordered by the
  * known selection order first, then any remaining roster characters. Selection
  * order is only applied when known (it fills in as players enter rounds).
+ *
+ * For SFA2 (single character, no team), the team array has exactly one entry.
  */
-function orderedRoster(team?: number[], select?: number[]): number[] {
-  const roster = (team || []).filter((id) => id >= 0x00 && id <= 0x25);
-  const order = (select || []).filter((id) => id >= 0x00 && id <= 0x25);
+function orderedRoster(team?: number[], select?: number[], isSfa2 = false): number[] {
+  const minId = isSfa2 ? SFA2_CHAR_ID_MIN : 0x00;
+  const maxId = isSfa2 ? SFA2_CHAR_ID_MAX : 0x25;
+  const roster = (team || []).filter((id) => id >= minId && id <= maxId);
+  const order = (select || []).filter((id) => id >= minId && id <= maxId);
   if (!order.length) return roster;
   const seen = new Set(order);
   return [...order, ...roster.filter((id) => !seen.has(id))];
@@ -86,6 +91,9 @@ export default function DuelEndOverlay({
 }: DuelEndOverlayProps) {
   const { t } = useTranslation();
   const [showDetails, setShowDetails] = useState(false);
+
+  // Detect SFA2 from play mode presence (SFA2 has p1PlayMode/p2PlayMode; KOF98 has p1Mode/p2Mode)
+  const isSfa2 = result.p1PlayMode !== undefined || result.p2PlayMode !== undefined;
 
   const isDraw = result.winner === 0;
   const p1Wins = matchHistory.filter((r) => r.winner === 1).length;
@@ -147,21 +155,23 @@ export default function DuelEndOverlay({
             title={localSide === 1 ? t.duel.you : t.duel.opponent}
             profile={localSide === 1 ? youProfile : oppProfile}
             highlight={localSide === 1}
-            mode={result.p1Mode}
-            roster={orderedRoster(result.p1TeamIds, result.p1SelectOrder)}
+            mode={result.p1PlayMode ?? result.p1Mode}
+            roster={orderedRoster(result.p1TeamIds, result.p1SelectOrder, isSfa2)}
             select={result.p1SelectOrder}
             charWins={result.p1CharWins}
             winsLabel={t.duel.wins}
+            isSfa2={isSfa2}
           />
           <TeamColumn
             title={localSide === 2 ? t.duel.you : t.duel.opponent}
             profile={localSide === 2 ? youProfile : oppProfile}
             highlight={localSide === 2}
-            mode={result.p2Mode}
-            roster={orderedRoster(result.p2TeamIds, result.p2SelectOrder)}
+            mode={result.p2PlayMode ?? result.p2Mode}
+            roster={orderedRoster(result.p2TeamIds, result.p2SelectOrder, isSfa2)}
             select={result.p2SelectOrder}
             charWins={result.p2CharWins}
             winsLabel={t.duel.wins}
+            isSfa2={isSfa2}
           />
         </div>
 
@@ -336,19 +346,26 @@ function BalanceCell({
 }
 
 function TeamColumn({
-  title, profile, highlight, mode, roster, select, charWins, winsLabel,
+  title, profile, highlight, mode, roster, select, charWins, winsLabel, isSfa2 = false,
 }: {
   title: string;
   profile?: PlayerProfile;
   highlight: boolean;
-  mode?: "ADVANCED" | "EXTRA";
+  mode?: "ADVANCED" | "EXTRA" | "Auto" | "Manual";
   roster: number[];
   select?: number[];
   charWins?: Record<number, number>;
   winsLabel: string;
+  isSfa2?: boolean;
 }) {
-  const modeColor = mode === "ADVANCED" ? "#60a5fa" : "#fbbf24";
-  const order = (select || []).filter((id) => id >= 0x00 && id <= 0x25);
+  const resolveName = isSfa2 ? sfa2CharName : charName;
+  const modeColor = mode === "Auto" ? "rgba(52,211,153,0.9)"
+    : mode === "Manual" ? "rgba(148,163,184,0.9)"
+    : mode === "ADVANCED" ? "#60a5fa"
+    : "#fbbf24";
+  const minId = isSfa2 ? SFA2_CHAR_ID_MIN : 0x00;
+  const maxId = isSfa2 ? SFA2_CHAR_ID_MAX : 0x25;
+  const order = (select || []).filter((id) => id >= minId && id <= maxId);
   const wins = charWins || {};
   // A character "participated" if it entered a round (selection order) or has any win.
   const participated = (id: number) => order.includes(id) || (wins[id] ?? 0) > 0;
@@ -393,7 +410,7 @@ function TeamColumn({
           const w = wins[id] ?? 0;
           return (
             <li key={`${id}-${i}`} className="flex items-center justify-between gap-2">
-              <span className="text-[11px] font-semibold text-white/85">{charName(id)}</span>
+              <span className="text-[11px] font-semibold text-white/85">{resolveName(id)}</span>
               {participated(id) ? (
                 <span className="flex items-center gap-0.5 text-[11px] font-bold tabular-nums text-white/90">
                   <Trophy size={10} style={{ color: "#fbbf24" }} /> {w}
@@ -421,12 +438,15 @@ function MatchBreakdown({ matchHistory, localSide }: {
   localSide: 1 | 2;
 }) {
   const { t } = useTranslation();
+  // Detect SFA2 from any match result's play mode
+  const isSfa2 = matchHistory.some(m => m.p1PlayMode !== undefined || m.p2PlayMode !== undefined);
+  const resolveName = isSfa2 ? sfa2CharName : charName;
 
   const rosterLine = (team?: number[], select?: number[], wins?: Record<number, number>): string => {
-    const ids = orderedRoster(team, select);
+    const ids = orderedRoster(team, select, isSfa2);
     if (ids.length === 0) return "—";
     const w = wins || {};
-    return ids.map((id) => ((w[id] ?? 0) > 0 ? `${charName(id)}·${w[id]}` : charName(id))).join(", ");
+    return ids.map((id) => ((w[id] ?? 0) > 0 ? `${resolveName(id)}·${w[id]}` : resolveName(id))).join(", ");
   };
 
   return (
@@ -442,11 +462,13 @@ function MatchBreakdown({ matchHistory, localSide }: {
         const youTeam = localSide === 1 ? m.p1TeamIds : m.p2TeamIds;
         const youOrder = localSide === 1 ? m.p1SelectOrder : m.p2SelectOrder;
         const youWins = localSide === 1 ? m.p1CharWins : m.p2CharWins;
-        const youMode = localSide === 1 ? m.p1Mode : m.p2Mode;
+        const youMode = (localSide === 1 ? m.p1PlayMode : m.p2PlayMode)
+          ?? (localSide === 1 ? m.p1Mode : m.p2Mode);
         const oppTeam = localSide === 1 ? m.p2TeamIds : m.p1TeamIds;
         const oppOrder = localSide === 1 ? m.p2SelectOrder : m.p1SelectOrder;
         const oppWins = localSide === 1 ? m.p2CharWins : m.p1CharWins;
-        const oppMode = localSide === 1 ? m.p2Mode : m.p1Mode;
+        const oppMode = (localSide === 1 ? m.p2PlayMode : m.p1PlayMode)
+          ?? (localSide === 1 ? m.p2Mode : m.p1Mode);
         return (
           <div key={i} className="rounded-xl border px-3 py-2" style={{ borderColor: `${color}33`, backgroundColor: bg }}>
             <div className="flex items-center justify-between">

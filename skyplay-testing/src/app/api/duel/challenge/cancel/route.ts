@@ -93,14 +93,14 @@ export async function POST(req: NextRequest) {
         sql: `INSERT INTO netplay_notifications (session_id, user_id, from_user_id, from_username, type, challenge_id, message)
               VALUES (?, ?, ?, ?, 'duel_challenge_expired', ?, ?)`,
         args: [challengeId, row.target_id, user.userId, cancelerName, challengeId,
-          `Le défi de ${cancelerName} a expiré (pas de réponse après 30 secondes).`],
+          `Le défi de ${cancelerName} a expiré (pas de réponse après 60 secondes).`],
       });
       // Notify the challenger (confirmation)
       await db.execute({
         sql: `INSERT INTO netplay_notifications (session_id, user_id, from_user_id, from_username, type, challenge_id, message)
               VALUES (?, ?, ?, ?, 'duel_challenge_expired', ?, ?)`,
         args: [challengeId, user.userId, row.target_id, targetName, challengeId,
-          `Votre défi à ${targetName} a expiré (pas de réponse après 30 secondes).`],
+          `Votre défi à ${targetName} a expiré (pas de réponse après 60 secondes).`],
       });
     } finally {
       await db.execute("PRAGMA foreign_keys = ON");

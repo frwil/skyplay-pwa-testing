@@ -1,8 +1,8 @@
 # SKY PLAY — État d'avancement complet
 
-**Date** : 2026-07-22  
-**Branche** : `main` — détection SFA2 complète (state machine, timer, time-over guard, perfect KO, match_state)  
-**Dernier commit** : `1babf5b` — fix(sfa2): prevent phantom time-over draws with roundTimerMaxSeen gate  
+**Date** : 2026-07-26  
+**Branche** : `main` — SFA2 play mode découvert + intégré, noms persos game-agnostic, timeouts ×2  
+**Dernier commit** : `a2ce061` — wip: template matching for SFA2 round-end detection  
 
 ---
 
@@ -159,6 +159,12 @@
 | **Portrait consensus templates** | ✅ 22/07 | Auto-générés 100% cross-val, 23.7% densité, all 18 chars OK, intégrés dans `pixel-game-config.ts` |
 | **Time-over guard** | ✅ 22/07 | `roundTimerMaxSeen ≥ 50` — bloque les faux draws inter-round (timer 73→3 artefact transitoire) |
 | Overlay SFA2 (noms persos) | ✅ | Templates portrait intégrés, `minConfidence` 0.40, `minMargin` 0.08 |
+| **Play mode detection (Auto/Manual)** | ✅ 26/07 | P1=0x1C2A, P2=0x1C2B (+0x23 de char ID). 0=Manual, 1=Auto. Differ scan contrôlé 4-matchs |
+| **Play mode intégré** (matchMeta + matchState) | ✅ 26/07 | game-runner.ts, game-config.ts, ws-handler.ts |
+| **Noms persos game-agnostic** (KofMatchHUD) | ✅ 26/07 | `p1ActiveName`/`p2ActiveName` serveur-side, plus de lookup KOF98 client |
+| **DuelEndOverlay game-agnostic** | ✅ 26/07 | SFA2 char names + play mode, client-side `sfa2Characters.ts` |
+| **Timeouts ×2** | ✅ 26/07 | Acceptation défi 20→40s, règles 30→60s, overlay fin 10/30→20/60s |
+| **SFA2 char name display in DuelScoreHUD** | ✅ 26/07 | Déjà OK (cursor-tracked grid names via char_selected) |
 
 ### 3.4 Config → DB (Turso variables)
 

@@ -1,11 +1,9 @@
-// ── Per-game pixel-based health + timer detection config ────────────
+// ── Per-game pixel-based text detection config ─────────────────────
 // Every ROM gets its OWN config entry. Adding a new game = adding one entry here.
-// The detection engine (state machine, column scan, template matching) stays the same.
+// Detection uses OpenCV template matching (TM_CCOEFF_NORMED) only — no brightness
+// pre-filter, no health bars, no state machine.
 //
 // Lookup: matched by ROM basename (stripped of path + extension), same as HEALTH_MEMORY_MAP.
-//
-// In the future, these configs can be loaded from the Turso DB (duel_games.ram_config)
-// instead of being hardcoded here.
 
 // ── Portrait template matching config ─────────────────────────────────
 
@@ -46,54 +44,14 @@ export interface PortraitConfig {
 
 /** Full pixel-detection configuration for a single game ROM. */
 export interface PixelGameConfig {
-  // ── Health bar stripe (ffmpeg capture region) ──
-  /** Y offset of the health bar stripe from the top of Xvfb. */
-  stripeY: number;
-  /** Height of the captured stripe in pixels. */
-  stripeH: number;
-  // ── Health bar X regions (within the stripe, at display width) ──
-  p1StartX: number;
-  p1EndX: number;
-  p2StartX: number;
-  p2EndX: number;
-  /** First stripe row that belongs to the health BARS (0 = stripe top).
-   *  Rows above may contain score digits/names that would pollute the
-   *  column fill measurement. Absent → scan the whole stripe height. */
-  barRowStart?: number;
-  /** Number of stripe rows to scan for the bars. Absent → to stripe bottom. */
-  barRowH?: number;
-  // ── Round / match rules ──
-  /** Number of rounds needed to win the match (2 = best-of-3, 3 = best-of-5). */
-  winsNeeded: number;
-  // ── Timer digit recognition (absent → no pixel timer for this ROM) ──
-  timer?: {
-    /** 10 digit templates, each 12 rows × 8 bits (MSB=left). */
-    digits: number[][];
-    /** Left digit X position in the health bar stripe. */
-    leftDigitX: number;
-    /** Right digit X position in the health bar stripe. */
-    rightDigitX: number;
-    /** Width of each digit in pixels. */
-    digitW: number;
-    /** Height of each digit in pixels. */
-    digitH: number;
-    /** Absolute brightness threshold for binarization (0-255). White digits on dark bg. */
-    binarizeThreshold?: number;
-    /** Minimum bright pixel ratio to consider the region readable. */
-    minBrightRatio: number;
-    /** Y offset of the digit top within the stripe (0 = stripe top).
-     *  When absent the detector centers the digit vertically. */
-    digitYOffset?: number;
-  };
   /** Portrait detection config for character select screens (absent → no pixel portraits). */
   portrait?: PortraitConfig;
-  /** Text event detection regions — for confirming KO, Perfect, Draw Game, etc.
-   *  Each region is defined in the DISPLAY frame (768×672 for SFA2 SNES). */
+  /** Text event detection — OpenCV template matching on a center-screen crop region. */
   textEvents?: TextEventConfig;
 }
 
-/** Configuration for detecting in-game text overlays (KO, Perfect, Draw Game, etc.)
- *  via brightness-spike heuristics on a center-screen crop region.
+/** Configuration for detecting in-game text overlays (KO, Perfect, FIGHT!, ROUND X, etc.)
+ *  via OpenCV template matching on a center-screen crop region.
  *  Coordinates are in the upscaled display frame (e.g. 768×672 for SFA2 3x). */
 export interface TextEventConfig {
   /** X offset of the text detection crop within the display frame. */
@@ -104,71 +62,20 @@ export interface TextEventConfig {
   textW: number;
   /** Height of the text detection crop in pixels. */
   textH: number;
-  /** Absolute brightness threshold for binarization — pixels above this are "bright" (0-255). */
-  binarizeThreshold: number;
-  /** Minimum bright-pixel ratio in the crop (0-1) to signal a text overlay. */
-  minBrightRatio: number;
-  /** Consecutive frames with bright ratio above minBrightRatio to confirm a text event. */
-  confirmFrames: number;
-  /** Cooldown frames after a detected event before re-arming (avoids double-fires). */
-  cooldownFrames: number;
-  /** If true, pauses RetroArch (xdotool key p) on text detection for template capture. */
-  pauseOnDetect?: boolean;
-  /** Auto-unpause delay in ms when pauseOnDetect is active (default 2000). */
-  pauseDurationMs?: number;
 }
 
 export const PIXEL_GAME_CONFIGS: Record<string, PixelGameConfig> = {
   // ── Street Fighter Alpha 2 (SNES) ──────────────────────────────────
   "Street Fighter Alpha 2 (Europe).sfc": {
-    // Stripe covers score digits/names (top rows), timer digits, and the
-    // health bars. Measured on live frames (2026-07-19 debug-stripe-combat.ppm):
-    //   stripe y=0-19:  score digits + names (NOT bars — excluded)
-    //   stripe y=20-30: timer digits + gap
-    //   stripe y=31-45: health bars (15 rows, 291 health px/row at 100%)
-    //   stripe y=46-51: gap + leftover pixels
-    // barRowStart/barRowH restrict the fill measurement to the bar rows so
-    // the bright score digits above P1's bar don't pollute the columns.
-    stripeY: 110, stripeH: 52,
-    p1StartX: 44, p1EndX: 348,
-    p2StartX: 420, p2EndX: 724,
-    barRowStart: 29, barRowH: 19, // stripe y=29-47, screen y=139-157 (bars at y=31-45 + 2px margin)
-    winsNeeded: 2,
-    timer: {
-      digits: [ // REAL templates from 220-frame capture, binarized @ threshold=160, 8×12 grid
-        [0b01111110,0b11111111,0b11000011,0b11000011,0b11000011,0b11000011,0b11000011,0b11000011,0b11000011,0b11000011,0b11111111,0b01111110], // 0
-        [0b11111100,0b11111100,0b00111100,0b00111100,0b00111100,0b00111100,0b00111100,0b00111100,0b00111100,0b00111100,0b11111111,0b11111111], // 1
-        [0b01111110,0b11111111,0b11000011,0b11000011,0b00000011,0b00000011,0b01111111,0b11111110,0b11000000,0b11000000,0b11111111,0b01111111], // 2
-        [0b11111110,0b11111111,0b00000011,0b00000011,0b00000011,0b11111111,0b11111111,0b00000011,0b00000011,0b00000011,0b11111111,0b11111110], // 3
-        [0b11000011,0b11000011,0b11000011,0b11000011,0b11000011,0b11000011,0b11111111,0b01111111,0b00000011,0b00000011,0b00000011,0b00000011], // 4
-        [0b01111111,0b11111111,0b11000000,0b11000000,0b11000000,0b11111110,0b01111111,0b00000011,0b00000011,0b00000011,0b11111111,0b11111110], // 5
-        [0b01111110,0b11111111,0b11000011,0b11000000,0b11000000,0b11111110,0b11111111,0b11000011,0b11000011,0b11000011,0b11111111,0b01111110], // 6
-        [0b01111110,0b11111111,0b11000011,0b11000011,0b00000011,0b00000011,0b00000011,0b00000011,0b00000011,0b00000011,0b00000011,0b00000011], // 7
-        [0b01111110,0b11111111,0b11000011,0b11000011,0b11000011,0b11111111,0b11111111,0b11000011,0b11000011,0b11000011,0b11111111,0b01111110], // 8
-        [0b01111110,0b11111111,0b11000011,0b11000011,0b11000011,0b11111111,0b01111111,0b00000011,0b00000011,0b11000011,0b11111111,0b01111110], // 9
-      ],
-      leftDigitX: 354, rightDigitX: 382, digitW: 26, digitH: 40,
-      digitYOffset: 8, // digit top at y=118 relative to stripeY=110
-      binarizeThreshold: 160, // absolute threshold — white digits (~255) on dark bg
-      minBrightRatio: 0.10,
-    },
+    // Crop measured on SFA2 display frame (768×672):
+    //   "FIGHT!":     x=158, y=280, 443×140
+    //   "ROUND X":    x=158, y=300, 443×100
+    //   "KO":         x=158, y=280, 443×140
+    //   "PERFECT":    x=158, y=280, 443×140
+    //   "TIME OVER":  x=158, y=280, 443×140
+    //   Union: x=158, y=280, 443×140 covers all known text overlays.
     textEvents: {
-      // Narrow center-screen crop — focuses on the text overlay zone while
-      // excluding character sprites at the edges. At 3x upscale (768×672):
-      //   "FIGHT!"      nat 80-100 → 240-300
-      //   "PERFECT"     nat 70-85  → 210-255
-      //   "ROUND 1/2/3" nat 90-120 → 270-360
-      //   "KO"          nat 88-125 → 264-375
-      //   "DRAW GAME"   nat 88-125 → 264-375
-      //   "TIME OVER"   nat 88-125 → 264-375
-      // 400×100 crop at y=240 covers all texts. Threshold tuned from live
-      // data (2026-07-24): 2% full-width = noise, 5% narrow = missed ROUND X.
-      textX: 184, textY: 240, textW: 400, textH: 100,
-      binarizeThreshold: 180,
-      minBrightRatio: 0.035,
-      confirmFrames: 8,
-      cooldownFrames: 180,
-      pauseOnDetect: true,  // dev: pause RetroArch on each text detection for template capture
+      textX: 158, textY: 280, textW: 443, textH: 140,
     },
     portrait: {
       // Measured from char-select-full.ppm: portrait content x=30→552, y=230→450 at 3x upscale.
@@ -333,10 +240,6 @@ export const PIXEL_GAME_CONFIGS: Record<string, PixelGameConfig> = {
     },
   },
 };
-
-/** Template dimensions (all digit templates are 8×12 bitmaps). */
-export const DIGIT_TEMPLATE_W = 8;
-export const DIGIT_TEMPLATE_H = 12;
 
 /** Look up the pixel config for a ROM. Returns null if the game uses RAM-based detection. */
 export function getPixelConfig(rom: string): PixelGameConfig | null {

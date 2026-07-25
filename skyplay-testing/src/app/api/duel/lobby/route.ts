@@ -157,12 +157,12 @@ export async function GET(req: NextRequest) {
       console.log(`[duel/lobby] Cleaned ${staleClean.rowsAffected} stale lobby entr${staleClean.rowsAffected > 1 ? 'ies' : 'y'}`);
     }
 
-    // ── Active cleanup: cancel stale rules_pending challenges (35s grace vs 30s client timeout)
+    // ── Active cleanup: cancel stale rules_pending challenges (65s grace vs 60s client timeout)
     const staleRules = await db.execute({
       sql: `UPDATE duel_challenges SET status = 'cancelled'
             WHERE status = 'rules_pending'
               AND rules_pending_at IS NOT NULL
-              AND rules_pending_at < datetime('now', '-35 seconds')
+              AND rules_pending_at < datetime('now', '-65 seconds')
             RETURNING id`,
       args: [],
     });

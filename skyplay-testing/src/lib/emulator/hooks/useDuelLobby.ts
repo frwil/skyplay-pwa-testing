@@ -276,8 +276,8 @@ export function useDuelLobby({
                 if (outgoingRef.current?.challengeId === n.duelChallengeId) {
                   setOutgoingChallenge(null);
                 }
-                // ── 30s rules confirmation timeout (challenger side) ──────
-                // If the opponent doesn't confirm rules within 30s, cancel
+                // ── 60s rules confirmation timeout (challenger side) ──────
+                // If the opponent doesn't confirm rules within 60s, cancel
                 // the challenge so neither player is stuck waiting forever.
                 if (rulesPendingTimeoutRef.current) {
                   clearTimeout(rulesPendingTimeoutRef.current);
@@ -287,7 +287,7 @@ export function useDuelLobby({
                 rulesPendingTimeoutRef.current = setTimeout(async () => {
                   const devId3 = isDevModeRef.current ? userIdRef.current : 0;
                   const devName3 = usernameRef.current || "";
-                  console.log("[Duel] ⏰ Rules pending for 30s — cancelling challenge %d", rpChallengeId);
+                  console.log("[Duel] ⏰ Rules pending for 60s — cancelling challenge %d", rpChallengeId);
                   try {
                     let cancelBody: Record<string, unknown> = { challengeId: rpChallengeId };
                     if (devId3) cancelBody = withDevAuth(cancelBody, devId3, devName3);
@@ -300,9 +300,9 @@ export function useDuelLobby({
                   } catch { /* best effort */ }
                   if (mountedRef.current) {
                     setRulesPendingChallenge(null);
-                    setError("Défi expiré — pas de confirmation après 30s");
+                    setError("Défi expiré — pas de confirmation après 60s");
                   }
-                }, 30_000);
+                }, 60_000);
               }
             }
 
@@ -635,7 +635,7 @@ export function useDuelLobby({
         };
         setOutgoingChallenge(challenge);
 
-        // ── 20s auto-cancel timeout ────────────────────────────
+        // ── 40s auto-cancel timeout ────────────────────────────
         // Clear any previous timeout
         if (challengeTimeoutRef.current) {
           clearTimeout(challengeTimeoutRef.current);
@@ -660,9 +660,9 @@ export function useDuelLobby({
                 ? { ...prev, status: "expired" }
                 : prev,
             );
-            setError("Défi expiré — pas de réponse après 20s");
+            setError("Défi expiré — pas de réponse après 40s");
           }
-        }, 20_000);
+        }, 40_000);
 
         return null; // success
       } catch (err) {

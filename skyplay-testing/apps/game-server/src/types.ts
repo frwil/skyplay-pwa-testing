@@ -155,9 +155,12 @@ export interface MatchEndMessage {
   /** Character IDs in the order each player selected them. */
   p1SelectOrder?: number[];
   p2SelectOrder?: number[];
-  /** Gauge mode per player. */
+  /** Gauge mode per player (KOF98/2002 only; undefined for SFA2). */
   p1Mode?: "ADVANCED" | "EXTRA";
   p2Mode?: "ADVANCED" | "EXTRA";
+  /** Play mode per player (SFA2 only: "Auto" or "Manual"; undefined for KOF98). */
+  p1PlayMode?: "Auto" | "Manual";
+  p2PlayMode?: "Auto" | "Manual";
   /** Rounds won per character (charId → win count), for the end-match overlay tally. */
   p1CharWins?: Record<number, number>;
   p2CharWins?: Record<number, number>;

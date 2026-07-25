@@ -23,10 +23,14 @@ export interface RamConfig {
   p1Char: number;
   /** Currently-fighting character ID address (P2). */
   p2Char: number;
-  /** Gauge mode address (P1): 1=ADVANCED, 0=EXTRA. */
+  /** Gauge mode address (P1): 1=ADVANCED, 0=EXTRA (KOF98/2002). */
   p1Mode: number;
   /** Gauge mode address (P2). */
   p2Mode: number;
+  /** Play mode address (P1): 0=Manual, 1=Auto (SFA2). */
+  p1PlayMode?: number;
+  /** Play mode address (P2): 0=Manual, 1=Auto (SFA2). */
+  p2PlayMode?: number;
   /** Additional character addresses to monitor. */
   altChars?: number[];
   /** Legacy team slot addresses. */
@@ -100,6 +104,19 @@ const FALLBACK_RAM_CONFIGS: Record<string, RamConfig> = {
     timer: 0xA83A, timerAlt: 0x85D2,
     p1Char: 0x823F, p2Char: 0x843F,
     p1Mode: 0x81F0, p2Mode: 0x83F0,
+  },
+  // SFA2 SNES (Europe) — RAM addresses discovered 2026-07-25—26 via full WRAM scans + live match differential.
+  // Health: 4-byte block, max 96 (0x60), P2 offset +2.
+  // Timer: 0x1B7D BCD-encoded (0x57 = 57s).
+  // Char IDs: P1=0x1C07, P2=0x1C08 (+1 offset, S-DD1 interleaved).
+  // Play Mode: P1=0x1C2A, P2=0x1C2B (+1 offset). 0=Manual, 1=Auto.
+  //   Discovered 2026-07-26 via Manual→Auto diff (4-match controlled experiment).
+  "Street Fighter Alpha 2 (Europe).sfc": {
+    p1: 0x1D3D, p2: 0x1D3F, size: 1, maxHealth: 0x60,
+    timer: 0x1B7D, timerAlt: 0x1B7D,
+    p1Char: 0x1C07, p2Char: 0x1C08,
+    p1Mode: 0x1D3D, p2Mode: 0x1D3D,
+    p1PlayMode: 0x1C2A, p2PlayMode: 0x1C2B,
   },
 };
 
@@ -254,7 +271,12 @@ export interface SnesCharGrid {
  *
  * SFA2 (Street Fighter Alpha 2) on SNES has 18 characters arranged in a 5×4 grid.
  * Row 3 has only 3 characters (cols 2-4), cols 1 & 5 are empty.
- * Cursor starts on Ryu (top-left). Order verified against in-game char select screen.
+ * Cursor starts on Ryu (top-left).
+ *
+ * Character IDs follow the ROM's internal ordering (Capcom CPS2/SNES standard),
+ * NOT the visual order of the char select screen. Confirmed via RAM double-match
+ * differential (2026-07-25): Ryu=0x00, Ken=0x01, Chun-Li=0x04.
+ * Full mapping validated against authoritative SFA2 EU ROM character table.
  */
 export const SNES_CHAR_GRIDS: Record<string, SnesCharGrid> = {
   "Street Fighter Alpha 2 (Europe).sfc": {
@@ -264,36 +286,36 @@ export const SNES_CHAR_GRIDS: Record<string, SnesCharGrid> = {
     startRow: 0,
     startCol: 0,
     grid: [
-      // Row 0: Ryu, Adon, Chun-Li, Guy, Ken
+      // Row 0: Ryu(0x00), Adon(0x05), Chun-Li(0x04), Guy(0x07), Ken(0x01)
       [
         { id: 0x00, name: "Ryu" },
-        { id: 0x03, name: "Adon" },
-        { id: 0x02, name: "Chun-Li" },
-        { id: 0x04, name: "Guy" },
+        { id: 0x05, name: "Adon" },
+        { id: 0x04, name: "Chun-Li" },
+        { id: 0x07, name: "Guy" },
         { id: 0x01, name: "Ken" },
       ],
-      // Row 1: Dhalsim, Gen, Sakura, Rolento, Zangief
+      // Row 1: Dhalsim(0x0F), Gen(0x11), Sakura(0x06), Rolento(0x0E), Zangief(0x10)
       [
-        { id: 0x0D, name: "Dhalsim" },
-        { id: 0x0E, name: "Gen" },
-        { id: 0x0F, name: "Sakura" },
-        { id: 0x10, name: "Rolento" },
-        { id: 0x11, name: "Zangief" },
+        { id: 0x0F, name: "Dhalsim" },
+        { id: 0x11, name: "Gen" },
+        { id: 0x06, name: "Sakura" },
+        { id: 0x0E, name: "Rolento" },
+        { id: 0x10, name: "Zangief" },
       ],
-      // Row 2: Charlie, Birdie, Rose, Sodom, Sagat
+      // Row 2: Charlie(0x03), Birdie(0x08), Rose(0x0A), Sodom(0x09), Sagat(0x0D)
       [
-        { id: 0x06, name: "Charlie" },
-        { id: 0x09, name: "Birdie" },
-        { id: 0x08, name: "Rose" },
-        { id: 0x07, name: "Sodom" },
-        { id: 0x0A, name: "Sagat" },
+        { id: 0x03, name: "Charlie" },
+        { id: 0x08, name: "Birdie" },
+        { id: 0x0A, name: "Rose" },
+        { id: 0x09, name: "Sodom" },
+        { id: 0x0D, name: "Sagat" },
       ],
-      // Row 3: empty, Akuma, M. Bison, Dan, empty
+      // Row 3: empty, Akuma(0x02), M. Bison(0x0C), Dan(0x0B), empty
       [
         { id: -1, name: "" },
-        { id: 0x05, name: "Akuma" },
-        { id: 0x0B, name: "M. Bison" },
-        { id: 0x0C, name: "Dan" },
+        { id: 0x02, name: "Akuma" },
+        { id: 0x0C, name: "M. Bison" },
+        { id: 0x0B, name: "Dan" },
         { id: -1, name: "" },
       ],
     ],

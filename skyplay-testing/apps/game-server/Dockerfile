@@ -36,6 +36,10 @@ RUN apt-get -o Acquire::Retries=5 update && \
     pulseaudio-utils \
     # ImageMagick for PPM→PNG conversion (timer debug captures)
     imagemagick \
+    # Python 3 + NumPy + OpenCV for template matching bridge
+    python3 \
+    python3-numpy \
+    python3-opencv \
     # Runtime libs
     libsdl2-2.0-0 \
     libpulse0 \
