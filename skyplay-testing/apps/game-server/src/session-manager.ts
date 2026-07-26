@@ -1,5 +1,4 @@
 import type { ServerMessage } from "./types.js";
-import type { PortraitGridResult } from "./pixel/portrait-detector.js";
 import { WebSocket } from "ws";
 
 export interface PlayerConnection {
@@ -30,31 +29,12 @@ export interface Session {
   /** Cached codec config descriptors so late-joining P2 can get them. */
   codecVideoDesc?: Uint8Array;
   codecAudioDesc?: Uint8Array;
-  /** Whether the game is currently at the character select screen. */
-  charSelectActive: boolean;
-  /** Cursor positions during character select (row, col in the grid). */
-  p1CursorRow: number;
-  p1CursorCol: number;
-  p2CursorRow: number;
-  p2CursorCol: number;
-  /** Whether each player has locked in their character selection. */
-  p1CharLocked: boolean;
-  p2CharLocked: boolean;
-  /** The character each player selected (ID + display name). */
-  p1SelectedCharId: number;
-  p2SelectedCharId: number;
-  p1SelectedCharName: string;
-  p2SelectedCharName: string;
-  /** Timer handle for character select timeout (auto-locks after N seconds). */
-  charSelectTimer: ReturnType<typeof setTimeout> | null;
   /** Dual-client ready guard: whether P1 has sent client_ready. */
   p1ClientReady: boolean;
   /** Dual-client ready guard: whether P2 has sent client_ready. */
   p2ClientReady: boolean;
   /** Timer handle for the 10s dual-client ready guard. */
   clientReadyTimer: ReturnType<typeof setTimeout> | null;
-  /** Portrait grid detection result from the character select screen (diagnostic only). */
-  portraitResults?: PortraitGridResult;
   /** Whether player input is locked (during auto-start sequence). */
   inputLocked: boolean;
 }
@@ -82,18 +62,6 @@ export function createSession(
     frameCount: 0,
     fps: 0,
     idleTimer: null,
-    charSelectActive: false,
-    p1CursorRow: 0,
-    p1CursorCol: 0,
-    p2CursorRow: 0,
-    p2CursorCol: 0,
-    p1CharLocked: false,
-    p2CharLocked: false,
-    p1SelectedCharId: -1,
-    p2SelectedCharId: -1,
-    p1SelectedCharName: "",
-    p2SelectedCharName: "",
-    charSelectTimer: null,
     p1ClientReady: false,
     p2ClientReady: false,
     clientReadyTimer: null,
@@ -189,9 +157,6 @@ export function removeSession(id: string): void {
   }
   if (session.clientReadyTimer) {
     clearTimeout(session.clientReadyTimer);
-  }
-  if (session.charSelectTimer) {
-    clearTimeout(session.charSelectTimer);
   }
   // Close all remaining connections
   for (const conn of session.connections) {

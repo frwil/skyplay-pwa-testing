@@ -29,7 +29,7 @@ export class CloudAdapter implements EmulatorAdapter {
   private rtmpUrl: string | null = null;
   private lastFrameId: number = 0;
   private pingInterval: ReturnType<typeof setInterval> | null = null;
-  /** Character names selected by each player (received via char_selected / match_end). */
+  /** Character names selected by each player (received via match_started / match_end, RAM-based). */
   private p1CharName: string | null = null;
   private p2CharName: string | null = null;
   private p1CharId: number = -1;
@@ -698,7 +698,7 @@ export class CloudAdapter implements EmulatorAdapter {
           break;
         }
         case "match_end": {
-          const meData = msg as unknown as { winner: number; loser: number; p1Losses: number; p2Losses: number; matchNumber?: number; totalRounds?: number; perfectKos?: number; p1TeamIds?: number[]; p2TeamIds?: number[]; p1SelectOrder?: number[]; p2SelectOrder?: number[]; p1Mode?: "ADVANCED" | "EXTRA"; p2Mode?: "ADVANCED" | "EXTRA"; p1PlayMode?: "Auto" | "Manual"; p2PlayMode?: "Auto" | "Manual"; p1CharWins?: Record<number, number>; p2CharWins?: Record<number, number>; p1CharName?: string; p2CharName?: string };
+          const meData = msg as unknown as { winner: number; loser: number; p1Losses: number; p2Losses: number; matchNumber?: number; totalRounds?: number; perfectKos?: number; perfectKoDetails?: { round: number; player: number }[]; p1TeamIds?: number[]; p2TeamIds?: number[]; p1SelectOrder?: number[]; p2SelectOrder?: number[]; p1Mode?: "ADVANCED" | "EXTRA"; p2Mode?: "ADVANCED" | "EXTRA"; p1PlayMode?: "Auto" | "Manual"; p2PlayMode?: "Auto" | "Manual"; p1CharWins?: Record<number, number>; p2CharWins?: Record<number, number>; p1CharName?: string; p2CharName?: string };
           console.log(`[Cloud:${this.systemType}] 🏁 MATCH #${meData.matchNumber || "?"} OVER! P${meData.winner} wins! Losses: P1=${meData.p1Losses} P2=${meData.p2Losses}`);
           // Capture character names from match_end for stat display
           if (meData.p1CharName) { this.p1CharName = meData.p1CharName; }
@@ -753,16 +753,8 @@ export class CloudAdapter implements EmulatorAdapter {
           break;
         }
         case "char_selected": {
-          const csData = msg as unknown as { player: 1 | 2; charId: number; charName: string; row?: number; col?: number };
-          if (csData.player === 1) {
-            this.p1CharName = csData.charName;
-            this.p1CharId = csData.charId;
-          } else {
-            this.p2CharName = csData.charName;
-            this.p2CharId = csData.charId;
-          }
-          console.log(`[Cloud:${this.systemType}] 🎯 P${csData.player} selected: ${csData.charName} (0x${csData.charId.toString(16).padStart(2, "0")})`);
-          this.callbacks.onCharSelected?.(csData.player, csData.charId, csData.charName);
+          // No longer sent by the server — D-pad cursor tracking removed.
+          // Character names now come exclusively from match_started (RAM-based).
           break;
         }
         case "match_started": {

@@ -2,13 +2,14 @@ import { WebSocket } from "ws";
 import {
   createSession, addConnection, removeConnection, getSession,
   sendToSession, sendBinaryToSession, sendBinaryToConnection, resetIdleTimer, removeSession,
-  getPlayerInfo, hasActiveConnections, getConnections, type Session,
+  getPlayerInfo, hasActiveConnections, getConnections, getAllSessions, type Session,
 } from "./session-manager.js";
 import { GameRunner } from "./game-runner.js";
 import type { ClientMessage } from "./types.js";
 import { FRAME_MAGIC, AUDIO_MAGIC, CODEC_CONFIG_MAGIC } from "./types.js";
-import { getGameConfig, getSnesCharGrid, type SnesCharGrid } from "./game-config.js";
-import { spawnSync } from "child_process";
+import { getGameConfig } from "./game-config.js";
+import { writeFile, mkdir, readdir, readFile, unlink } from "node:fs/promises";
+import { join } from "node:path";
 
 /** Map sessionId → GameRunner for lifecycle management. */
 const sessionRunners = new Map<string, GameRunner>();
@@ -20,6 +21,7 @@ interface RoundRecord {
 interface MatchRecord {
   winner: number; loser: number; p1Losses: number; p2Losses: number;
   matchNumber: number; totalRounds: number; perfectKos: number;
+  perfectKoDetails?: { round: number; player: number }[];
   /** Post-match character metadata (character-ID arrays; names resolved on display). */
   p1Team?: number[]; p2Team?: number[];
   p1SelectOrder?: number[]; p2SelectOrder?: number[];
@@ -47,6 +49,69 @@ const matchInputLocked = new Set<string>();
  * START), and the loser can be P1 or P2. Set on matchEnd, used by handleRematchAccept.
  */
 const matchLoserSide = new Map<string, number>();
+
+/**
+ * Post-match countdown timers. After matchEnd, a 30s countdown starts. If no
+ * rematch_request arrives before it expires, the session is killed. Set on
+ * matchEnd, cancelled by rematch_request/rematch_accept.
+ */
+const matchEndTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const MATCH_END_COUNTDOWN_MS = 30_000;
+
+// ── Stats buffering for offline resilience ──────────────────────────
+const PENDING_STATS_DIR = process.env.PENDING_STATS_DIR || "/data/pending-stats";
+
+/** Flush any buffered stats files that failed to reach the API earlier. */
+async function flushPendingStats(): Promise<void> {
+  const apiUrl = process.env.STATS_API_URL || "http://localhost:3000";
+  const apiToken = process.env.STATS_API_TOKEN || "dev";
+
+  let files: string[] = [];
+  try {
+    await mkdir(PENDING_STATS_DIR, { recursive: true });
+    files = await readdir(PENDING_STATS_DIR);
+  } catch {
+    // Directory doesn't exist or is unreadable — nothing to flush
+    return;
+  }
+
+  if (files.length === 0) return;
+
+  const jsonFiles = files.filter(f => f.endsWith(".json"));
+  if (jsonFiles.length === 0) return;
+
+  console.log(`[ws] 📦 Flushing ${jsonFiles.length} pending stats file(s)...`);
+
+  for (const file of jsonFiles) {
+    const filePath = join(PENDING_STATS_DIR, file);
+    try {
+      const raw = await readFile(filePath, "utf-8");
+      const payload = JSON.parse(raw);
+      const res = await fetch(`${apiUrl}/api/stats/save`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiToken}` },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) {
+        console.warn(`[ws] ⚠️  Pending stats flush failed for ${file}: ${res.status} ${await res.text().catch(() => "")}`);
+        // Stop processing remaining — if the API is down, all will fail
+        return;
+      }
+      await unlink(filePath);
+      console.log(`[ws] ✅ Flushed pending stats: ${file}`);
+    } catch (err) {
+      console.warn(`[ws] ⚠️  Pending stats flush error for ${file}:`, (err as Error)?.message ?? err);
+      // Stop on first failure — if the API is unreachable, retry later
+      return;
+    }
+  }
+}
+
+// Flush buffered stats at startup (non-blocking — sessions can start immediately)
+void flushPendingStats();
+
+// Retry every 2 minutes
+setInterval(() => { void flushPendingStats(); }, 120_000);
 
 function getStats(sessionId: string): AccumulatedStats | undefined {
   return sessionStats.get(sessionId);
@@ -193,6 +258,17 @@ async function handleInit(
     return;
   }
 
+  // ── Zombie session cleanup ──────────────────────────────────────
+  // Before starting a new game, kill any sessions that are stopped, idle,
+  // or whose runners have exited — they would leave orphan RetroArch/Xvfb
+  // processes that starve the shared display.
+  for (const s of getAllSessions()) {
+    if (s.status === "stopped" || !hasActiveConnections(s)) {
+      console.log(`[ws] 🧹 Cleaning up zombie session ${s.id} (status=${s.status})`);
+      stopSession(s.id);
+    }
+  }
+
   // Check if session already exists (P1 reconnecting or P2 already waiting)
   let session = getSession(msg.sessionId);
   if (session) {
@@ -315,43 +391,26 @@ async function handleInit(
     stopSession(msg.sessionId);
   });
 
-  // ── Match started (pixel analyzer entered PLAYING for the first time) ──
-  runner.on("matchStarted", (data: { p1Health?: number; p2Health?: number; timerValue?: number; p1FullBarWidth?: number; p2FullBarWidth?: number; p1Char?: string; p2Char?: string }) => {
-    // Resolve character names from all available sources:
-    // 1. Cursor tracking (D-pad counting during char select)
-    // 2. Portrait pixel detection (ground truth from screen capture)
-    const cursorP1 = session.p1SelectedCharName ?? "?";
-    const cursorP2 = session.p2SelectedCharName ?? "?";
-    let portraitP1 = "?";
-    let portraitP2 = "?";
-    const pr = session.portraitResults;
-    if (pr) {
-      const p1Cell = pr.cells[session.p1CursorRow]?.[session.p1CursorCol];
-      if (p1Cell?.isReliable) portraitP1 = p1Cell.charName ?? "?";
-      {
-        const p2Cell = pr.cells[session.p2CursorRow]?.[session.p2CursorCol];
-        if (p2Cell?.isReliable) portraitP2 = p2Cell.charName ?? "?";
-      }
-    }
+  // ── Match started (RAM-based detection) ──
+  runner.on("matchStarted", (data: { p1Health?: number; p2Health?: number; timerValue?: number; p1Char?: string; p2Char?: string }) => {
+    // Resolve character names: prefer cursor-tracked (char select), fall back to RAM-based
+    const p1Name = data.p1Char || undefined;
+    const p2Name = data.p2Char || undefined;
 
     console.log(
       `[ws] 🎬 MATCH STARTED — ` +
-      `P1 = ${cursorP1} (cursor) / ${portraitP1} (portrait) | ` +
-      `P2 = ${cursorP2} (cursor) / ${portraitP2} (portrait) | ` +
+      `P1 = ${p1Name ?? "?"} | ` +
+      `P2 = ${p2Name ?? "?"} | ` +
       `mode=${session.mode} system=${session.system}`
     );
 
     // Forward to client so the frontend can show character names
     sendToSession(session, {
       type: "match_started",
-      p1CharName: cursorP1 !== "?" ? cursorP1 : (portraitP1 !== "?" ? portraitP1 : undefined),
-      p2CharName: cursorP2 !== "?" ? cursorP2 : (portraitP2 !== "?" ? portraitP2 : undefined),
-      p1PixelCharName: portraitP1 !== "?" ? portraitP1 : undefined,
-      p2PixelCharName: portraitP2 !== "?" ? portraitP2 : undefined,
+      p1CharName: p1Name,
+      p2CharName: p2Name,
       p1Health: data.p1Health,
       p2Health: data.p2Health,
-      p1FullBarWidth: data.p1FullBarWidth,
-      p2FullBarWidth: data.p2FullBarWidth,
     });
   });
 
@@ -376,36 +435,17 @@ async function handleInit(
     }
   });
 
-  runner.on("matchEnd", (data: { winner: number; loser: number; p1Losses: number; p2Losses: number; matchNumber?: number; totalRounds?: number; perfectKos?: number; p1TeamIds?: number[]; p2TeamIds?: number[]; p1SelectOrder?: number[]; p2SelectOrder?: number[]; p1Mode?: string; p2Mode?: string; p1PlayMode?: string; p2PlayMode?: string; p1CharWins?: Record<number, number>; p2CharWins?: Record<number, number> }) => {
+  runner.on("matchEnd", (data: { winner: number; loser: number; p1Losses: number; p2Losses: number; matchNumber?: number; totalRounds?: number; perfectKos?: number; perfectKoDetails?: { round: number; player: number }[]; p1TeamIds?: number[]; p2TeamIds?: number[]; p1SelectOrder?: number[]; p2SelectOrder?: number[]; p1Mode?: string; p2Mode?: string; p1PlayMode?: string; p2PlayMode?: string; p1CharWins?: Record<number, number>; p2CharWins?: Record<number, number>; p1Char?: string; p2Char?: string }) => {
+    const OVERLAY_DELAY_MS = 8000;
     const resultLabel = data.winner === 0 ? "DRAW!" : `P${data.winner} wins!`;
-    console.log(`[ws] 🏁 MATCH OVER! ${resultLabel} Losses: P1=${data.p1Losses} P2=${data.p2Losses}`);
-
-    // For SNES: include cursor-tracked character names from the session
-    const snesP1Name = session.system === "snes" ? session.p1SelectedCharName : undefined;
-    const snesP2Name = session.system === "snes" ? session.p2SelectedCharName : undefined;
-    const snesP1Id = session.system === "snes" && session.p1SelectedCharId >= 0 ? [session.p1SelectedCharId] : undefined;
-    const snesP2Id = session.system === "snes" && session.p2SelectedCharId >= 0 ? [session.p2SelectedCharId] : undefined;
-
-    // Portrait-diagnostic character names (pixel-based, independent ground truth)
-    let p1PixelCharName: string | undefined;
-    let p2PixelCharName: string | undefined;
-    let p1PixelConfidence: number | undefined;
-    let p2PixelConfidence: number | undefined;
-    const pr = session.portraitResults;
-    if (pr) {
-      const p1Cell = pr.cells[session.p1CursorRow]?.[session.p1CursorCol];
-      if (p1Cell && p1Cell.isReliable) {
-        p1PixelCharName = p1Cell.charName;
-        p1PixelConfidence = p1Cell.confidence;
-      }
-      if (session.mode === "pvp") {
-        const p2Cell = pr.cells[session.p2CursorRow]?.[session.p2CursorCol];
-        if (p2Cell && p2Cell.isReliable) {
-          p2PixelCharName = p2Cell.charName;
-          p2PixelConfidence = p2Cell.confidence;
-        }
-      }
+    console.log(`[ws] 🏁 MATCH OVER! ${resultLabel} Losses: P1=${data.p1Losses} P2=${data.p2Losses} (overlay in ${OVERLAY_DELAY_MS}ms)`);
+    if (data.perfectKoDetails && data.perfectKoDetails.length > 0) {
+      const details = data.perfectKoDetails.map(d => `R${d.round}:P${d.player}`).join(", ");
+      console.log(`[ws] 👑 Perfect KOs: ${details}`);
     }
+
+    // Delay post-match actions so the victory animation plays before the game freezes
+    setTimeout(() => {
 
     sendToSession(session, {
       type: "match_end",
@@ -416,8 +456,9 @@ async function handleInit(
       matchNumber: data.matchNumber,
       totalRounds: data.totalRounds,
       perfectKos: data.perfectKos,
-      p1TeamIds: data.p1TeamIds ?? snesP1Id,
-      p2TeamIds: data.p2TeamIds ?? snesP2Id,
+      perfectKoDetails: data.perfectKoDetails,
+      p1TeamIds: data.p1TeamIds,
+      p2TeamIds: data.p2TeamIds,
       p1SelectOrder: data.p1SelectOrder,
       p2SelectOrder: data.p2SelectOrder,
       p1Mode: data.p1Mode as "ADVANCED" | "EXTRA" | undefined,
@@ -426,12 +467,8 @@ async function handleInit(
       p2PlayMode: data.p2PlayMode as "Auto" | "Manual" | undefined,
       p1CharWins: data.p1CharWins,
       p2CharWins: data.p2CharWins,
-      p1CharName: snesP1Name,
-      p2CharName: snesP2Name,
-      p1PixelCharName,
-      p2PixelCharName,
-      p1PixelConfidence,
-      p2PixelConfidence,
+      p1CharName: data.p1Char,
+      p2CharName: data.p2Char,
     });
     // Accumulate match stats
     const stats = sessionStats.get(msg.sessionId);
@@ -443,6 +480,7 @@ async function handleInit(
         matchNumber: data.matchNumber || stats.matchCounter,
         totalRounds: data.totalRounds || 0,
         perfectKos: data.perfectKos || 0,
+        perfectKoDetails: data.perfectKoDetails || [],
         p1Team: data.p1TeamIds, p2Team: data.p2TeamIds,
         p1SelectOrder: data.p1SelectOrder, p2SelectOrder: data.p2SelectOrder,
         p1Mode: data.p1Mode, p2Mode: data.p2Mode,
@@ -457,7 +495,18 @@ async function handleInit(
     runner.pause();
     // Remember who lost — only the loser re-joins on a same-session rematch.
     if (data.loser === 1 || data.loser === 2) matchLoserSide.set(msg.sessionId, data.loser);
-    // Game continues indefinitely — no auto-stop. Players use "stop_duel" to end.
+    // ── Post-match countdown: auto-stop session if no rematch within 30s ──
+    // Cancelled by rematch_request (the client handlers clear this timer).
+    const existing = matchEndTimers.get(msg.sessionId);
+    if (existing) clearTimeout(existing);
+    const timer = setTimeout(() => {
+      console.log(`[ws] ⏰ Post-match countdown expired for ${msg.sessionId} — stopping session`);
+      matchEndTimers.delete(msg.sessionId);
+      stopSession(msg.sessionId);
+    }, MATCH_END_COUNTDOWN_MS);
+    matchEndTimers.set(msg.sessionId, timer);
+
+    }, OVERLAY_DELAY_MS);
   });
 
   // ── Live in-match state (teams / active char / gauge mode) ──
@@ -555,20 +604,25 @@ async function handleInit(
           await sleep(10000);
 
           if (session.status !== "running") return;
-          // 4) T+73s: Enter char select phase
-          const playGrid = getSnesCharGrid(msg.rom);
-          if (playGrid) {
-            console.log(`[ws] 🎮 SFA2 CPU: entering character select for ${msg.sessionId}`);
-            startCharSelectPhase(session, runner, playGrid);
-          } else {
-            console.log(`[ws] 🎮 SFA2 CPU: no grid — A → advance for ${msg.sessionId}`);
-            tap(1, SNES_A);
-            await sleep(1500);
+          // 4) T+73s: Character select reached — unlock input. The player can
+          // move the on-screen cursor with D-pad. After a delay, inject A to
+          // confirm P1's character (default: Ryu). RAM-based detection at
+          // 0x1C07/0x1C08 picks up the character ID when the match starts.
+          console.log(`[ws] 🎮 SFA2 CPU: char select reached — unlocking input for ${msg.sessionId}`);
+          session.inputLocked = false;
+          // Inject A to confirm character after 4s (player can move cursor before then)
+          setTimeout(() => {
             if (session.status !== "running") return;
-            console.log(`[ws] 🎮 SFA2 CPU: A → begin match for ${msg.sessionId}`);
-            // Auto-sequence done, unlock player input
-            session.inputLocked = false;
-          }
+            console.log(`[ws] 🎮 SFA2 CPU: confirming character for ${msg.sessionId}`);
+            tap(1, 8, 200); // A button
+          }, 4000);
+          // Follow-up A presses to skip Speed/Stage select screens
+          [7000, 10000, 13000].forEach(ms => {
+            setTimeout(() => {
+              if (session.status !== "running") return;
+              tap(1, 8, 200);
+            }, ms);
+          });
         }, startDelay);
       }
 
@@ -667,275 +721,6 @@ function handleJoin(
   }));
 }
 
-// ── Character Select Phase (SNES cursor tracking) ─────────────────────
-
-/** SNES button indices used during character select. */
-const SNES_B = 0;
-const SNES_A = 8;     // SFA2: confirm/advance (keyboard 'x')
-const SNES_START = 3;
-const SNES_UP = 4;
-const SNES_DOWN = 5;
-const SNES_LEFT = 6;
-const SNES_RIGHT = 7;
-
-/** How long KOF98 players have to pick characters before auto-lock (ms). */
-const CHAR_SELECT_TIMEOUT_MS = 30_000;
-
-/**
- * Enter character select phase. Resets cursors, notifies clients.
- * The match begins when both players lock in — for KOF98 (neogeo),
- * an auto-lock timeout fires after 30s. SFA2 (snes) has no timeout
- * because the game stays on char select indefinitely.
- */
-function startCharSelectPhase(
-  session: Session,
-  runner: GameRunner,
-  grid: SnesCharGrid,
-): void {
-  if (!session) return;
-
-  // Clear any previous char select state
-  if (session.charSelectTimer) {
-    clearTimeout(session.charSelectTimer);
-    session.charSelectTimer = null;
-  }
-
-  // Reset cursors to starting position
-  session.charSelectActive = true;
-  // Unlock player input — auto-start sequence is done, players control their cursors
-  session.inputLocked = false;
-  // Suspend pixel analysis: the portrait grid reads as "healthy bars" and the
-  // selection countdown ticks like a fight timer → fabricated rounds.
-  // Text detector always runs — no need to suspend during char select.
-  session.p1CursorRow = grid.startRow;
-  session.p1CursorCol = grid.startCol;
-  // P2 starts at the RIGHT side of the grid (mirror of P1).
-  // Find the rightmost valid cell on the start row.
-  session.p2CursorRow = grid.startRow;
-  session.p2CursorCol = grid.cols - 1;
-  // If the rightmost cell is empty, scan left for a valid one
-  while (session.p2CursorCol >= 0) {
-    const cell = grid.grid[session.p2CursorRow]?.[session.p2CursorCol];
-    if (cell && cell.id >= 0) break;
-    session.p2CursorCol--;
-  }
-  if (session.p2CursorCol < 0) session.p2CursorCol = grid.startCol; // fallback
-  session.p1CharLocked = false;
-  session.p2CharLocked = false;
-  session.p1SelectedCharId = -1;
-  session.p2SelectedCharId = -1;
-  session.p1SelectedCharName = "";
-  session.p2SelectedCharName = "";
-
-  const hasTimeout = session.system === "neogeo";
-  console.log(`[ws] 🎯 Char select STARTED for ${session.id} — grid ${grid.rows}×${grid.cols}${hasTimeout ? `, timeout ${CHAR_SELECT_TIMEOUT_MS}ms` : " (no timeout)"}`);
-
-  // Enable calibration mode so every char-select capture feeds the calibrator.
-  // Idempotent — only creates the calibrator once, subsequent calls are no-ops.
-  runner.enableCalibration();
-
-  // Fire-and-forget portrait capture (diagnostic cross-check, ~1.2s async).
-  // Result will be available via runner.portraitResult by the time finalizeCharSelect runs.
-  runner.captureCharSelectPortraits();
-
-  // Debug: capture full screen during char select for coordinate verification
-  setTimeout(() => {
-    try {
-      spawnSync("import", ["-depth", "8", "-window", "root", "/recordings/char-select-full.ppm"], {
-        env: { ...process.env, DISPLAY: (runner as any).display || ":99" },
-        stdio: "pipe", timeout: 10000,
-      });
-      console.log("[ws] 📸 Char select full screenshot saved");
-    } catch (e) { /* non-fatal */ }
-  }, 2000);
-
-  sendToSession(session, { type: "char_select_start", timeout: hasTimeout ? CHAR_SELECT_TIMEOUT_MS : 0 });
-
-  // ── Auto-lock timeout ─────────────────────────────────────────
-  // KOF98: in-game timer, auto-lock after 30s.
-  // SFA2 CPU: no in-game timer, auto-lock after 5s (enough for portrait capture).
-  // SFA2 PvP: no timeout — players confirm manually. Text overlay detector
-  // runs continuously and auto-resumes pixel analysis when FIGHT! is detected,
-  // so no timer-based resume guesswork is needed.
-  if (hasTimeout) {
-    session.charSelectTimer = setTimeout(() => {
-      if (!session.charSelectActive) return;
-      console.log(`[ws] ⏰ Char select TIMEOUT for ${session.id} — auto-locking`);
-      finalizeCharSelect(session, runner, grid);
-    }, CHAR_SELECT_TIMEOUT_MS);
-  } else if (session.mode === "cpu") {
-    // SFA2 CPU: auto-lock after portrait capture completes
-    const cpuAutoLockMs = 5000;
-    console.log(`[ws] 🤖 CPU auto-lock scheduled in ${cpuAutoLockMs}ms for ${session.id}`);
-    session.charSelectTimer = setTimeout(() => {
-      if (!session.charSelectActive) return;
-      console.log(`[ws] 🤖 CPU auto-lock firing for ${session.id}`);
-      finalizeCharSelect(session, runner, grid);
-    }, cpuAutoLockMs);
-  }
-}
-
-/**
- * Ends the character select phase: auto-locks any unselected players at their
- * current cursor position, presses START for both players, and sends final
- * char_selected events.
- */
-function finalizeCharSelect(
-  session: Session,
-  runner: GameRunner,
-  grid: SnesCharGrid,
-): void {
-  if (!session || !session.charSelectActive) return;
-
-  session.charSelectActive = false;
-  if (session.charSelectTimer) {
-    clearTimeout(session.charSelectTimer);
-    session.charSelectTimer = null;
-  }
-
-  // Clamp cursor positions to grid bounds (defensive)
-  const clamp = (row: number, col: number) => ({
-    row: Math.max(0, Math.min(grid.rows - 1, row)),
-    col: Math.max(0, Math.min(grid.cols - 1, col)),
-  });
-
-  // Lock P1 if not already locked (skip empty cells)
-  if (!session.p1CharLocked) {
-    const pos = clamp(session.p1CursorRow, session.p1CursorCol);
-    const cell = grid.grid[pos.row]?.[pos.col];
-    if (!cell || cell.id < 0) {
-      console.log(`[ws] 🎯 P1 auto-lock skipped — cursor on empty cell (${pos.row},${pos.col})`);
-    } else {
-      session.p1SelectedCharId = cell.id;
-      session.p1SelectedCharName = cell.name;
-      session.p1CharLocked = true;
-      sendToSession(session, {
-        type: "char_selected",
-        player: 1,
-        charId: session.p1SelectedCharId,
-        charName: session.p1SelectedCharName,
-        row: pos.row,
-        col: pos.col,
-      });
-      console.log(`[ws] 🎯 P1 auto-locked: ${session.p1SelectedCharName} (0x${session.p1SelectedCharId.toString(16)})`);
-
-      // CPU mode: inject A press to confirm P1's character selection in-game.
-      // (In PvP mode, players press A manually — no auto-injection needed.)
-      if (session.mode === "cpu") {
-        console.log(`[ws] 🎯 CPU mode — injecting A press to confirm P1 selection in-game`);
-        runner.ensureFocus();
-        runner.injectInput(1, SNES_A, true);
-        setTimeout(() => {
-          runner.injectInput(1, SNES_A, false);
-        }, 200);
-      }
-    }
-  }
-
-  // Lock P2 if not already locked (PvP mode only — CPU mode has no P2, skip empty cells)
-  if (session.mode === "pvp" && !session.p2CharLocked) {
-    const pos = clamp(session.p2CursorRow, session.p2CursorCol);
-    const cell = grid.grid[pos.row]?.[pos.col];
-    if (!cell || cell.id < 0) {
-      console.log(`[ws] 🎯 P2 auto-lock skipped — cursor on empty cell (${pos.row},${pos.col})`);
-    } else {
-      session.p2SelectedCharId = cell.id;
-      session.p2SelectedCharName = cell.name;
-      session.p2CharLocked = true;
-      sendToSession(session, {
-        type: "char_selected",
-        player: 2,
-      charId: session.p2SelectedCharId,
-      charName: session.p2SelectedCharName,
-      row: pos.row,
-      col: pos.col,
-    });
-    console.log(`[ws] 🎯 P2 auto-locked: ${session.p2SelectedCharName} (0x${session.p2SelectedCharId.toString(16)})`);
-    } // end else (valid cell)
-    // A press NOT auto-injected — players must manually press A to lock.
-    // The advance sequence will lock any remaining unlocked players when it fires.
-  }
-
-  // ── Portrait diagnostic: cross-check cursor tracking vs pixel detection ──
-  const portraitResult = runner.portraitResult;
-  session.portraitResults = portraitResult ?? undefined;
-
-  if (portraitResult) {
-    const p1Pos = clamp(session.p1CursorRow, session.p1CursorCol);
-    const p1Cell = portraitResult.cells[p1Pos.row]?.[p1Pos.col];
-    if (p1Cell && p1Cell.isReliable) {
-      if (p1Cell.charId !== session.p1SelectedCharId) {
-        console.warn(
-          `[ws] ⚠️ P1 portrait MISMATCH: cursor=${session.p1SelectedCharName} ` +
-          `(0x${session.p1SelectedCharId.toString(16)}), pixel=${p1Cell.charName} ` +
-          `(0x${p1Cell.charId.toString(16)}), conf=${(p1Cell.confidence * 100).toFixed(0)}%`,
-        );
-      } else {
-        console.log(`[ws] ✅ P1 portrait MATCH: ${session.p1SelectedCharName} conf=${(p1Cell.confidence * 100).toFixed(0)}%`);
-      }
-    } else if (p1Cell) {
-      console.log(`[ws] 🔍 P1 portrait low confidence (${(p1Cell.confidence * 100).toFixed(0)}%), trusting cursor: ${session.p1SelectedCharName}`);
-    }
-
-    if (session.mode === "pvp") {
-      const p2Pos = clamp(session.p2CursorRow, session.p2CursorCol);
-      const p2Cell = portraitResult.cells[p2Pos.row]?.[p2Pos.col];
-      if (p2Cell && p2Cell.isReliable) {
-        if (p2Cell.charId !== session.p2SelectedCharId) {
-          console.warn(
-            `[ws] ⚠️ P2 portrait MISMATCH: cursor=${session.p2SelectedCharName} ` +
-            `(0x${session.p2SelectedCharId.toString(16)}), pixel=${p2Cell.charName} ` +
-            `(0x${p2Cell.charId.toString(16)}), conf=${(p2Cell.confidence * 100).toFixed(0)}%`,
-          );
-        } else {
-          console.log(`[ws] ✅ P2 portrait MATCH: ${session.p2SelectedCharName} conf=${(p2Cell.confidence * 100).toFixed(0)}%`);
-        }
-      } else if (p2Cell) {
-        console.log(`[ws] 🔍 P2 portrait low confidence (${(p2Cell.confidence * 100).toFixed(0)}%), trusting cursor: ${session.p2SelectedCharName}`);
-      }
-    }
-  } else {
-    console.log(`[ws] 🖼️ No portrait result available for ${session.id} — skipping cross-check`);
-  }
-
-  // ── Post-char-select: advance through menus to combat ─────────────────
-  // CPU mode: inject follow-up A presses to skip Speed/Stage select screens.
-  // PvP mode: players advance manually (or the game auto-advances).
-  const ADVANCE_DELAY = 5000;
-  setTimeout(() => {
-    if (session.status !== "running") return;
-    console.log(`[ws] 🎮 Post-char-select phase for ${session.id} (P1=${session.p1SelectedCharName}) — advancing to combat`);
-
-    if (session.mode === "cpu") {
-      // Follow-up A presses to skip Speed select / Stage select that may appear
-      // after character confirmation in arcade mode. Harmless in combat (light punch).
-      [0, 3000, 6000].forEach((ms) => {
-        setTimeout(() => {
-          if (session.status !== "running") return;
-          runner.ensureFocus();
-          runner.injectInput(1, SNES_A, true);
-          setTimeout(() => runner.injectInput(1, SNES_A, false), 200);
-        }, ms);
-      });
-    }
-
-    // Screenshot for visual confirmation at t=30s
-    setTimeout(() => {
-      try {
-        const ssPath = "/recordings/combat-screenshot.png";
-        spawnSync("import", ["-depth", "8", "-window", "root", ssPath], {
-          env: { ...process.env, DISPLAY: (runner as any).display || ":99" },
-          stdio: "pipe", timeout: 10000,
-        });
-        console.log(`[ws] 📸 Screenshot saved: ${ssPath}`);
-      } catch (e) { console.warn("[ws] ⚠️ Screenshot failed:", e); }
-    }, 30000);
-
-    // Text detector auto-resumes health analysis when FIGHT! is detected —
-    // no timer-based resume needed.
-  }, ADVANCE_DELAY);
-}
-
 function handleInput(
   ws: WebSocket,
   msg: { player: number; button: number; pressed: boolean },
@@ -968,112 +753,6 @@ function handleInput(
   // Pause is a separate "control" message (not input), so blocking START does
   // not affect the pause/resume functionality.
   const session = getSession(info.sessionId);
-
-  // ── Character select cursor tracking (SNES) ──
-  if (session?.charSelectActive && msg.pressed) {
-    const grid = getSnesCharGrid(session.rom);
-    const isP1 = msg.player === 1;
-    const isP2 = msg.player === 2;
-    const locked = isP1 ? session.p1CharLocked : (isP2 ? session.p2CharLocked : true);
-
-    if (grid && !locked) {
-      // Directional inputs → move cursor (clamp to bounds, skip empty cells)
-      if (msg.button === SNES_UP || msg.button === SNES_DOWN ||
-          msg.button === SNES_LEFT || msg.button === SNES_RIGHT) {
-        const moveCursor = (player: 1 | 2, dRow: number, dCol: number) => {
-          const curR = player === 1 ? session.p1CursorRow : session.p2CursorRow;
-          const curC = player === 1 ? session.p1CursorCol : session.p2CursorCol;
-          const newR = Math.max(0, Math.min(grid.rows - 1, curR + dRow));
-          const newC = Math.max(0, Math.min(grid.cols - 1, curC + dCol));
-          const cell = grid.grid[newR]?.[newC];
-          if (cell && cell.id >= 0) {
-            // Valid cell — move there
-            if (player === 1) { session.p1CursorRow = newR; session.p1CursorCol = newC; }
-            else { session.p2CursorRow = newR; session.p2CursorCol = newC; }
-            console.log(`[ws] 🎯 P${player} cursor: (${newR},${newC}) → ${cell.name}`);
-          } else {
-            // Empty cell or out of bounds — stay put
-            console.log(`[ws] 🎯 P${player} cursor: blocked at (${newR},${newC}) — empty, staying at (${curR},${curC})`);
-          }
-        };
-        if (isP1) {
-          if (msg.button === SNES_UP) moveCursor(1, -1, 0);
-          if (msg.button === SNES_DOWN) moveCursor(1, 1, 0);
-          if (msg.button === SNES_LEFT) moveCursor(1, 0, -1);
-          if (msg.button === SNES_RIGHT) moveCursor(1, 0, 1);
-        } else if (isP2) {
-          if (msg.button === SNES_UP) moveCursor(2, -1, 0);
-          if (msg.button === SNES_DOWN) moveCursor(2, 1, 0);
-          if (msg.button === SNES_LEFT) moveCursor(2, 0, -1);
-          if (msg.button === SNES_RIGHT) moveCursor(2, 0, 1);
-        }
-      }
-
-      // B button → lock in character selection (ignore empty cells)
-      if (msg.button === SNES_B) {
-        if (isP1) {
-          const cell = grid.grid[session.p1CursorRow]?.[session.p1CursorCol];
-          if (!cell || cell.id < 0) {
-            console.log(`[ws] 🎯 P1 B-press ignored — cursor on empty cell (${session.p1CursorRow},${session.p1CursorCol})`);
-          } else {
-            session.p1SelectedCharId = cell.id;
-            session.p1SelectedCharName = cell.name;
-            session.p1CharLocked = true;
-            sendToSession(session, {
-              type: "char_selected", player: 1,
-              charId: session.p1SelectedCharId,
-              charName: session.p1SelectedCharName,
-              row: session.p1CursorRow, col: session.p1CursorCol,
-            });
-            console.log(`[ws] 🎯 P1 selected: ${session.p1SelectedCharName} (0x${session.p1SelectedCharId.toString(16)})`);
-          }
-        } else if (isP2) {
-          const cell = grid.grid[session.p2CursorRow]?.[session.p2CursorCol];
-          if (!cell || cell.id < 0) {
-            console.log(`[ws] 🎯 P2 B-press ignored — cursor on empty cell (${session.p2CursorRow},${session.p2CursorCol})`);
-          } else {
-            session.p2SelectedCharId = cell.id;
-            session.p2SelectedCharName = cell.name;
-            session.p2CharLocked = true;
-            sendToSession(session, {
-              type: "char_selected", player: 2,
-              charId: session.p2SelectedCharId,
-              charName: session.p2SelectedCharName,
-              row: session.p2CursorRow, col: session.p2CursorCol,
-            });
-            console.log(`[ws] 🎯 P2 selected: ${session.p2SelectedCharName} (0x${session.p2SelectedCharId.toString(16)})`);
-          }
-        }
-
-        // Check if both players have locked in (PvP) or P1 is locked (CPU)
-        const bothLocked = session.mode === "pvp"
-          ? session.p1CharLocked && session.p2CharLocked
-          : session.p1CharLocked;
-        if (bothLocked) {
-          console.log(`[ws] 🎯 Both players locked — scheduling START for ${info.sessionId}`);
-          // Delay START slightly so the game processes the B press first, then
-          // finalizeCharSelect will clear the charSelectActive flag and inject START.
-          setTimeout(() => finalizeCharSelect(session, runner, grid), 400);
-          // Fall through — let the B press reach the game so the UI confirms visually
-        }
-      }
-
-      // START is ALWAYS blocked for SNES/SFA2 — the only way to pause is via
-      // the platform pause button (sends "pause" control message, which pauses
-      // the emulator itself, freezing the game behind the overlay).
-      // NeoGeo START is also blocked during char select only (auto-sequence handles it).
-      if (msg.button === SNES_START) {
-        if (session.system === "snes") {
-          // Silent drop — START is never allowed for SFA2 players
-          return;
-        }
-        if (session.system === "neogeo") {
-          console.log(`[ws] 🚫 START blocked during char select for P${msg.player} in ${info.sessionId}`);
-          return;
-        }
-      }
-    }
-  }
 
   // ── Input lock during auto-start sequence ──
   // All player input is dropped while the server is navigating menus
@@ -1160,6 +839,10 @@ function stopSession(sessionId: string): void {
   }
   stoppingSessions.add(sessionId);
 
+  // Clear post-match countdown timer (if any)
+  const endTimer = matchEndTimers.get(sessionId);
+  if (endTimer) { clearTimeout(endTimer); matchEndTimers.delete(sessionId); }
+
   const session = getSession(sessionId);
   if (session) {
     // Clear any active pause timer
@@ -1173,20 +856,30 @@ function stopSession(sessionId: string): void {
   if (stats && stats.matches.length > 0) {
     const apiUrl = process.env.STATS_API_URL || "http://localhost:3000";
     const apiToken = process.env.STATS_API_TOKEN || "dev";
+    const payload = {
+      sessionId: stats.sessionId, mode: stats.mode, system: stats.system, rom: stats.rom,
+      startedAt: stats.startedAt, endedAt: Date.now(),
+      rounds: stats.rounds, matches: stats.matches,
+    };
     console.log(`[ws] 📊 Flushing stats for ${sessionId}: ${stats.matches.length} matches, ${stats.rounds.length} rounds`);
     fetch(`${apiUrl}/api/stats/save`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiToken}` },
-      body: JSON.stringify({
-        sessionId: stats.sessionId, mode: stats.mode, system: stats.system, rom: stats.rom,
-        startedAt: stats.startedAt, endedAt: Date.now(),
-        rounds: stats.rounds, matches: stats.matches,
-      }),
+      body: JSON.stringify(payload),
     }).then(async (res) => {
       if (!res.ok) console.error(`[ws] Stats flush failed: ${res.status} ${await res.text().catch(() => "")}`);
       else console.log(`[ws] ✅ Stats flushed for ${sessionId}`);
-    }).catch(err => {
-      console.error("[ws] Failed to flush stats:", err);
+    }).catch(async (err) => {
+      console.error("[ws] Failed to flush stats:", (err as Error)?.message ?? err);
+      // Buffer to local disk for later retry
+      try {
+        await mkdir(PENDING_STATS_DIR, { recursive: true });
+        const fname = `${sessionId}-${Date.now()}.json`;
+        await writeFile(join(PENDING_STATS_DIR, fname), JSON.stringify(payload), "utf-8");
+        console.log(`[ws] 💾 Stats buffered to disk: ${fname}`);
+      } catch (diskErr) {
+        console.error("[ws] Failed to buffer stats to disk:", (diskErr as Error)?.message ?? diskErr);
+      }
     });
   }
   sessionStats.delete(sessionId);
@@ -1209,6 +902,9 @@ function stopSession(sessionId: string): void {
 function handleRematchRequest(sessionId: string): void {
   const session = getSession(sessionId);
   if (!session) return;
+  // Cancel the post-match auto-stop countdown — a rematch is starting
+  const timer = matchEndTimers.get(sessionId);
+  if (timer) { clearTimeout(timer); matchEndTimers.delete(sessionId); }
   console.log(`[ws] 🔄 Rematch REQUESTED for ${sessionId} — relaying to P2`);
   sendToSession(session, { type: "rematch_requested" });
 }
@@ -1242,17 +938,15 @@ async function handleRematchAccept(sessionId: string): Promise<void> {
   }
   sendToSession(session, { type: "rematch_starting" });
 
-  // For SNES: restart character select phase after the continue screen (~12s)
+  // For SNES: unlock input after the continue screen (~12s) so players
+  // can select characters naturally (RAM detection at 0x1C07/0x1C08 picks up IDs)
   if (session.system === "snes") {
-    const grid = getSnesCharGrid(session.rom);
-    if (grid && runner) {
-      setTimeout(() => {
-        if (session.status === "running") {
-          console.log(`[ws] 🎯 Rematch char select for ${sessionId}`);
-          startCharSelectPhase(session, runner, grid);
-        }
-      }, 12000);
-    }
+    setTimeout(() => {
+      if (session.status === "running") {
+        console.log(`[ws] 🎯 Rematch — unlocking input for ${sessionId}`);
+        session.inputLocked = false;
+      }
+    }, 12000);
   }
 }
 
@@ -1292,17 +986,13 @@ async function handleAutoRematch(sessionId: string, matchNumber: number, totalMa
   }
   sendToSession(session, { type: "auto_rematch", matchNumber, totalMatches });
 
-  // For SNES: restart character select phase after the continue screen (~12s)
+  // For SNES: unlock input after the continue screen (~12s)
   if (session.system === "snes") {
-    const grid = getSnesCharGrid(session.rom);
-    if (grid && runner) {
-      setTimeout(() => {
-        if (session.status === "running") {
-          console.log(`[ws] 🎯 Auto-rematch char select for ${sessionId}`);
-          startCharSelectPhase(session, runner, grid);
-        }
-      }, 12000);
-    }
+    setTimeout(() => {
+      if (session.status === "running") {
+        session.inputLocked = false;
+      }
+    }, 12000);
   }
 }
 
@@ -1387,7 +1077,7 @@ function startGameAutoSequence(
 
         // ── START spam DISABLED: pressing START during intros can PAUSE the
         //     game on SNES instead of skipping them. Let the intro play out;
-        //     template matching detects FIGHT! text when combat starts.
+        //     Timer-based detection spots combat start (99→decrement).
         //     No button presses needed for intro skip.
         // const startPhases = [1500, 3500, 5500, 7500, 9500];
         // for (const delay of startPhases) { ... }
@@ -1413,26 +1103,17 @@ function startGameAutoSequence(
             await sleep(3000);
 
             if (session.status !== "running") return;
-            const grid = getSnesCharGrid(rom);
-            if (grid) {
-              console.log(`[ws] 🎮 SNES PvP: entering character select for ${sessionId}`);
-              startCharSelectPhase(session, runner, grid);
-            } else {
-              console.log(`[ws] 🎮 SNES: P1 B → select character for ${sessionId}`);
-              tap(1, confirmBtn);
-              await sleep(1500);
-              if (session.status !== "running") return;
-              console.log(`[ws] 🎮 SNES: P2 B → select character for ${sessionId}`);
-              tap(2, confirmBtn);
-              await sleep(1500);
-              if (session.status !== "running") return;
-              console.log(`[ws] 🎮 SNES: START → begin match for ${sessionId}`);
-              tap(1, startButton);
-              await sleep(200);
-              tap(2, startButton);
-              // Auto-sequence done, unlock player input
-              session.inputLocked = false;
-            }
+            // Unlock input so players can select characters naturally
+            session.inputLocked = false;
+            console.log(`[ws] 🎮 SNES PvP: input unlocked for char select (${sessionId})`);
+            await sleep(1500);
+            if (session.status !== "running") return;
+            console.log(`[ws] 🎮 SNES: START → begin match for ${sessionId}`);
+            tap(1, startButton);
+            await sleep(200);
+            tap(2, startButton);
+            // Auto-sequence done, unlock player input
+            session.inputLocked = false;
           }
         }, navDelay);
 

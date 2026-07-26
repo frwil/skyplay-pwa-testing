@@ -7,10 +7,6 @@ import { join } from "path";
 import { SYSTEM_CORES, SYSTEM_RESOLUTIONS, UPSCALE, XDOTOOL_KEY_MAP, XDOTOOL_KEY_MAP_P2, getButtonToRetroarch, buildRetroarchKeyConfig } from "./config.js";
 import { isRecordingEnabled, isStreamingEnabled, recordingDir, recorderFfmpegArgs, streamerFfmpegArgs, uploadRecording } from "./recording.js";
 import type { RamConfig } from "./game-config.js";
-import { getPixelConfig } from "./pixel/pixel-game-config.js";
-import { PortraitDetector, type PortraitGridResult } from "./pixel/portrait-detector.js";
-import { TemplateCalibrator } from "./pixel/template-calibrator.js";
-import { TemplateMatcher } from "./pixel/template-matcher.js";
 
 // Verbose per-frame / per-input RAM-detection tracing. OFF by default: those logs fire
 // dozens of times per second during a live round and each console.log to the Docker
@@ -32,7 +28,7 @@ const RA_CMD_PORT = 55355;
 
 /** Known memory addresses for health bars in RetroArch core memory (offsets from work RAM base).
  *  For NeoGeo/FBNeo: full health is typically 0x67 (103 decimal). */
-const HEALTH_MEMORY_MAP: Record<string, { p1: number; p2: number; size: number; maxHealth: number; timer: number; timerAlt: number; p1Char: number; p2Char: number; p1Mode: number; p2Mode: number; altChars?: number[]; teamSlots?: number[]; /** Discovered via RAM scan: team roster base at 0xA84E (P1) and 0xA85E (P2) */ p1TeamBase?: number; p2TeamBase?: number; /** Byte offsets from team base to each of the 3 slots (irregular, with separator gaps) */ p1TeamOffsets?: number[]; p2TeamOffsets?: number[]; /** Active character slot index (0-2) */ p1ActiveIdx?: number; p2ActiveIdx?: number; /** Currently-fighting character ID address (0x8256 P1 / 0x8456 P2), discovered via multi-snapshot diff */ p1Active?: number; p2Active?: number; /** Match state flag at 0xA840 (0x40 = in-match, 0x00 = char select) */ matchFlag?: number; /** Per-player "characters lost" counters (0xA859 P1 / 0xA868 P2), 0→3, draw-inclusive — the authoritative match-end signal (health heuristics give the wrong time-over winner and misread the 31% draw-replay) */ p1Lost?: number; p2Lost?: number; /** Pick-order (fight order) buffer in the player struct — [1st, 2nd, 3rd] absolute addresses. P1 0x15CB/0x15CA/0x15CD, P2 mirror +0x200 0x17CB/0x17CA/0x17CD (sep 0x00 at +0xCC). Discovered + validated via controlled diff on 3 distinct orders (2026-07-10). This is the REAL selection order (≠ set-order 0xA84E). Reliable in stable combat; read once + freeze. */ p1PickOrder?: number[]; p2PickOrder?: number[]; /** SFA2 play mode: 0=Manual, 1=Auto. P1 at 0x1C2A, P2 at 0x1C2B (+1 offset, S-DD1 interleaved). Confirmed 2026-07-26 via Manual→Auto diff. */ p1PlayMode?: number; p2PlayMode?: number }> = {
+const HEALTH_MEMORY_MAP: Record<string, { p1: number; p2: number; size: number; maxHealth: number; timer: number; timerAlt: number; p1Char: number; p2Char: number; p1Mode: number; p2Mode: number; altChars?: number[]; teamSlots?: number[]; /** Discovered via RAM scan: team roster base at 0xA84E (P1) and 0xA85E (P2) */ p1TeamBase?: number; p2TeamBase?: number; /** Byte offsets from team base to each of the 3 slots (irregular, with separator gaps) */ p1TeamOffsets?: number[]; p2TeamOffsets?: number[]; /** Active character slot index (0-2) */ p1ActiveIdx?: number; p2ActiveIdx?: number; /** Currently-fighting character ID address (0x8256 P1 / 0x8456 P2), discovered via multi-snapshot diff */ p1Active?: number; p2Active?: number; /** Match state flag at 0xA840 (0x40 = in-match, 0x00 = char select) */ matchFlag?: number; /** Per-player "characters lost" counters (0xA859 P1 / 0xA868 P2), 0→3, draw-inclusive — the authoritative match-end signal (health heuristics give the wrong time-over winner and misread the 31% draw-replay) */ p1Lost?: number; p2Lost?: number; /** Pick-order (fight order) buffer in the player struct — [1st, 2nd, 3rd] absolute addresses. P1 0x15CB/0x15CA/0x15CD, P2 mirror +0x200 0x17CB/0x17CA/0x17CD (sep 0x00 at +0xCC). Discovered + validated via controlled diff on 3 distinct orders (2026-07-10). This is the REAL selection order (≠ set-order 0xA84E). Reliable in stable combat; read once + freeze. */ p1PickOrder?: number[]; p2PickOrder?: number[]; /** SFA2 play mode: 0=Manual, 1=Auto. P1 at 0x1C2A, P2 at 0x1C2B (+1 offset, S-DD1 interleaved). Confirmed 2026-07-26 via Manual→Auto diff. */ p1PlayMode?: number; p2PlayMode?: number; /** SFA2 round-win counters (0→1→2, best-of-3). Mirror-region copies at 0x0701 P1 / 0x0A04 P2. Discovered 2026-07-26 via full-WRAM differential. */ p1Rounds?: number; p2Rounds?: number }> = {
   "kof98.zip":   {
     p1: 0x8238, p2: 0x8438, size: 1, maxHealth: 0x67,
     timer: 0xA83A, timerAlt: 0x85D2,
@@ -62,7 +58,7 @@ const HEALTH_MEMORY_MAP: Record<string, { p1: number; p2: number; size: number; 
     // Per-player "characters lost" counters (0→3), discovered via watch-counter multi-round
     // capture (2026-07-10) and validated against a full match (P1 wins R1+R3, P2 R2, DRAW R4 →
     // p2Lost hit 3 → P1 wins). A DRAW increments BOTH at the same poll. These are the
-    // authoritative round-result + match-end signal, replacing the unreliable health heuristics.
+    // authoritative round-result + match-end signal.
     p1Lost: 0xA859, p2Lost: 0xA868,
     // Pick order (fight order) buffers — [1st, 2nd, 3rd] absolute addresses. P2 = P1 + 0x200.
     // Layout in RAM is [2nd, 1st, sep(00), 3rd]; we list them here already in fight order.
@@ -83,6 +79,11 @@ const HEALTH_MEMORY_MAP: Record<string, { p1: number; p2: number; size: number; 
     p1Char: 0x1C07, p2Char: 0x1C08,       // P1 char ID, P2 char ID (offset +1)
     p1Mode: 0x1D3D, p2Mode: 0x1D3D,       // not yet discovered — placeholder
     p1PlayMode: 0x1C2A, p2PlayMode: 0x1C2B, // 0=Manual, 1=Auto
+    // Round-win counters (0→1→2, best-of-3). Discovered 2026-07-26 via full-WRAM
+    // differential across 4 rounds (P1 win, P2 win, DRAW, P2 win). These are the
+    // mirror-region copies; primary addresses not yet identified but mirrors are
+    // stable across the entire match. P1 at 0x0701, P2 at 0x0A04 (+0x303 offset).
+    p1Rounds: 0x0701, p2Rounds: 0x0A04,
   },
 };
 
@@ -110,9 +111,9 @@ const KOF98_CHARACTERS: Record<number, string> = {
 const SFA2_CHARACTERS: Record<number, string> = {
   0x00: "Ryu",       0x01: "Ken",        0x02: "Akuma",
   0x03: "Charlie",   0x04: "Chun-Li",    0x05: "Adon",
-  0x06: "Sakura",    0x07: "Guy",        0x08: "Birdie",
-  0x09: "Sodom",     0x0A: "Rose",       0x0B: "Dan",
-  0x0C: "M. Bison",  0x0D: "Sagat",      0x0E: "Rolento",
+  0x06: "Sodom",     0x07: "Guy",        0x08: "Birdie",
+  0x09: "Rose",       0x0A: "M. Bison",   0x0B: "Sagat",
+  0x0C: "Dan",       0x0D: "Sakura",     0x0E: "Rolento",
   0x0F: "Dhalsim",   0x10: "Zangief",    0x11: "Gen",
 };
 
@@ -156,15 +157,11 @@ export class GameRunner extends EventEmitter {
   private retroarchWindowId: string | null = null;
   private configPath: string | null = null;
 
-  // ── Round win/loss detection (shared between RAM + pixel paths) ──
+  // ── Round win/loss detection (RAM-based) ──
   private healthPollTimer: ReturnType<typeof setInterval> | null = null; // debug log timer (10s)
   private healthReadTimer: ReturnType<typeof setInterval> | null = null; // health polling timer (250ms)
   private healthPollEnabled = false;
-  private textFrameBuf = Buffer.alloc(0);
   private healthPollErrorCount = 0;
-  private previousP1Health = -1;
-  private previousP2Health = -1;
-  private koDetected = false;
   private p1Losses = 0;
   private p2Losses = 0;
   private matchEnded = false;
@@ -174,7 +171,8 @@ export class GameRunner extends EventEmitter {
   /** Per-match round tracking for stats. */
   private matchNumber = 0;
   private roundNumber = 0;
-  private matchPerfectKos = 0;
+  /** Per-round perfect KO ledger: { round, player } — who scored a perfect in which round. */
+  private matchPerfectKos: { round: number; player: number }[] = [];
   /** Track minimum health of each player during the current round (for accurate perfect KO detection). */
   private roundP1MinHealth = 100;
   private roundP2MinHealth = 100;
@@ -184,41 +182,13 @@ export class GameRunner extends EventEmitter {
   private roundTimerHitZero = false;
   /** processLossCounters-local previous 16-bit timer, to detect the >0 → 0 (TIME OVER) transition. */
   private lcPrevTimer16 = -1;
-  /** After auto-continue, use a shorter warmup since we already validated the readings. */
-  private fastWarmup = false;
-  /** Fallback health-heuristic warmup (non-loss-counter RAM games). */
-  private healthDetectionArmed = false;
-  private healthStableFrames = 0;
-  private healthStableFramesHealthy = 0;
-  /** KO cooldown frames for the fallback health heuristic. */
-  private koCooldownFrames = 0;
-  // ── Pixel-based text detection (SFA2, SNES) ──
-  /** Template matcher — OpenCV bridge for identifying text overlays (FIGHT!, KO, PERFECT, etc.). */
-  private templateMatcher: TemplateMatcher | null = null;
-  /** Whether a template-matching request is currently in-flight (backpressure). */
-  private templateMatchInFlight = false;
-  /** Latest raw text-crop frame pending for template matching (replaced by each new frame). */
-  private latestTextFrame: Buffer | null = null;
-  private latestTextFrameW = 0;
-  private latestTextFrameH = 0;
-  /** Cooldown: last detected text name + timestamp to suppress duplicate fires. */
-  private lastTextEvent: { name: string; time: number } | null = null;
-  private readonly TEXT_COOLDOWN_MS = 2000;
-  /** Portrait detector for character select screen (null = no portrait config for this ROM). */
-  private portraitDetector: PortraitDetector | null = null;
-  /** Latest portrait grid capture result (set by captureCharSelectPortraits, consumed by ws-handler). */
-  private portraitCaptureResult: PortraitGridResult | null = null;
-  /** Template calibrator for self-training portrait templates (null until enableCalibration). */
-  private calibrator: TemplateCalibrator | null = null;
-  /** Set after auto-generating consensus templates (prevents duplicate export logs). */
-  private _templatesAutoGenerated = false;
   /** UDP socket for reading health directly from RetroArch core memory via READ_CORE_RAM. */
   private healthUdp: Socket | null = null;
   /** Pending GET_STATUS resolvers, settled by the healthUdp message handler when RetroArch
    *  replies "GET_STATUS <PLAYING|PAUSED|CONTENTLESS> ...". We reuse the proven health socket
    *  (which reliably gets replies under load) instead of an ephemeral socket that drops them. */
   private pendingStatusResolvers: Array<(s: "PLAYING" | "PAUSED" | "CONTENTLESS" | null) => void> = [];
-  /** Memory-map entry for the current game (null = fall back to pixel analysis). */
+  /** Memory-map entry for the current game (null = no RAM-based detection available). */
   private healthMemMap: typeof HEALTH_MEMORY_MAP[string] | null = null;
   /** Latest health values read from core memory (raw, before normalization). */
   private memHealthP1 = -1;
@@ -226,13 +196,18 @@ export class GameRunner extends EventEmitter {
   private memTimer = -1;
   private memTimerAlt = -1;
   private memTimer16 = -1; // 16-bit LE timer (A83A-A83B)
-  private prevTimer16 = -1; // previous frame's 16-bit timer (for round-reset detection)
   private memP1Char = -1;
   private memP2Char = -1;
   private memP1Mode = -1;
   private memP2Mode = -1;
   private memP1PlayMode = -1;
   private memP2PlayMode = -1;
+  /** SFA2 round-win counters (0→1→2). P1 mirror at 0x0701, P2 mirror at 0x0A04. */
+  memP1Rounds = 0;
+  memP2Rounds = 0;
+  /** Previous poll's round counter values — used to detect increments (round wins). */
+  private prevP1Rounds = -1;
+  private prevP2Rounds = -1;
   /** Discovered team slots (3 per player): P1 @0xA84E/A84F/A851, P2 @0xA85E/A860/A861. */
   private p1TeamSlots: number[] = [];
   private p2TeamSlots: number[] = [];
@@ -275,6 +250,10 @@ export class GameRunner extends EventEmitter {
   private runnerId: number;
   /** Set to true after auto-start/continue completes — suppress KO detection during demo mode. */
   private gameStarted = false;
+  /** Emit matchStarted only once — when timer peaks at 99 then decrements. */
+  private matchStartedEmitted = false;
+  /** Peak timer value seen in this match (for detecting the 99→decrement transition). */
+  private matchStartTimerPeak = 0;
   /** One-shot flag: roster scan runs on first ARMED. */
   private rosterScanned = false;
   /** Team roster read from memory slots (direct address read, updated each poll). */
@@ -293,11 +272,6 @@ export class GameRunner extends EventEmitter {
   /** True while RetroArch is paused (F12 toggle). Freezes the game on match end so the
    *  attract/demo never starts; cleared on rematch. Tracked to keep pause/resume idempotent. */
   private paused = false;
-  /** True once the game has left the real match into post-combat char-select/attract WITHOUT
-   *  a clean matchEnd (e.g. a missed draw). Stops the health detector from scoring the KOF98
-   *  attract DEMO (CPU vs CPU) as phantom rounds/matches. Cleared by beginRematch(). */
-  private detectionFrozen = false;
-
   /** Build character info for event payloads using the locked team (frozen at char select). */
   private charInfo() {
     const charMap = this.healthMemMap?.maxHealth === 0x60 ? SFA2_CHARACTERS : KOF98_CHARACTERS;
@@ -375,20 +349,6 @@ export class GameRunner extends EventEmitter {
     if (ramConfig) {
       this.healthMemMap = ramConfig;
     }
-    // Look up the per-ROM pixel detection config (only used when no RAM map available).
-    const pixelConfig = getPixelConfig(this.rom);
-    if (pixelConfig) {
-      if (pixelConfig.portrait) {
-        this.portraitDetector = new PortraitDetector(pixelConfig.portrait);
-        const p = pixelConfig.portrait;
-        console.log(`[game-runner] 🖼️  Portrait detector initialized: ${p.cols}×${p.rows} grid at (${p.gridX},${p.gridY}), cell ${p.cellW}×${p.cellH}, ${p.templates.length} templates`);
-      }
-      if (pixelConfig.textEvents) {
-        this.templateMatcher = new TemplateMatcher();
-        const te = pixelConfig.textEvents;
-        console.log(`[game-runner] 🏷️  Template matcher initialized for ${this.rom}: crop ${te.textW}×${te.textH} at (${te.textX},${te.textY})`);
-      }
-    }
   }
 
   get display(): string {
@@ -452,7 +412,7 @@ export class GameRunner extends EventEmitter {
     this.startRecorder(displayW, displayH);
     this.startStreamer(displayW, displayH);
 
-    // Start health bar watcher — prefer direct memory reading, fall back to pixel capture.
+    // Start health bar watcher via direct memory reading (RAM-based detection).
     // If a RamConfig was passed to the constructor (from DB), it's already set. Otherwise
     // look up the hardcoded HEALTH_MEMORY_MAP by ROM basename.
     if (!this.healthMemMap) {
@@ -464,338 +424,21 @@ export class GameRunner extends EventEmitter {
     }
     if (this.healthMemMap) {
       this.startMemoryHealthReader();
-    } else if (this.templateMatcher) {
-      console.log(`[game-runner] 🧠 No memory map for ${this.rom}, using template-matching text detection`);
     } else {
-      console.log(`[game-runner] 🧠 No detection method available for ${this.rom}`);
+      console.log(`[game-runner] 🧠 No memory map for ${this.rom} — detection disabled`);
     }
 
     return { width: resolution.w, height: resolution.h };
   }
 
   // ─────────────────────────────────────────────────────────────────
-  //  Health bar watcher (screenshot-based round detection)
-  // ─────────────────────────────────────────────────────────────────
-
-  /**
-   * DEPRECATED: the health bar stripe is now extracted from the MAIN video
-   * ffmpeg (see startFfmpegVideo, output fd 3). The separate x11grab was
-   * starved by the 60fps main grab — frames arrived 2+ min late.
-   *
-  // ── Portrait capture (diagnostic metadata for character select) ──
-
-  /**
-   * Fire-and-forget portrait grid capture. Spawns an ephemeral ffmpeg process
-   * that grabs 5 raw RGB24 frames of the portrait region, then runs template
-   * matching via the PortraitDetector. Stores the result on
-   * {@link portraitCaptureResult} for the ws-handler to consume.
-   *
-   * This is diagnostic metadata only — cursor tracking remains authoritative
-   * for gameplay. Failures are logged but never block the game.
-   */
-  captureCharSelectPortraits(): void {
-    const detector = this.portraitDetector;
-    if (!detector) return; // No portrait config for this ROM — silent no-op
-
-    const pixelConfig = getPixelConfig(this.rom);
-    const portrait = pixelConfig?.portrait;
-    if (!portrait) return;
-
-    const gridW = portrait.cellW * portrait.cols;
-    const gridH = portrait.cellH * portrait.rows;
-
-    console.log(`[game-runner] 🖼️  Portrait capture starting: ${gridW}x${gridH} at (${portrait.gridX},${portrait.gridY}) via import`);
-
-    const doCapture = new Promise<PortraitGridResult | null>((resolve) => {
-      try {
-        // Use ImageMagick import (not ffmpeg x11grab) — import -window root
-        // is reliable; ffmpeg x11grab hangs/times out for this use on Xvfb.
-        const tmpPath = `/tmp/portrait-full-${Date.now()}.ppm`;
-        const result = spawnSync("import", ["-depth", "8", "-window", "root", tmpPath], {
-          env: { ...process.env, DISPLAY: this.display },
-          stdio: "pipe", timeout: 5000,
-        });
-
-        if (result.status !== 0 || !existsSync(tmpPath)) {
-          console.warn(`[game-runner] 🖼️  import failed: status=${result.status} stderr="${result.stderr.toString().slice(0, 200)}"`);
-          resolve(null);
-          return;
-        }
-
-        // Read the PPM and extract the portrait region
-        const raw = readFileSync(tmpPath);
-        try { unlinkSync(tmpPath); } catch { /* best-effort cleanup */ }
-
-        // Parse PPM P6 header to find pixel data start
-        let hdrEnd = 0;
-        let newlines = 0;
-        for (let i = 0; i < Math.min(raw.length, 200); i++) {
-          if (raw[i] === 0x0A) { // newline
-            newlines++;
-            if (newlines >= 3) { hdrEnd = i + 1; break; }
-          }
-        }
-        if (hdrEnd === 0 || raw[0] !== 0x50 /* 'P' */ || raw[1] !== 0x36 /* '6' */) {
-          console.warn("[game-runner] 🖼️  Invalid PPM header from import");
-          resolve(null);
-          return;
-        }
-
-        const pixels = raw.subarray(hdrEnd);
-        // Parse header for dimensions
-        const headerStr = raw.subarray(0, hdrEnd).toString("ascii");
-        const hdrParts = headerStr.split(/\s+/).filter(s => s.length > 0 && s !== "P6");
-        const fullW = parseInt(hdrParts[0], 10);
-        const fullH = parseInt(hdrParts[1], 10);
-
-        if (!fullW || !fullH || fullW < gridW || fullH < gridH) {
-          console.warn(`[game-runner] 🖼️  Bad PPM dimensions: ${fullW}x${fullH} (need ≥ ${gridW}x${gridH})`);
-          resolve(null);
-          return;
-        }
-
-        // Crop the portrait grid from the full frame
-        const cropped = Buffer.alloc(gridW * gridH * 3);
-        for (let y = 0; y < gridH; y++) {
-          const srcY = portrait.gridY + y;
-          const srcOff = (srcY * fullW + portrait.gridX) * 3;
-          const dstOff = y * gridW * 3;
-          if (srcOff + gridW * 3 <= pixels.length) {
-            pixels.copy(cropped, dstOff, srcOff, srcOff + gridW * 3);
-          }
-        }
-
-        // Single frame (import is slow — we can't do 5fps like ffmpeg)
-        const frames = [cropped];
-
-        // ── Debug: save cropped frame as PPM ──
-        try {
-          const dbgDir = "/recordings/portrait-debug";
-          if (!existsSync(dbgDir)) mkdirSync(dbgDir, { recursive: true });
-          const ppmPath = `${dbgDir}/portrait-capture.ppm`;
-          const header = `P6\n${gridW} ${gridH}\n255\n`;
-          writeFileSync(ppmPath, Buffer.concat([Buffer.from(header, "ascii"), cropped]));
-          console.log(`[game-runner] 🔬 Portrait debug frame saved: ${ppmPath} (${gridW}x${gridH})`);
-        } catch (e) { /* non-fatal */ }
-
-        // ── Calibration: feed raw frames to the calibrator (opt-in) ──
-        if (this.calibrator) {
-            const fullCharMap: Array<{ row: number; col: number; charId: number; charName: string }> = [];
-            for (let row = 0; row < portrait.rows; row++) {
-              for (let col = 0; col < portrait.cols; col++) {
-                const charId = row * portrait.cols + col;
-                fullCharMap.push({
-                  row,
-                  col,
-                  charId,
-                  charName: portrait.charNames[charId] ?? `0x${charId.toString(16).padStart(2, "0")}`,
-                });
-              }
-            }
-            // Feed every captured frame to the calibrator
-            for (const frame of frames) {
-              this.calibrator.collectFromFrame(frame, gridW, gridH, fullCharMap);
-            }
-            console.log(
-              `[game-runner] 🔧 Calibrator fed ${frames.length} frame(s) — ${this.calibrator.getTotalSamples()} total samples across ${this.calibrator.getSampledCharIds().length} characters`,
-            );
-
-            // ── Auto-persist samples to disk for cross-match accumulation ──
-            try {
-              const samplesPath = "/recordings/calibration/portrait-samples.json";
-              const dir = "/recordings/calibration";
-              if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-              this.calibrator.save(samplesPath, this.rom);
-            } catch (e) {
-              console.warn("[game-runner] 🔧 Failed to persist calibration data:", e);
-            }
-
-            // ── Auto-generate templates when enough samples ──────────
-            // Once every character has ≥MIN_SAMPLES_PER_CHAR samples, generate
-            // consensus templates, validate, and auto-swap the detector's
-            // templates so recognition works immediately.
-            const MIN_SAMPLES_PER_CHAR = 10;
-            const sampledIds = this.calibrator.getSampledCharIds();
-            const allCharsSampled =
-              sampledIds.length >= portrait.charNames.length &&
-              sampledIds.every((id) => this.calibrator!.getSampleCount(id) >= MIN_SAMPLES_PER_CHAR);
-
-            if (allCharsSampled && !this._templatesAutoGenerated) {
-              this._templatesAutoGenerated = true;
-              const consensus = this.calibrator.generateTemplates(0.6);
-              const report = this.calibrator.validate(consensus);
-              console.log(
-                `[game-runner] 🔧 AUTO-GENERATED consensus templates! ` +
-                `Accuracy: ${(report.overallAccuracy * 100).toFixed(1)}% ` +
-                `(${report.lowSampleChars.length} low-sample chars)`,
-              );
-              console.log("[game-runner] 🔧 Per-char accuracy:");
-              for (const [name, info] of Object.entries(report.perChar)) {
-                const flag = info.accuracy < 0.9 ? " ⚠️" : info.accuracy < 0.95 ? " ⚡" : "";
-                console.log(`  ${name}: ${(info.accuracy * 100).toFixed(0)}% (${info.samples} samples)${flag}`);
-              }
-              // Log the export code for copy-paste into pixel-game-config.ts
-              console.log("[game-runner] 🔧 ── BEGIN TEMPLATE EXPORT ──");
-              console.log(this.calibrator.exportTemplates(0.6));
-              console.log("[game-runner] 🔧 ── END TEMPLATE EXPORT ──");
-            }
-          }
-
-          // ── Run the detector on the captured frame ──
-          try {
-            const result = detector.processFrames(frames, gridW, gridH);
-            console.log(
-              `[game-runner] 🖼️  Portrait grid analyzed: ${result.cellsResolved}/${portrait.cols * portrait.rows} cells resolved across ${result.framesAnalyzed} frames`,
-            );
-            resolve(result);
-          } catch (err) {
-            console.warn("[game-runner] 🖼️  Portrait analysis failed:", err);
-            resolve(null);
-          }
-        } catch (err) {
-          console.warn("[game-runner] 🖼️  Portrait capture failed:", err);
-          resolve(null);
-        }
-      });
-
-    doCapture.then((result) => {
-      this.portraitCaptureResult = result;
-    });
-  }
-
-  /** Latest portrait grid result, or null if capture hasn't run / failed. */
-  get portraitResult(): PortraitGridResult | null {
-    return this.portraitCaptureResult;
-  }
-
-  // ── Template matching (text overlay detection) ──────────────────────
-
-  /**
-   * Process a single text-crop frame through the OpenCV template matcher.
-   *
-   * Uses backpressure: if a matching request is already in-flight, the new
-   * frame replaces the pending frame data (so the bridge always works on the
-   * freshest frame). When the in-flight request completes, if a newer frame
-   * arrived, it is immediately dispatched.
-   *
-   * On match: logs the event and emits a "textEvent" with cooldown to avoid
-   * duplicate fires for the same text.
-   */
-  private pendingTextFrame: Buffer | null = null;
-  private pendingTextFrameW = 0;
-  private pendingTextFrameH = 0;
-
-  private processTextFrame(frame: Buffer, w: number, h: number): void {
-    if (!this.templateMatcher) return;
-
-    // Store frame for potential retry / debug saves
-    this.latestTextFrame = Buffer.from(frame);
-    this.latestTextFrameW = w;
-    this.latestTextFrameH = h;
-
-    if (this.templateMatchInFlight) {
-      // Replace pending frame — only the freshest matters
-      this.pendingTextFrame = Buffer.from(frame);
-      this.pendingTextFrameW = w;
-      this.pendingTextFrameH = h;
-      return;
-    }
-
-    this.templateMatchInFlight = true;
-    this.doSendTextFrame(frame, w, h);
-  }
-
-  private async doSendTextFrame(frame: Buffer, w: number, h: number): Promise<void> {
-    try {
-      const result = await this.templateMatcher!.identify(frame, w, h);
-
-      // Check if a newer frame arrived while we were waiting
-      if (this.pendingTextFrame) {
-        const nextFrame = this.pendingTextFrame;
-        const nextW = this.pendingTextFrameW;
-        const nextH = this.pendingTextFrameH;
-        this.pendingTextFrame = null;
-        this.doSendTextFrame(nextFrame, nextW, nextH);
-        return;
-      }
-
-      this.templateMatchInFlight = false;
-
-      if (!result || !result.name) return;
-
-      const now = Date.now();
-      // Cooldown: suppress duplicate fires of the same text within the window
-      if (this.lastTextEvent?.name === result.name &&
-          now - this.lastTextEvent.time < this.TEXT_COOLDOWN_MS) {
-        return;
-      }
-
-      this.lastTextEvent = { name: result.name, time: now };
-      const pct = (result.confidence * 100).toFixed(1);
-      console.log(`[game-runner] 🎯 "${result.name}" detected (conf=${pct}%)`);
-
-      // Emit simple text event — no round/match tracking for now
-      this.emit("textEvent", { name: result.name, confidence: result.confidence });
-    } catch (err) {
-      this.templateMatchInFlight = false;
-      this.pendingTextFrame = null;
-    }
-  }
-
-  // ── Calibration (template self-training) ────────────────────────────
-
-  /**
-   * Enable calibration mode. Creates a TemplateCalibrator instance that
-   * collects binarized portrait samples from every character-select capture.
-   * Call this BEFORE entering character select (e.g. in startCharSelectPhase).
-   *
-   * Calibration is opt-in — only for developer use when training templates.
-   */
-  enableCalibration(): void {
-    const pixelConfig = getPixelConfig(this.rom);
-    if (!pixelConfig?.portrait) {
-      console.warn("[game-runner] 🔧 Cannot enable calibration: no portrait config for this ROM");
-      return;
-    }
-    if (!this.calibrator) {
-      this.calibrator = new TemplateCalibrator(pixelConfig.portrait);
-      console.log("[game-runner] 🔧 Template calibrator ENABLED — samples will be collected on each char select capture");
-
-      // ── Auto-load persisted samples from previous matches ──
-      const samplesPath = "/recordings/calibration/portrait-samples.json";
-      try {
-        this.calibrator.load(samplesPath);
-      } catch (e) {
-        console.log("[game-runner] 🔧 No existing calibration data to load (first run or file missing)");
-      }
-    }
-  }
-
-  /**
-   * Save accumulated calibration samples to disk as JSON.
-   * The file can later be loaded back with {@link TemplateCalibrator.load}
-   * and used to generate consensus templates via {@link TemplateCalibrator.generateTemplates}.
-   */
-  saveCalibrationData(filePath: string): void {
-    if (!this.calibrator) {
-      console.warn("[game-runner] 🔧 No calibrator active — call enableCalibration() first");
-      return;
-    }
-    this.calibrator.save(filePath, this.rom);
-  }
-
-  /** Expose the calibrator for direct access (generateTemplates, validate, exportTemplates). */
-  getCalibrator(): TemplateCalibrator | null {
-    return this.calibrator;
-  }
-
   // ─────────────────────────────────────────────────────────────────
   //  UDP-based health reader (direct RetroArch core memory access)
   // ─────────────────────────────────────────────────────────────────
 
   /** Start polling RetroArch core memory via UDP for exact health values.
    *  Reads both players in a single READ_CORE_RAM command (P1=0x8238, P2=0x8438, 512 bytes apart).
-   *  RetroArch Network Commands UDP protocol — far more reliable than pixel analysis. */
+   *  RetroArch Network Commands UDP protocol — authoritative ground truth. */
   private startMemoryHealthReader(): void {
     // Guard 1: if the runner was stopped (e.g. during async setup), don't start.
     if (this.stopRequested) {
@@ -886,13 +529,29 @@ export class GameRunner extends EventEmitter {
         const hexBytes = parts.slice(2).join("");
         if (hexBytes === "-1") continue; // read failed
 
-        if (rspAddr !== minAddr && rspAddr !== map.timer) {
+        if (rspAddr !== minAddr && rspAddr !== map.timer && rspAddr !== roundCounterAddr) {
           // Unexpected address — might be a timeout retry response
           continue;
         }
 
-        // Handle the separate fast timer-only response (2 bytes at map.timer)
-        if (rspAddr === map.timer) {
+        // ── SFA2 round-win counter response ──
+        if (rspAddr === roundCounterAddr && hasRoundCounters && hexBytes.length > 4) {
+          try {
+            this.memP1Rounds = parseInt(hexBytes.substring(p1RoundsOff, p1RoundsOff + 2), 16) || 0;
+            this.memP2Rounds = parseInt(hexBytes.substring(p2RoundsOff, p2RoundsOff + 2), 16) || 0;
+          } catch { /* keep previous values */ }
+          roundPollCount++;
+          if (DEBUG_RAM && (roundPollCount <= 3 || roundPollCount % 30 === 0)) {
+            console.log(`[game-runner] ${this.readerTag} 🏆 round poll #${roundPollCount}: P1=${this.memP1Rounds} P2=${this.memP2Rounds}`);
+          }
+          continue;
+        }
+
+        // Handle the separate fast timer-only response (2 bytes at map.timer).
+        // Only treat as timer-only if the response is SHORT (just the 2 bytes we asked for).
+        // When minAddr === map.timer (e.g. SFA2: both at 0x1B7D), the chunk response also
+        // arrives with this address — but it's much longer. Don't swallow the chunk as a timer poll.
+        if (rspAddr === map.timer && hexBytes.length === 4) {
           if (hexBytes.length >= 4) {
             const tLo = parseInt(hexBytes.substring(0, 2), 16);
             const tHi = parseInt(hexBytes.substring(2, 4), 16);
@@ -904,7 +563,6 @@ export class GameRunner extends EventEmitter {
               this.memTimer16 = bcdSeconds;
               this.memTimer = bcdSeconds;
             }
-            this.prevTimer16 = this.memTimer16;
             timerPollCount++;
             if (DEBUG_RAM && (timerPollCount <= 3 || timerPollCount % 30 === 0)) {
               console.log(`[game-runner] ${this.readerTag} ⏱️ timer-only poll #${timerPollCount}: timer=${this.memTimer} 16bit=${this.memTimer16}`);
@@ -996,32 +654,6 @@ export class GameRunner extends EventEmitter {
           // score the demo as a real match (phantom roundResult/matchEnd). The game is now
           // paused on match end, so no demo runs and no implicit reset is needed.
           //
-          // STOPGAP anti-demo: if the game reaches a SUSTAINED char-select (matchFlag 0x00)
-          // while a match was in progress (teamFrozen) but was NOT cleanly ended (matchEnded
-          // still false — e.g. a draw the health detector missed), the real match is over and
-          // the game is about to run its attract DEMO. Freeze the detector and pause so the
-          // demo can't be scored as phantom rounds. A real rematch clears this via beginRematch().
-          const ATTRACT_ZERO_STREAK = 8; // ~2s at 250ms polls; mid-match round blips last 1-2 polls
-          // Only treat a SUSTAINED char-select as post-match ATTRACT when the match had
-          // actually progressed to the brink of ending. A match ends at 3 losses, so a MISSED
-          // clean end (exactly the case this stopgap covers) still leaves the loser at ≥2 recorded
-          // losses. Firing at a low score — e.g. a round-1 time-over DRAW at full health that
-          // briefly drops matchFlag to 0x00 — is a false positive that PAUSED and froze a live
-          // game (user: "après un draw le jeu se fige même au 1er round"). Require near-match-end.
-          const nearMatchEnd = Math.max(this.p1Losses, this.p2Losses) >= 2;
-          // The loss-counter path (kof98) detects match end AUTHORITATIVELY (processLossCounters
-          // sets matchEnded at 3 losses) and ws-handler pauses the emulator on matchEnd, so this
-          // stopgap is redundant there. Worse: a KOF98 DRAW triggers a round REPLAY whose loading
-          // holds matchFlag 0x00 for many polls at a mid-match score >= 2, which this stopgap
-          // mis-read as post-match attract → it froze a LIVE match after a draw (no matchEnd, no
-          // overlay — user: "R3 fini, l'overlay s'affiche pas"). Disable it when loss counters run.
-          const usesLossCounters = this.healthMemMap?.p1Lost != null;
-          if (!usesLossCounters && !this.detectionFrozen && this.teamFrozen && !this.matchEnded && nearMatchEnd &&
-              this.memMatchFlag === 0x00 && this.matchFlagZeroStreak >= ATTRACT_ZERO_STREAK) {
-            this.detectionFrozen = true;
-            this.pause();
-            console.log(`[game-runner] ${this.readerTag} 🛑 Post-match attract detected (no clean matchEnd) — froze detector + paused to block demo scoring. Score was P1=${this.p1Losses} P2=${this.p2Losses}`);
-          }
           // The roster is reliable in char select (0x00) AND steady combat (0x40). The 0xA85E P2
           // region only settles to the real picks once combat starts, so keep refreshing through
           // steady combat (last-valid-wins), then freeze at the first round transition/KO
@@ -1055,6 +687,29 @@ export class GameRunner extends EventEmitter {
             console.log(`[game-runner] ${this.readerTag} 🔬 Char select detected (timer16=${this.memTimer16}, health=${this.memHealthP1}%) — starting roster scan`);
             this.scanTeamRoster();
           }
+          // ── Timer-based match start detection ──
+          // Match begins when timer peaks at 99 then decrements — a clean
+          // signal that combat has actually started (vs char select / attract).
+          if (this.gameStarted && !this.matchStartedEmitted) {
+            if (this.memTimer > this.matchStartTimerPeak) {
+              this.matchStartTimerPeak = this.memTimer;
+            }
+            if (this.matchStartTimerPeak >= 95 && this.memTimer < this.matchStartTimerPeak) {
+              this.matchStartedEmitted = true;
+              const ci = this.charInfo();
+              console.log(
+                `[game-runner] ${this.readerTag} 🎬 MATCH STARTED (timer ${this.matchStartTimerPeak}→${this.memTimer}) — ` +
+                `P1=${ci.p1Char} P2=${ci.p2Char}`
+              );
+              this.emit("matchStarted", {
+                p1Char: ci.p1Char,
+                p2Char: ci.p2Char,
+                p1Health: this.memHealthP1,
+                p2Health: this.memHealthP2,
+              });
+            }
+          }
+
           this.processHealthFrame();
 
           // ── Live match-state event (throttled ~500ms) ──
@@ -1181,6 +836,22 @@ export class GameRunner extends EventEmitter {
       this.healthUdp!.send(cmd, RA_CMD_PORT, "127.0.0.1");
     };
 
+    // SFA2 round-win counter poll: reads a 772-byte span covering both mirror addresses
+    // (P1 at 0x0701, P2 at 0x0A04). Runs alongside the chunk poll and timer poll.
+    const hasRoundCounters = map.p1Rounds != null && map.p2Rounds != null;
+    const roundCounterAddr = hasRoundCounters ? Math.min(map.p1Rounds!, map.p2Rounds!) : 0;
+    const roundCounterSize = hasRoundCounters
+      ? Math.max(map.p1Rounds!, map.p2Rounds!) - Math.min(map.p1Rounds!, map.p2Rounds!) + 1
+      : 0;
+    const p1RoundsOff = hasRoundCounters ? (map.p1Rounds! - roundCounterAddr) * 2 : -1;
+    const p2RoundsOff = hasRoundCounters ? (map.p2Rounds! - roundCounterAddr) * 2 : -1;
+    let roundPollCount = 0;
+    const roundPoll = () => {
+      if (!this.running || !this.healthUdp || !hasRoundCounters) return;
+      const cmd = Buffer.from(`READ_CORE_RAM ${roundCounterAddr.toString(16)} ${roundCounterSize}\n`);
+      this.healthUdp!.send(cmd, RA_CMD_PORT, "127.0.0.1");
+    };
+
     // Timeout watchdog: if no response in 2s, just keep polling
     const watchdog = () => {
       if (!this.running) return;
@@ -1198,17 +869,18 @@ export class GameRunner extends EventEmitter {
 
     // Poll every 250ms (4 reads/sec — single command is faster)
     this.healthReadTimer = setInterval(() => {
-      if (this.running && this.healthUdp) { poll(); timerPoll(); }
+      if (this.running && this.healthUdp) { poll(); timerPoll(); roundPoll(); }
     }, 250);
 
     poll();
     timerPoll();
+    roundPoll();
     watchdogTimer = setTimeout(watchdog, 2000);
 
     console.log(`[game-runner] ${this.readerTag} 🧠 UDP health reader: ${this.rom} P1=0x${map.p1.toString(16)} P2=0x${map.p2.toString(16)} max=0x${maxHealth.toString(16)} (single-shot READ_CORE_RAM ${chunkSize} bytes)`);
   }
 
-  /** One-time scan of team roster memory. Called when combat first starts (KO detection armed).
+  /** One-time scan of team roster memory. Called when combat first starts.
    *  Searches for consecutive 3-byte sequences matching known character IDs across a wide range. */
   private scanTeamRoster(): void {
     if (!this.running || !this.healthUdp) return;
@@ -1518,13 +1190,9 @@ export class GameRunner extends EventEmitter {
     return clusters;
   }
 
-  /** Feed exact (memory-read) health values into the round/KO detection logic.
-   *  Simpler than pixel analysis — values are noise-free. */
   /**
    * Authoritative round-result + match-end detection from the RAM "characters lost" counters
-   * (0xA859 P1 / 0xA868 P2, 0→3, draw-inclusive). Discovered + validated 2026-07-10. Replaces the
-   * health heuristics for kof98: immune to the wrong time-over winner (health reads the wrong
-   * character) and the KOF98 31% draw-replay (same characters keep fighting — not an elimination).
+   * (0xA859 P1 / 0xA868 P2, 0→3, draw-inclusive). Discovered + validated 2026-07-10.
    *
    * Each poll: read both counters; a 1-poll confirmation rejects torn chunk reads; a drop means a
    * new match reset the counters (re-baseline); a rise means a round ended — emit the round result
@@ -1553,7 +1221,7 @@ export class GameRunner extends EventEmitter {
     // TIME OVER discriminator: the round timer counting from >0 down to exactly 0 means the round
     // ended on the clock, not by a KO. KOF98 resets the timer to full between rounds without passing
     // through 0, so a KO round never trips this. Latches for the whole round (same pattern as the
-    // pixel path's time-over check). Only a KO round credits a perfect + a per-character win badge.
+    // Only a KO round credits a perfect + a per-character win badge.
     if ((this.memMatchFlag & 0xf0) === 0x40 && this.lcPrevTimer16 > 0 && this.memTimer16 === 0) {
       this.roundTimerHitZero = true;
     }
@@ -1602,7 +1270,7 @@ export class GameRunner extends EventEmitter {
         this.emit("roundResult", { loser: 0, winner: 0, p1Losses: p1Lost, p2Losses: p2Lost, koType: "draw", ...this.charInfo() });
       } else {
         const perfect = this.roundP1MinHealth >= PERFECT_HEALTH_THRESHOLD;
-        if (perfect) this.matchPerfectKos++;
+        if (perfect) this.matchPerfectKos.push({ round: this.roundNumber, player: 1 });
         this.creditRoundWin(1);
         console.log(`[game-runner] ${this.readerTag} 🧮 P1 wins round ${this.roundNumber} (RAM, KO${perfect ? ", perfect" : ""}). lost P1=${p1Lost} P2=${p2Lost}`);
         this.emit("roundResult", { loser: 2, winner: 1, p1Losses: p1Lost, p2Losses: p2Lost, koType: perfect ? "perfect" : "normal", ...this.charInfo() });
@@ -1614,7 +1282,7 @@ export class GameRunner extends EventEmitter {
         this.emit("roundResult", { loser: 0, winner: 0, p1Losses: p1Lost, p2Losses: p2Lost, koType: "draw", ...this.charInfo() });
       } else {
         const perfect = this.roundP2MinHealth >= PERFECT_HEALTH_THRESHOLD;
-        if (perfect) this.matchPerfectKos++;
+        if (perfect) this.matchPerfectKos.push({ round: this.roundNumber, player: 2 });
         this.creditRoundWin(2);
         console.log(`[game-runner] ${this.readerTag} 🧮 P2 wins round ${this.roundNumber} (RAM, KO${perfect ? ", perfect" : ""}). lost P1=${p1Lost} P2=${p2Lost}`);
         this.emit("roundResult", { loser: 1, winner: 2, p1Losses: p1Lost, p2Losses: p2Lost, koType: perfect ? "perfect" : "normal", ...this.charInfo() });
@@ -1631,310 +1299,120 @@ export class GameRunner extends EventEmitter {
       const winner = (p1Lost >= 3 && p2Lost >= 3) ? 0 : (p1Lost >= 3 ? 2 : 1);
       const loser = winner === 0 ? 0 : (winner === 1 ? 2 : 1);
       const totalRounds = this.roundNumber;
-      const perfectKos = this.matchPerfectKos;
+      const perfectKos = this.matchPerfectKos.length;
       console.log(`[game-runner] ${this.readerTag} 🧮 MATCH #${this.matchNumber} OVER (RAM)! Winner: P${winner} lost P1=${p1Lost} P2=${p2Lost} rounds=${totalRounds} perfectKOs=${perfectKos}`);
-      this.emit("matchEnd", { winner, loser, p1Losses: p1Lost, p2Losses: p2Lost, matchNumber: this.matchNumber, totalRounds, perfectKos, ...this.charInfo(), ...this.matchMeta() });
+      this.emit("matchEnd", { winner, loser, p1Losses: p1Lost, p2Losses: p2Lost, matchNumber: this.matchNumber, totalRounds, perfectKos, perfectKoDetails: this.matchPerfectKos, ...this.charInfo(), ...this.matchMeta() });
+    }
+  }
+
+  /**
+   * SFA2 authoritative round-win counter detection.
+   *
+   * Uses the mirror-region round counters (0x0701 P1, 0x0A04 P2) to detect round wins
+   * and match end. These counters are the ground truth — they increment atomically at
+   * the end of each round (0→1→2, best-of-3).
+   *
+   * A DRAW increments BOTH counters simultaneously. Either counter reaching 2 ends the match.
+   * This is the SFA2 equivalent of processLossCounters for KOF98.
+   */
+  private processSfa2RoundCounters(): void {
+    const p1 = this.memP1Rounds;
+    const p2 = this.memP2Rounds;
+
+    // Not yet read or garbage values
+    if (p1 < 0 || p2 < 0 || p1 > 2 || p2 > 2) return;
+
+    // First valid read — baseline silently
+    if (this.prevP1Rounds < 0) {
+      this.prevP1Rounds = p1;
+      this.prevP2Rounds = p2;
+      console.log(`[game-runner] ${this.readerTag} 🏆 SFA2 round counters baselined: P1=${p1} P2=${p2}`);
+      return;
+    }
+
+    // No change
+    if (p1 === this.prevP1Rounds && p2 === this.prevP2Rounds) return;
+
+    const prevP1 = this.prevP1Rounds;
+    const prevP2 = this.prevP2Rounds;
+    const p1Delta = p1 - prevP1;
+    const p2Delta = p2 - prevP2;
+
+    // Sanity check: counters should only go up by 1, and the sum shouldn't exceed 3
+    if (p1Delta < 0 || p2Delta < 0 || p1Delta > 1 || p2Delta > 1 || p1 + p2 > 3) {
+      // Torn read or post-match garbage — re-baseline without emitting
+      console.log(`[game-runner] ${this.readerTag} 🏆 SFA2 round counters abnormal (P1:${prevP1}→${p1} P2:${prevP2}→${p2}) — re-baselining`);
+      this.prevP1Rounds = p1;
+      this.prevP2Rounds = p2;
+      return;
+    }
+
+    // Accept the new values
+    this.prevP1Rounds = p1;
+    this.prevP2Rounds = p2;
+
+    // ── Emit round result ──────────────────────────────────────────
+    if (p1Delta > 0 && p2Delta > 0) {
+      // DRAW: both counters incremented
+      this.p1Losses = p1;
+      this.p2Losses = p2;
+      this.roundNumber = p1 + p2;
+      console.log(`[game-runner] ${this.readerTag} 🏆 DRAW! Round ${this.roundNumber}. Counters: P1=${prevP1}→${p1} P2=${prevP2}→${p2}`);
+      this.emit("roundResult", { loser: 0, winner: 0, p1Losses: p1, p2Losses: p2, koType: "draw", ...this.charInfo() });
+    } else if (p1Delta > 0) {
+      // P1 won a round
+      this.p1Losses = p1;
+      this.roundNumber = p1 + p2;
+      this.creditRoundWin(1);
+      console.log(`[game-runner] ${this.readerTag} 🏆 P1 wins round ${this.roundNumber}. Counter: ${prevP1}→${p1}`);
+      this.emit("roundResult", { loser: 2, winner: 1, p1Losses: p1, p2Losses: p2, koType: "normal", ...this.charInfo() });
+    } else if (p2Delta > 0) {
+      // P2 won a round
+      this.p2Losses = p2;
+      this.roundNumber = p1 + p2;
+      this.creditRoundWin(2);
+      console.log(`[game-runner] ${this.readerTag} 🏆 P2 wins round ${this.roundNumber}. Counter: ${prevP2}→${p2}`);
+      this.emit("roundResult", { loser: 1, winner: 2, p1Losses: p1, p2Losses: p2, koType: "normal", ...this.charInfo() });
+    }
+
+    // ── Match end detection ────────────────────────────────────────
+    if (!this.matchEnded && (p1 >= 2 || p2 >= 2)) {
+      this.matchEnded = true;
+      const winner = p1 >= 2 ? 1 : 2;
+      const loser = winner === 1 ? 2 : 1;
+      const totalRounds = p1 + p2;
+      console.log(`[game-runner] ${this.readerTag} 🏆 MATCH #${this.matchNumber} OVER (SFA2 counters)! Winner: P${winner} P1=${p1} P2=${p2} rounds=${totalRounds}`);
+      this.emit("matchEnd", { winner, loser, p1Losses: p1, p2Losses: p2, matchNumber: this.matchNumber, totalRounds, perfectKos: this.matchPerfectKos.length, perfectKoDetails: this.matchPerfectKos, ...this.charInfo(), ...this.matchMeta() });
     }
   }
 
   private processHealthFrame(): void {
-    if (!this.running || this.matchEnded || this.detectionFrozen) return;
+    if (!this.running || this.matchEnded) return;
     this.healthPollErrorCount = 0;
 
     // Skip KO detection during demo/attract mode (before coins + START)
     if (!this.gameStarted) return;
 
+    // ── Authoritative RAM path (SFA2 round counters) ───────────────
+    // SFA2 arcade mode is best-of-3 (first to 2 wins). The mirror-region round counters
+    // (0x0701 P1, 0x0A04 P2) are the ground truth — they increment atomically at round end.
+    if (this.healthMemMap?.p1Rounds != null && this.healthMemMap?.p2Rounds != null) {
+      this.processSfa2RoundCounters();
+      return;
+    }
+
     // ── Authoritative RAM path (kof98) ─────────────────────────────
-    // The per-player "characters lost" counters (0xA859/0xA868) are read directly and drive
-    // round results + match end. They are immune to the health heuristics' two failure modes:
-    // the wrong time-over winner (health often reads the wrong character) and the KOF98 "31%"
-    // draw-replay (same characters keep fighting — not an elimination). When present, use them
-    // and skip ALL the health-based detection below (kept only as a fallback for other ROMs).
     if (this.healthMemMap?.p1Lost != null) {
       this.processLossCounters();
       return;
     }
 
-    const p1Health = this.memHealthP1;
-    const p2Health = this.memHealthP2;
-
-    if (p1Health < 0 || p2Health < 0) return;
-
-    const HEALTHYTHRESHOLD = 20;
-    const KOTHRESHOLD = 10;
-    // For KO detection: health must drop from above this to ≤ KOTHRESHOLD.
-    // Must be > KOTHRESHOLD to catch KOs where previous read was already low (e.g. 14% → 0%).
-    const KO_PREV_THRESHOLD = KOTHRESHOLD + 2; // 12 — just above the KO floor
-    const KO_COOLDOWN_FRAMES = 6; // ~3s at 2 reads/sec
-    const PERFECT_HEALTH_THRESHOLD = 95;
-
-    const bothHealthy = p1Health >= HEALTHYTHRESHOLD && p2Health >= HEALTHYTHRESHOLD;
-
-    // ── Warmup (simpler than pixel analysis — values are exact) ──
-    const warmupFrames = this.fastWarmup ? 4 : 8; // ~1s vs ~2s at 4 reads/sec
-    const WARMUP_MIN_HEALTHY_RATIO = 0.75;
-
-    if (!this.healthDetectionArmed) {
-      this.healthStableFrames++;
-      if (bothHealthy) this.healthStableFramesHealthy++;
-
-      if (this.healthStableFrames >= warmupFrames) {
-        const ratio = this.healthStableFramesHealthy / this.healthStableFrames;
-        if (ratio >= WARMUP_MIN_HEALTHY_RATIO) {
-          this.healthDetectionArmed = true;
-          this.previousP1Health = p1Health;
-          this.previousP2Health = p2Health;
-          this.fastWarmup = false;
-          console.log(`[game-runner] ${this.readerTag} 🧠 KO detection ARMED (memory) — ${this.healthStableFramesHealthy}/${this.healthStableFrames} healthy: P1=${p1Health}% P2=${p2Health}%`);
-          if (!this.rosterScanned) { this.rosterScanned = true; this.scanTeamRoster(); }
-          return;
-        } else {
-          const keep = Math.floor(warmupFrames * 0.5);
-          this.healthStableFrames = keep;
-          this.healthStableFramesHealthy = Math.floor(this.healthStableFramesHealthy * (keep / (warmupFrames + 1)));
-        }
-      }
-      return;
-    }
-
-    // ── KO Detection ────────────────────────────────────────────
-    // Track minimum health (for perfect KO detection)
-    const inGameplay = p1Health >= HEALTHYTHRESHOLD || p2Health >= HEALTHYTHRESHOLD;
-    if (!this.koDetected && inGameplay) {
-      if (p1Health > 0) this.roundP1MinHealth = Math.min(this.roundP1MinHealth, p1Health);
-      if (p2Health > 0) this.roundP2MinHealth = Math.min(this.roundP2MinHealth, p2Health);
-    }
-
-    if (this.koCooldownFrames > 0) {
-      this.koCooldownFrames--;
-    }
-
-    if (!this.koDetected && this.koCooldownFrames === 0 && this.memTimer16 > 0) {
-      // A round-ending KO. A DOUBLE-KO (draw) reads as one player ≤ KOTHRESHOLD while the
-      // OTHER either also sits ≤ KOTHRESHOLD (both polled at ~0) or has already jumped back to
-      // ≥95% — its character reset, i.e. it died too and advanced. At 250ms polls a true
-      // double-KO is easily misread as a one-sided (often "perfect") KO, so detect it here.
-      const RESET = 95;
-      const p1Down = p1Health <= KOTHRESHOLD;
-      const p2Down = p2Health <= KOTHRESHOLD;
-      const p1Reset = this.previousP1Health < RESET && p1Health >= RESET;
-      const p2Reset = this.previousP2Health < RESET && p2Health >= RESET;
-      const p1Ko = this.previousP1Health > KO_PREV_THRESHOLD && p1Down;
-      const p2Ko = this.previousP2Health > KO_PREV_THRESHOLD && p2Down;
-      const draw = (p1Ko && (p2Down || p2Reset)) || (p2Ko && (p1Down || p1Reset));
-
-      if (draw) {
-        this.koDetected = true;
-        this.p1Losses++;
-        this.p2Losses++;
-        this.roundNumber++;
-        this.koCooldownFrames = KO_COOLDOWN_FRAMES;
-        console.log(`[game-runner] ${this.readerTag} 🧠 DRAW! Double-KO round ${this.roundNumber}. P1=${p1Health}% P2=${p2Health}% prevP1=${this.previousP1Health}% prevP2=${this.previousP2Health}% Losses: P1=${this.p1Losses} P2=${this.p2Losses}`);
-        this.emit("roundResult", { loser: 0, winner: 0, p1Losses: this.p1Losses, p2Losses: this.p2Losses, koType: "draw", ...this.charInfo() });
-      } else if (p1Ko) {
-        this.koDetected = true;
-        this.p1Losses++;
-        this.roundNumber++;
-        this.koCooldownFrames = KO_COOLDOWN_FRAMES;
-        const koType = (this.roundP2MinHealth >= PERFECT_HEALTH_THRESHOLD) ? "perfect" : "normal";
-        if (koType === "perfect") this.matchPerfectKos++;
-        this.creditRoundWin(2);
-        console.log(`[game-runner] ${this.readerTag} 🧠 P1 KO'd! P2 wins round ${this.roundNumber} (${koType}). P1=${p1Health}% P2=${p2Health}% minP2=${this.roundP2MinHealth}% Losses: P1=${this.p1Losses} P2=${this.p2Losses}`);
-        this.emit("roundResult", { loser: 1, winner: 2, p1Losses: this.p1Losses, p2Losses: this.p2Losses, koType, ...this.charInfo() });
-      } else if (p2Ko) {
-        this.koDetected = true;
-        this.p2Losses++;
-        this.roundNumber++;
-        this.koCooldownFrames = KO_COOLDOWN_FRAMES;
-        const koType = (this.roundP1MinHealth >= PERFECT_HEALTH_THRESHOLD) ? "perfect" : "normal";
-        if (koType === "perfect") this.matchPerfectKos++;
-        this.creditRoundWin(1);
-        console.log(`[game-runner] ${this.readerTag} 🧠 P2 KO'd! P1 wins round ${this.roundNumber} (${koType}). P1=${p1Health}% P2=${p2Health}% minP1=${this.roundP1MinHealth}% Losses: P1=${this.p1Losses} P2=${this.p2Losses}`);
-        this.emit("roundResult", { loser: 2, winner: 1, p1Losses: this.p1Losses, p2Losses: this.p2Losses, koType, ...this.charInfo() });
-      }
-    }
-
-    // ── Time-over / Draw detection ───────────────────────────────
-    //
-    // Three detection patterns, checked in order:
-    //
-    // A) Health-based winner: both health jump from gameplay to ~100%.
-    //    Winner = player with higher health before the reset.
-    //
-    // B) Health-based draw: both health drop from gameplay to 25-35%
-    //    (KOF draw restart health ≈ 31% = 0x20/0x67).
-    //
-    // C) Timer-reset fallback: the 16-bit round timer just jumped from
-    //    near-zero to >20000, signalling a new round, but neither pattern A
-    //    nor B caught it (health transition happened between poll ticks).
-    //    Uses saved pre-reset health to determine winner/draw.
-    //
-    // Guard: skip during KO cooldown and when a KO was just detected.
-    if (!this.koDetected && this.koCooldownFrames === 0 && this.memTimer16 > 0) {
-      const wasInGameplay = this.previousP1Health > HEALTHYTHRESHOLD || this.previousP2Health > HEALTHYTHRESHOLD;
-
-      if (wasInGameplay) {
-        // ── Pattern C: timer-reset fallback (most reliable) ──
-        // When the 16-bit timer jumps from near-expiry (<1000) to full (>20000),
-        // a round just ended. This catches cases where the health transition
-        // (to 100% or 31%) was faster than our 250ms poll interval.
-        const TIMER_RESET_LO = 1000;  // timer was almost expired
-        const TIMER_RESET_HI = 20000; // timer just reset to full
-        if (this.prevTimer16 >= 0 && this.prevTimer16 < TIMER_RESET_LO &&
-            this.memTimer16 > TIMER_RESET_HI) {
-          // Timer reset detected — round ended without a KO
-          if (this.previousP1Health > this.previousP2Health) {
-            this.koDetected = true;
-            this.p2Losses++;
-            this.roundNumber++;
-            this.koCooldownFrames = KO_COOLDOWN_FRAMES;
-            console.log(`[game-runner] ${this.readerTag} 🧠 TIME OVER! P1 wins round ${this.roundNumber} (timer reset). prevP1=${this.previousP1Health}% prevP2=${this.previousP2Health}% Losses: P1=${this.p1Losses} P2=${this.p2Losses}`);
-            this.creditRoundWin(1);
-            this.emit("roundResult", { loser: 2, winner: 1, p1Losses: this.p1Losses, p2Losses: this.p2Losses, koType: "timeout", ...this.charInfo() });
-          } else if (this.previousP2Health > this.previousP1Health) {
-            this.koDetected = true;
-            this.p1Losses++;
-            this.roundNumber++;
-            this.koCooldownFrames = KO_COOLDOWN_FRAMES;
-            console.log(`[game-runner] ${this.readerTag} 🧠 TIME OVER! P2 wins round ${this.roundNumber} (timer reset). prevP1=${this.previousP1Health}% prevP2=${this.previousP2Health}% Losses: P1=${this.p1Losses} P2=${this.p2Losses}`);
-            this.creditRoundWin(2);
-            this.emit("roundResult", { loser: 1, winner: 2, p1Losses: this.p1Losses, p2Losses: this.p2Losses, koType: "timeout", ...this.charInfo() });
-          } else {
-            // Equal pre-reset health. A real time-over draw has both players at
-            // equal *partial* health; equal *full* health (~100%) is a round/
-            // match-transition artifact (health already reset to full during
-            // char-select) — NOT a double KO. Ignore it, else it falsely adds a
-            // loss to BOTH players and can end the match early.
-            if (this.previousP1Health < 95 && this.previousP2Health < 95) {
-              this.koDetected = true;
-              this.p1Losses++;
-              this.p2Losses++;
-              this.roundNumber++;
-              this.koCooldownFrames = KO_COOLDOWN_FRAMES;
-              console.log(`[game-runner] ${this.readerTag} 🧠 DRAW! Timer reset with equal health. prevP1=${this.previousP1Health}% prevP2=${this.previousP2Health}% Losses: P1=${this.p1Losses} P2=${this.p2Losses}`);
-              this.emit("roundResult", { loser: 0, winner: 0, p1Losses: this.p1Losses, p2Losses: this.p2Losses, koType: "draw", ...this.charInfo() });
-            } else {
-              console.log(`[game-runner] ${this.readerTag} ⏭️ Ignored timer-reset draw at full health (transition artifact). prevP1=${this.previousP1Health}% prevP2=${this.previousP2Health}%`);
-            }
-          }
-        }
-
-        // If Pattern C didn't fire, try the health-based patterns
-        if (!this.koDetected) {
-          const notAlreadyFull = !(this.previousP1Health >= 95 && this.previousP2Health >= 95);
-
-          // Pattern A: health jumps to 100% (time-over with a winner)
-          if (notAlreadyFull && p1Health >= 95 && p2Health >= 95) {
-            if (this.previousP1Health > this.previousP2Health) {
-              this.koDetected = true;
-              this.p2Losses++;
-              this.roundNumber++;
-              this.koCooldownFrames = KO_COOLDOWN_FRAMES;
-              console.log(`[game-runner] ${this.readerTag} 🧠 TIME OVER! P1 wins round ${this.roundNumber} (timeout). prevP1=${this.previousP1Health}% prevP2=${this.previousP2Health}% → both 100% Losses: P1=${this.p1Losses} P2=${this.p2Losses}`);
-              this.creditRoundWin(1);
-              this.emit("roundResult", { loser: 2, winner: 1, p1Losses: this.p1Losses, p2Losses: this.p2Losses, koType: "timeout", ...this.charInfo() });
-            } else if (this.previousP2Health > this.previousP1Health) {
-              this.koDetected = true;
-              this.p1Losses++;
-              this.roundNumber++;
-              this.koCooldownFrames = KO_COOLDOWN_FRAMES;
-              console.log(`[game-runner] ${this.readerTag} 🧠 TIME OVER! P2 wins round ${this.roundNumber} (timeout). prevP1=${this.previousP1Health}% prevP2=${this.previousP2Health}% → both 100% Losses: P1=${this.p1Losses} P2=${this.p2Losses}`);
-              this.creditRoundWin(2);
-              this.emit("roundResult", { loser: 1, winner: 2, p1Losses: this.p1Losses, p2Losses: this.p2Losses, koType: "timeout", ...this.charInfo() });
-            }
-          }
-
-          // Pattern B: draw — both health drop to KOF draw restart health (~31%)
-          const DRAW_HI = 36;
-          const DRAW_LO = 25;
-          if (this.previousP1Health > DRAW_HI && this.previousP2Health > DRAW_HI &&
-              p1Health >= DRAW_LO && p1Health <= DRAW_HI &&
-              p2Health >= DRAW_LO && p2Health <= DRAW_HI) {
-            this.koDetected = true;
-            this.p1Losses++;
-            this.p2Losses++;
-            this.roundNumber++;
-            this.koCooldownFrames = KO_COOLDOWN_FRAMES;
-            console.log(`[game-runner] ${this.readerTag} 🧠 DRAW! Both at 31%. prevP1=${this.previousP1Health}% prevP2=${this.previousP2Health}% Losses: P1=${this.p1Losses} P2=${this.p2Losses}`);
-            this.emit("roundResult", { loser: 0, winner: 0, p1Losses: this.p1Losses, p2Losses: this.p2Losses, koType: "draw", ...this.charInfo() });
-          }
-
-          // Pattern B2: 31% round ended — both in draw range drop to 0% (continue screen)
-          // The 31% tiebreaker round ended without a winner and without timer reset.
-          if (!this.koDetected &&
-              this.previousP1Health >= DRAW_LO && this.previousP1Health <= DRAW_HI &&
-              this.previousP2Health >= DRAW_LO && this.previousP2Health <= DRAW_HI &&
-              p1Health <= KOTHRESHOLD && p2Health <= KOTHRESHOLD) {
-            this.koDetected = true;
-            this.p1Losses++;
-            this.p2Losses++;
-            this.roundNumber++;
-            this.koCooldownFrames = KO_COOLDOWN_FRAMES;
-            console.log(`[game-runner] ${this.readerTag} 🧠 DRAW! 31% round ended (health→0). prevP1=${this.previousP1Health}% prevP2=${this.previousP2Health}% Losses: P1=${this.p1Losses} P2=${this.p2Losses}`);
-            this.emit("roundResult", { loser: 0, winner: 0, p1Losses: this.p1Losses, p2Losses: this.p2Losses, koType: "draw", ...this.charInfo() });
-          }
-        }
-      }
-    }
-
-    // ── Pattern B3: 31% round timer expired ─────────────────
-    // When both health are already in draw range (25-36%) and the
-    // timer just hit 0, the round ended in a draw (both characters
-    // eliminated). This is NOT guarded by memTimer16>0 — we're looking
-    // for the timer hitting exactly 0.
-    // A draw eliminates BOTH characters but does NOT end the match on
-    // its own: the match-end check below ends it only once a player has
-    // lost all 3 characters (winner=0 when both reach 3). Ending here
-    // unconditionally froze the game on a round-1 draw.
-    const DRAW_HI = 36;
-    const DRAW_LO = 25;
-    if (!this.koDetected && this.koCooldownFrames === 0 && !this.matchEnded &&
-        p1Health >= DRAW_LO && p1Health <= DRAW_HI &&
-        p2Health >= DRAW_LO && p2Health <= DRAW_HI &&
-        this.prevTimer16 > 0 && this.memTimer16 === 0) {
-      this.koDetected = true;
-      this.p1Losses++;
-      this.p2Losses++;
-      this.roundNumber++;
-      this.koCooldownFrames = KO_COOLDOWN_FRAMES;
-      console.log(`[game-runner] ${this.readerTag} 🧠 DRAW! 31% timer expired. prevTimer=${this.prevTimer16} prevP1=${this.previousP1Health}% prevP2=${this.previousP2Health}% Losses: P1=${this.p1Losses} P2=${this.p2Losses}`);
-      this.emit("roundResult", { loser: 0, winner: 0, p1Losses: this.p1Losses, p2Losses: this.p2Losses, koType: "draw", ...this.charInfo() });
-    }
-
-    // ── Detect new round ────────────────────────────────────────
-    if (this.koDetected && bothHealthy) {
-      this.koDetected = false;
-      this.roundP1MinHealth = 100;
-      this.roundP2MinHealth = 100;
-      console.log(`[game-runner] ${this.readerTag} 🧠 New round: P1=${p1Health}% P2=${p2Health}%`);
-    }
-
-    // ── Check match end ─────────────────────────────────────────
-    // Wins needed: per-ROM config, system default, or 3 as ultimate fallback.
-    const winsNeeded = (this.system === "snes" ? 2 : 3);
-    if (!this.matchEnded && (this.p1Losses >= winsNeeded || this.p2Losses >= winsNeeded)) {
-      this.matchEnded = true;
-      this.matchNumber++;
-      let winner: number;
-      if (this.p1Losses >= winsNeeded && this.p2Losses >= winsNeeded) {
-        winner = 0; // draw — both reached winsNeeded simultaneously
-      } else {
-        winner = this.p1Losses >= winsNeeded ? 2 : 1;
-      }
-      const loser = winner === 0 ? 0 : (winner === 1 ? 2 : 1);
-      const totalRounds = this.roundNumber;
-      const perfectKos = this.matchPerfectKos;
-      console.log(`[game-runner] ${this.readerTag} 🧠 MATCH #${this.matchNumber} OVER! Winner: P${winner} Losses: P1=${this.p1Losses} P2=${this.p2Losses} rounds=${totalRounds} perfectKOs=${perfectKos}`);
-      this.emit("matchEnd", { winner, loser, p1Losses: this.p1Losses, p2Losses: this.p2Losses, matchNumber: this.matchNumber, totalRounds, perfectKos, ...this.charInfo(), ...this.matchMeta() });
-
-      // Match is over. No auto-continue: the game stays on the game-over screen and the
-      // client shows the end-match overlay. Input is locked server-side (ws-handler) so no
-      // player can keep playing. A rematch starts a fresh session with a new GameRunner.
-    }
-
-    // Update previous values
-    this.previousP1Health = p1Health;
-    this.previousP2Health = p2Health;
+    // No RAM-based round/match-end detection available for this ROM.
+    // Only games with authoritative RAM counters are supported:
+    //   SFA2:  round counters at 0x0701 (P1) / 0x0A04 (P2)
+    //   KOF98: loss counters at 0xA859 (P1) / 0xA868 (P2)
+    // Health-based visual KO detection has been removed per user request.
+    if (this.memHealthP1 < 0 || this.memHealthP2 < 0) return;
   }
 
   /** Start the debug health log timer. Actual detection runs continuously via TCP health reader.
@@ -1953,11 +1431,16 @@ export class GameRunner extends EventEmitter {
     // Periodic debug log (every 10s) — reads latest values from the memory health reader
     this.healthPollTimer = setInterval(() => {
       if (!this.running || this.matchEnded) return;
-      if (this.previousP1Health >= 0) {
-        const charMap = this.healthMemMap?.maxHealth === 0x60 ? SFA2_CHARACTERS : KOF98_CHARACTERS;
+      if (this.memHealthP1 >= 0 && this.memHealthP2 >= 0) {
+        const isSfa2 = this.healthMemMap?.maxHealth === 0x60;
+        const charMap = isSfa2 ? SFA2_CHARACTERS : KOF98_CHARACTERS;
         const p1Name = charMap[this.memP1Char] || `0x${this.memP1Char.toString(16)}`;
         const p2Name = charMap[this.memP2Char] || `0x${this.memP2Char.toString(16)}`;
-        console.log(`[game-runner] 🧠 Health: P1=${this.previousP1Health}% ${p1Name} P2=${this.previousP2Health}% ${p2Name} ⏱️=${this.memTimer}s losses: P1=${this.p1Losses} P2=${this.p2Losses}`);
+        if (isSfa2) {
+          console.log(`[game-runner] 🧠 Health: P1=${this.memHealthP1}% ${p1Name} P2=${this.memHealthP2}% ${p2Name} ⏱️=${this.memTimer}s rounds: P1=${this.memP1Rounds} P2=${this.memP2Rounds}`);
+        } else {
+          console.log(`[game-runner] 🧠 Health: P1=${this.memHealthP1}% ${p1Name} P2=${this.memHealthP2}% ${p2Name} ⏱️=${this.memTimer}s losses: P1=${this.p1Losses} P2=${this.p2Losses}`);
+        }
       }
     }, 10000);
   }
@@ -2131,7 +1614,6 @@ export class GameRunner extends EventEmitter {
 
   /** FFmpeg video: captures Xvfb, encodes H.264 baseline, outputs to stdout. */
   private startFfmpegVideo(w: number, h: number): void {
-    const pixelConfig = getPixelConfig(this.rom);
     const args = [
       "-f", "x11grab",
       "-framerate", "60",
@@ -2158,57 +1640,14 @@ export class GameRunner extends EventEmitter {
       "pipe:1",
     ];
 
-    // Output 2 (fd 3): center-screen text overlay crop — raw rgb24 for template matching.
-    let hasTextOutput = false;
-    if (pixelConfig?.textEvents) {
-      const te = pixelConfig.textEvents;
-      args.push(
-        "-map", "0:v",
-        "-vf", `crop=${te.textW}:${te.textH}:${te.textX}:${te.textY}`,
-        "-c:v", "rawvideo",
-        "-pix_fmt", "rgb24",
-        "-f", "rawvideo",
-        "-flush_packets", "1",
-        "pipe:3",
-      );
-      hasTextOutput = true;
-    }
-
     this.ffmpegVideo = spawn("ffmpeg", args, {
-      stdio: ["ignore", "pipe", "pipe",
-              hasTextOutput ? "pipe" : "ignore"],
+      stdio: ["ignore", "pipe", "pipe", "ignore"],
       env: { ...process.env, DISPLAY: this.display },
     });
 
     this.ffmpegVideo.stdout?.on("data", (chunk: Buffer) => {
       this.handleVideoChunk(chunk);
     });
-
-    // Read text overlay frames from fd 3 — feed directly to template matcher
-    if (hasTextOutput && pixelConfig?.textEvents && this.templateMatcher) {
-      const te = pixelConfig.textEvents;
-      const textFd: any = (this.ffmpegVideo as any).stdio?.[3];
-      if (textFd) {
-        this.textFrameBuf = Buffer.alloc(0);
-        textFd.on("data", (chunk: Buffer) => {
-          this.textFrameBuf = Buffer.concat([this.textFrameBuf, chunk]);
-          const frameSize = te.textW * te.textH * 3;
-          while (this.textFrameBuf.length >= frameSize) {
-            const frame = this.textFrameBuf.subarray(0, frameSize);
-            this.textFrameBuf = this.textFrameBuf.subarray(frameSize);
-            // Store latest frame + trigger template matching (with backpressure)
-            this.latestTextFrame = Buffer.from(frame);
-            this.latestTextFrameW = te.textW;
-            this.latestTextFrameH = te.textH;
-            this.processTextFrame(frame, te.textW, te.textH);
-          }
-          if (this.textFrameBuf.length > frameSize * 3) {
-            this.textFrameBuf = Buffer.alloc(0);
-          }
-        });
-      }
-      console.log(`[game-runner] 📝 Text overlay capture: crop from main ffmpeg (${te.textW}x${te.textH} at ${te.textX},${te.textY})`);
-    }
 
     this.ffmpegVideo.stderr?.on("data", (data: Buffer) => {
       const text = data.toString();
@@ -2649,21 +2088,18 @@ export class GameRunner extends EventEmitter {
    * rematch_accept. Resumes the (paused) emulator, then wipes per-match scoring and
    * team state so the next match is detected & recorded from scratch. matchNumber and
    * gameStarted are intentionally preserved (matchNumber increments per match for stats;
-   * gameStarted gates demo/attract, still true). KO detection is re-warmed (fast) so it
-   * settles on the rematch's first combat instead of firing on the char-select screen.
+   * gameStarted gates demo/attract, still true). RAM-based round/match-end detection
+   * is re-baselined so it picks up the rematch from its first combat.
    */
   async beginRematch(): Promise<void> {
     // Reset scoring/teams FIRST (the emulator is still paused from match end), then
     // resume LAST — so the game never advances a frame with stale match state.
-    this.detectionFrozen = false;
     // Scoring
     this.matchEnded = false;
     this.p1Losses = 0;
     this.p2Losses = 0;
     this.roundNumber = 0;
-    this.matchPerfectKos = 0;
-    this.koDetected = false;
-    this.koCooldownFrames = 0;
+    this.matchPerfectKos = [];
     this.roundP1MinHealth = 100;
     this.roundP2MinHealth = 100;
     this.roundTimerHitZero = false;
@@ -2677,6 +2113,11 @@ export class GameRunner extends EventEmitter {
     this.prevP2Lost = -1;
     this.lastRawP1Lost = -1;
     this.lastRawP2Lost = -1;
+    // SFA2 round counters
+    this.memP1Rounds = 0;
+    this.memP2Rounds = 0;
+    this.prevP1Rounds = -1;
+    this.prevP2Rounds = -1;
     // Teams / selection order / per-char wins
     this.teamFrozen = false;
     this.p1LockedTeam = null;
@@ -2690,14 +2131,6 @@ export class GameRunner extends EventEmitter {
     this.p1CharWins.clear();
     this.p2CharWins.clear();
     this.matchFlagZeroStreak = 0;
-    // Re-warm KO detection (fast) so char-select garbage health doesn't trigger a false KO
-    this.healthDetectionArmed = false;
-    this.healthStableFrames = 0;
-    this.healthStableFramesHealthy = 0;
-    this.fastWarmup = true;
-    // Reset pixel text detection state (cooldown, in-flight flag)
-    this.lastTextEvent = null;
-    this.templateMatchInFlight = false;
     // Resume LAST, once all scoring/team state is clean and re-armed. Await convergence so
     // callers (ws-handler) know the game is actually running before injecting coin/START.
     await this.resume();

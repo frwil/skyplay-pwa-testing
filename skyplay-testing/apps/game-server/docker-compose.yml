@@ -12,6 +12,8 @@ services:
       - ./dist:/app/dist:ro
       # Plan A: where the mp4 recorder writes before Blob upload (inspectable on host)
       - ./recordings:/recordings
+      # Local Turso DB + pending stats buffer (survives container restarts)
+      - ./data:/data
     # Plan A: BLOB_READ_WRITE_TOKEN (secret) lives in the gitignored .env, not committed here
     env_file:
       - .env

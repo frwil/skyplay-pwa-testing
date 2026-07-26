@@ -149,6 +149,8 @@ export interface MatchEndMessage {
   totalRounds?: number;
   /** Number of perfect KOs in this match. */
   perfectKos?: number;
+  /** Per-round perfect KO details: which player scored a perfect in which round. */
+  perfectKoDetails?: { round: number; player: number }[];
   /** Team rosters as character IDs (0x00-0x25), slot order. For end-match stats. */
   p1TeamIds?: number[];
   p2TeamIds?: number[];
@@ -167,12 +169,9 @@ export interface MatchEndMessage {
   /** SNES/cursor-tracked character names (when RAM-based detection is unavailable). */
   p1CharName?: string;
   p2CharName?: string;
-  /** Pixel/portrait-detected character names (diagnostic ground truth). */
-  p1PixelCharName?: string;
-  p2PixelCharName?: string;
-  /** Portrait detection confidence for each player's selected cell (0-1). */
-  p1PixelConfidence?: number;
-  p2PixelConfidence?: number;
+  /** Client should delay showing the end-match overlay by this many ms
+   *  so players see the final KO animation / victory pose. */
+  overlayDelayMs?: number;
 }
 
 /** Rematch requested by opponent — show accept/decline UI. */
@@ -257,45 +256,16 @@ export interface ResumedMessage {
   initiator: 1 | 2 | 0;
 }
 
-/** Match has started (pixel analyzer entered PLAYING) — character names for verification. */
+/** Match has started (timer-based detection) — character names for verification. */
 export interface MatchStartedMessage {
   type: "match_started";
   /** Cursor-tracked character name for P1 (SNES) or RAM-based name (KOF98). */
   p1CharName?: string;
   /** Cursor-tracked character name for P2 (SNES) or RAM-based name (KOF98). */
   p2CharName?: string;
-  /** Portrait/pixel-detected character name for P1 (diagnostic ground truth). */
-  p1PixelCharName?: string;
-  /** Portrait/pixel-detected character name for P2 (diagnostic ground truth). */
-  p2PixelCharName?: string;
   /** Initial health percentages at match start. */
   p1Health?: number;
   p2Health?: number;
-  /** Calibrated full-bar widths at match start. */
-  p1FullBarWidth?: number;
-  p2FullBarWidth?: number;
-}
-
-/** Character select phase has started — show the character select UI overlay. */
-export interface CharSelectStartMessage {
-  type: "char_select_start";
-  /** Timeout in ms before auto-locking current cursor position. */
-  timeout: number;
-}
-
-/** A player has selected their character. */
-export interface CharSelectedMessage {
-  type: "char_selected";
-  /** Which player selected (1 or 2). */
-  player: number;
-  /** Internal character ID (0x00-0x11 for SFA2). */
-  charId: number;
-  /** Display name (e.g. "Ryu"). */
-  charName: string;
-  /** Cursor row position. */
-  row: number;
-  /** Cursor column position. */
-  col: number;
 }
 
 export type ServerMessage =
@@ -317,8 +287,6 @@ export type ServerMessage =
   | AutoRematchServerMessage
   | PausedMessage
   | ResumedMessage
-  | CharSelectStartMessage
-  | CharSelectedMessage
   | SessionCancelledMessage;
 
 /** Binary frame header: 0x01 + width(u16) + height(u16) + frameId(u32) + nalLength(u32) + H.264 NAL data */
