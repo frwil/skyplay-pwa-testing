@@ -69,8 +69,8 @@
 <h1>SKY PLAY — État d'avancement complet</h1>
 
 <p><strong>Date</strong> : 2026-07-26</p>
-<p><strong>Branche</strong> : <code>main</code> — SFA2 play mode découvert + intégré, noms persos game-agnostic, timeouts ×2</p>
-<p><strong>Dernier commit</strong> : <code>a2ce061</code> — wip: template matching for SFA2 round-end detection</p>
+<p><strong>Branche</strong> : <code>main</code> — suppression détection visuelle SFA2, round counters RAM autoritaires</p>
+<p><strong>Dernier commit</strong> : à venir — remove visual/pixel-based detection for SFA2, RAM-only</p>
 
 <hr>
 
@@ -211,58 +211,53 @@
 <tr><td>RAM config dans DB</td><td>JSON via duel_games</td><td>—</td><td>🔧 <strong>WD</strong></td></tr>
 </tbody></table>
 
-<h3>3.3 Détection santé SFA2 (pixel — snes9x) ✅ — sessions live 14→20/07</h3>
+<h3>3.3 Détection SFA2 (RAM — snes9x) ✅ — migré pixel→RAM 26/07</h3>
 
-<p><strong>Refactor 17/07</strong> : logique extraite dans <code>pixel-match-analyzer.ts</code> (state machine, column scan, timer OCR, templates). <code>game-runner.ts</code> garde l'orchestration (ffmpeg, events, WebSocket).</p>
+<p><strong>⚠️ 26/07 : Détection visuelle SUPPRIMÉE.</strong> Toute la partie pixel/health-based KO fallback (~280 lignes) retirée de <code>processHealthFrame()</code>. SFA2 utilise désormais exclusivement les <strong>round counters RAM</strong> (0x0701 P1 / 0x0A04 P2) via <code>processSfa2RoundCounters()</code>, comme KOF98 utilise ses loss counters. Le répertoire <code>pixel/</code> (opencv-bridge.py) a été supprimé.</p>
 
 <table>
 <thead><tr><th>Détection</th><th>Statut</th><th>Notes</th></tr></thead>
 <tbody>
-<tr><td>Capture stripe ffmpeg (y=110, h=52, intégrée au flux vidéo principal)</td><td>✅</td><td>4 fps raw rgb24, plus de x11grab séparé</td></tr>
-<tr><td>Machine à états (GamePhase)</td><td>✅</td><td>WARMUP→PLAYING→KO_PENDING→KO_CONFIRMED→NEW_ROUND→MATCH_END</td></tr>
-<tr><td><strong>Mesure par comptage de colonnes</strong> (<code>measureFilledColumns</code>)</td><td>✅ Validé live</td><td>Barres SFA2 se vident du bord extérieur vers le centre</td></tr>
-<tr><td><strong>isHealthPixel v2</strong></td><td>✅ Validé live</td><td><code>maxC>120</code> + exclusion bleu-dominant</td></tr>
-<tr><td><strong>Recalibration fullBarW par round</strong></td><td>✅</td><td>Frames 1-4 PLAYING + différée au 1er tick timer (R1) + post-glow</td></tr>
-<tr><td>Lissage médiane glissante + reset à la recalibration</td><td>✅</td><td><code>getSmoothedHealth()</code></td></tr>
-<tr><td>KO (seuil 10%, confirm 5 frames) + KO rétroactif</td><td>✅ Validé live</td><td><code>koPendingMaxTimer</code> sticky + guérison impossible</td></tr>
-<tr><td><strong>Anti-fantôme time-over</strong> (<code>roundTimerWasRunning</code>)</td><td>✅ Validé live</td><td>Écran résultat = barres pleines + « 00 » figé → ignoré</td></tr>
-<tr><td><strong>Anti-fantôme KO</strong> (timer-decrease liveness gate)</td><td>✅ Validé live</td><td>Round « live » seulement si le timer décroît</td></tr>
-<tr><td><strong>Garde « filet de vie »</strong></td><td>✅ Déployé</td><td>Barre ≤10% mais timer vivant → reset confirmation KO</td></tr>
-<tr><td><strong>Time-over</strong> (timer→0 dans round armé)</td><td>✅ Validé live</td><td>Compare <code>lastRunningHealth</code>, émet <code>roundResult</code> avec <code>koType: "timeout"</code></td></tr>
-<tr><td><strong>Bars-vanished KO</strong> (double drop 0%)</td><td>✅ Validé live</td><td>Transition écran → KO rétroactif basé sur <code>lastRunningHealth</code></td></tr>
-<tr><td><strong>Bar-stable fallback</strong></td><td>✅</td><td>Barres ≥80% région pendant 30f sans drop timer → arme le round</td></tr>
-<tr><td><strong>Perfect KO ratio-based</strong></td><td>✅ Fixé 20/07</td><td><code>minFilled/maxFilled ≥ 0.95</code> (colonnes brutes) — insensible à la dérive fullBarWidth</td></tr>
-<tr><td>Draw time-over = aucun point</td><td>✅ Validé live</td><td>SFA2 rejoue le round, pas de marque</td></tr>
-<tr><td><strong>match_state WebSocket</strong></td><td>✅ 20/07</td><td>PixelMatchAnalyzer → GameRunner → ws-handler, ~205 lectures/test</td></tr>
-<tr><td><strong>Suspension pendant char select</strong></td><td>✅ Déployé</td><td><code>⏸️/▶️</code> + <code>resetHealthWarmup</code> dans le guard</td></tr>
-<tr><td>Timer OCR (template matching 8×12, seuil 160)</td><td>✅ Validé live</td><td>Décomptes 99→0, templates sauvegardés dans <code>/recordings/templates/</code></td></tr>
-<tr><td>Match end (winsNeeded=2) + overlay</td><td>✅ Validé live</td><td></td></tr>
-<tr><td>Navigation CPU auto end-to-end</td><td>✅ 20/07</td><td>3× START → char select → 6× A (4s gaps) → combat → rounds → match end</td></tr>
-<tr><td>Char select joueur (grille 2×9, D-pad counting)</td><td>✅ Commité</td><td><code>3395538</code></td></tr>
-<tr><td>Xvfb persistant + nettoyage lock (entrypoint.sh)</td><td>✅ Validé</td><td></td></tr>
-<tr><td><strong>Portrait capture</strong> (<code>import -depth 8</code>)</td><td>✅ Fixé 20/07</td><td>PPM 8-bit, calibrateur collecte 18 échantillons/match (était 0 avec le 16-bit)</td></tr>
-<tr><td><strong>Portrait grid fix</strong> (cellW 80→58, gridY 220→230)</td><td>✅ Fixé 20/07</td><td>Mesuré sur char-select-full.ppm : contenu x=30→552. Avant : cols 7-8 (Sodom/Rose/Rolento/Zangief) 0% contenu. Maintenant 18/18 cellules OK.</td></tr>
-<tr><td><strong>Portrait calibration persistence</strong></td><td>✅ Fixé 20/07</td><td>Auto-load/save vers <code>/recordings/calibration/portrait-samples.json</code>. 378 échantillons (21/char), 0 corrompus.</td></tr>
-<tr><td><strong>Portrait consensus templates</strong></td><td>✅ 22/07</td><td>Auto-générés 100% cross-val, 23.7% densité, all 18 chars OK, intégrés dans <code>pixel-game-config.ts</code></td></tr>
-<tr><td><strong>Time-over guard</strong></td><td>✅ 22/07</td><td><code>roundTimerMaxSeen ≥ 50</code> — bloque les faux draws inter-round (timer 73→3 artefact transitoire)</td></tr>
-<tr><td>Overlay SFA2 (noms persos)</td><td>✅</td><td>Templates portrait intégrés, <code>minConfidence</code> 0.40, <code>minMargin</code> 0.08</td></tr>
-<tr><td><strong>Play mode detection (Auto/Manual)</strong></td><td>✅ 26/07</td><td>P1=0x1C2A, P2=0x1C2B (+0x23 de char ID). 0=Manual, 1=Auto. Differ scan contrôlé 4-matchs</td></tr>
-<tr><td><strong>Play mode intégré</strong> (matchMeta + matchState)</td><td>✅ 26/07</td><td>game-runner.ts, game-config.ts, ws-handler.ts</td></tr>
-<tr><td><strong>Noms persos game-agnostic</strong> (KofMatchHUD)</td><td>✅ 26/07</td><td><code>p1ActiveName</code>/<code>p2ActiveName</code> serveur-side, plus de lookup KOF98 client</td></tr>
-<tr><td><strong>DuelEndOverlay game-agnostic</strong></td><td>✅ 26/07</td><td>SFA2 char names + play mode, client-side <code>sfa2Characters.ts</code></td></tr>
-<tr><td><strong>Timeouts ×2</strong></td><td>✅ 26/07</td><td>Acceptation défi 20→40s, règles 30→60s, overlay fin 10/30→20/60s</td></tr>
-<tr><td><strong>SFA2 char name display in DuelScoreHUD</strong></td><td>✅ 26/07</td><td>Déjà OK (cursor-tracked grid names via char_selected)</td></tr>
+<tr><td><strong>Round counters RAM (autoritaire)</strong></td><td>✅ 26/07</td><td><code>processSfa2RoundCounters()</code> — 0x0701 P1, 0x0A04 P2, best-of-3</td></tr>
+<tr><td><strong>Match end RAM</strong></td><td>✅ 26/07</td><td>p1≥2 ou p2≥2 → matchEnd</td></tr>
+<tr><td><strong>Draw RAM</strong></td><td>✅ 26/07</td><td>Les deux compteurs incrémentent simultanément</td></tr>
+<tr><td><strong>Char detection RAM</strong></td><td>✅</td><td>0x1C07 P1 / 0x1C08 P2, <code>SFA2_CHARACTERS</code> map (18 persos)</td></tr>
+<tr><td><strong>Play mode RAM</strong></td><td>✅ 26/07</td><td>P1=0x1C2A, P2=0x1C2B (+0x23 de char ID), 0=Manual, 1=Auto</td></tr>
+<tr><td><strong>Timer BCD decode</strong></td><td>✅</td><td>SFA2 SNES timer BCD-encoded → décodé en décimal</td></tr>
+<tr><td><strong>matchStarted timer-based</strong></td><td>✅</td><td>Timer 99→decrement (RAM, pas pixel)</td></tr>
+<tr><td><strong>matchState WebSocket</strong></td><td>✅</td><td>État live poussé toutes les 500ms (santé RAM, persos, rounds)</td></tr>
+<tr><td><strong>Noms persos game-agnostic</strong> (KofMatchHUD)</td><td>✅ 26/07</td><td><code>p1ActiveName</code>/<code>p2ActiveName</code> serveur-side</td></tr>
+<tr><td><strong>DuelEndOverlay game-agnostic</strong></td><td>✅ 26/07</td><td>SFA2 char names + play mode</td></tr>
+<tr><td><strong>Timeouts ×2</strong></td><td>✅ 26/07</td><td>Acceptation 40s, règles 60s, overlay fin 20/60s</td></tr>
+<tr><td><strong>Overlay delay server-side</strong></td><td>✅ 26/07</td><td>8s timeout avant freeze + overlay</td></tr>
+<tr><td>Navigation CPU auto end-to-end</td><td>✅</td><td>3× START → char select → 6× A (4s gaps) → combat</td></tr>
+<tr><td>Xvfb persistant + nettoyage</td><td>✅</td><td>entrypoint.sh</td></tr>
+<tr><td><strong>Perfect KO (KOF98 seulement)</strong></td><td>✅</td><td>RAM health + timer > 0, KOF98 only. SFA2 : compteurs ne donnent pas le perfect</td></tr>
 </tbody></table>
 
-<h3>3.4 Config → DB (Turso variables)</h3>
+<h3>3.4 Ancienne détection pixel SFA2 (SUPPRIMÉE 26/07)</h3>
+
+<p>Toute la détection visuelle/health-based KO ci-dessous a été retirée car redondante avec les round counters RAM :</p>
+<ul>
+<li>~~PixelMatchAnalyzer, state machine WARMUP→PLAYING→KO_PENDING→…~~</li>
+<li>~~Stripe ffmpeg, comptage colonnes, isHealthPixel v2~~</li>
+<li>~~Recalibration fullBarW, KO rétroactif, anti-fantôme time-over/KO~~</li>
+<li>~~Timer OCR template matching, bars-vanished KO, bar-stable fallback~~</li>
+<li>~~Portrait capture/calibration/templates consensus~~</li>
+<li>~~TextEventDetector, TemplateMatcher~~</li>
+</ul>
+
+<p><strong>Raison</strong> : les round counters RAM (0x0701/0x0A04) sont le ground truth — ils incrémentent atomiquement en fin de round, indépendants des heuristiques visuelles (time-over winner erroné, draw manqué, calibration asymétrique).</p>
+
+<h3>3.5 Config → DB (Turso variables)</h3>
 
 <ul>
 <li>TURSO_DATABASE_URL + TURSO_AUTH_TOKEN ajoutés au Docker compose</li>
-<li>Permet au game-server de lire la config RAM/pixel depuis la BDD</li>
-<li>🔧 <strong>WD</strong> — pas encore utilisé par le code</li>
+<li>Permet au game-server de lire la config RAM depuis la BDD</li>
+<li>🔧 <strong>WD</strong> — pas encore utilisé par le code, moins prioritaire maintenant (config RAM chargée directement)</li>
 </ul>
 
-<h3>3.5 Déploiement VPS</h3>
+<h3>3.6 Déploiement VPS</h3>
 
 <table>
 <thead><tr><th>Fichier</th><th>Statut</th></tr></thead>
@@ -465,22 +460,24 @@
 <p>*Aucune tâche urgente en cours.*</p>
 
 <h3>🟡 IMPORTANT</h3>
-<p>2. <strong>Committer le reste du working tree</strong> :</p>
+<p>1. <strong>Committer le working tree</strong> :</p>
 <ul>
-<li>~~Lot 1 : game-runner + pixel/~~ ✅ Commit <code>3efcf3e</code> le 20/07</li>
+<li>~~D-pad tracking~~ ✅ Retiré (26/07)</li>
+<li>~~Détection visuelle/pixel SFA2~~ ✅ Retiré (26/07), RAM-only</li>
+<li>~~Lot 1 : game-runner + pixel/~~ ✅ Supprimé (plus pertinent)</li>
 <li>Lot 2 : DB + registre jeux</li>
 <li>Lot 3 : Flow règles (respond → confirm-rules)</li>
 <li>Lot 4 : UI duel (wizard, pause, score, lobby)</li>
 <li>Lot 5 : i18n + config SNES + homepage</li>
 </ul>
-<p>3. ~~<strong>Pick order KOF98</strong>~~ ✅ Câblé complet (22/07)</p>
-<p>4. ~~<strong>Templates portrait SFA2</strong>~~ ✅ 378 échantillons (21/char), templates consensus intégrés (22/07)</p>
+<p>2. ~~<strong>Pick order KOF98</strong>~~ ✅ Câblé complet (22/07)</p>
+<p>3. ~~<strong>Templates portrait SFA2</strong>~~ ✅ Plus pertinent (détection visuelle supprimée)</p>
 
 <h3>🟢 SECONDAIRE</h3>
-<p>6. <strong>Northflank</strong> — swapper URLs, rotate secrets</p>
-<p>7. <strong>SSO Arcade</strong> — reprendre l'intégration</p>
-<p>8. <strong>KOF2002</strong> — détection complète (team, pick order, perfect)</p>
-<p>9. <strong>Config pixel charger depuis DB</strong> (Turso → game-runner)</p>
+<p>4. <strong>Northflank</strong> — swapper URLs, rotate secrets</p>
+<p>5. <strong>SSO Arcade</strong> — reprendre l'intégration</p>
+<p>6. <strong>KOF2002</strong> — détection complète (team, pick order, perfect)</p>
+<p>7. <strong>Config RAM charger depuis DB</strong> (Turso → game-runner) — moins prioritaire</p>
 
 <h3>⚠️ Infra</h3>
 <ul>
@@ -489,7 +486,7 @@
 
 <hr>
 
-<p>*Document mis à jour le 2026-07-26 — SFA2 play mode découvert + intégré, noms persos game-agnostic, timeouts ×2, DuelEndOverlay SFA2 complet.*</p>
+<p>*Document mis à jour le 2026-07-26 — suppression détection visuelle SFA2, round counters RAM autoritaires, D-pad tracking retiré, noms persos game-agnostic, timeouts ×2.*</p>
 
 
 </body>

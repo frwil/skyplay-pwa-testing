@@ -162,6 +162,16 @@ export class GameRunner extends EventEmitter {
   private healthReadTimer: ReturnType<typeof setInterval> | null = null; // health polling timer (250ms)
   private healthPollEnabled = false;
   private healthPollErrorCount = 0;
+  /** Previous health values for basic KO detection (SFA2 fallback when round counters are stale). */
+  private prevHealthP1 = -1;
+  private prevHealthP2 = -1;
+  /** KO detected this round (prevents double-counting). Reset on new round. */
+  private healthKoDetected = false;
+  /** Frames to suppress KO re-detection after a KO (prevents double-fire). */
+  private healthKoCooldown = 0;
+  /** Each player was ever ≥50% health during this round (proves they were in combat). Reset on new round. */
+  private roundP1WasHealthy = false;
+  private roundP2WasHealthy = false;
   private p1Losses = 0;
   private p2Losses = 0;
   private matchEnded = false;
@@ -1398,7 +1408,9 @@ export class GameRunner extends EventEmitter {
     // (0x0701 P1, 0x0A04 P2) are the ground truth — they increment atomically at round end.
     if (this.healthMemMap?.p1Rounds != null && this.healthMemMap?.p2Rounds != null) {
       this.processSfa2RoundCounters();
-      return;
+      // Fall through to basic health-KO below — the round counters are reliable but may
+      // occasionally miss a round (e.g. if the mirror region is not updated in some ROM revs).
+      // The health-based KO guards against double-counting via healthKoDetected/cooldown.
     }
 
     // ── Authoritative RAM path (kof98) ─────────────────────────────
@@ -1407,12 +1419,82 @@ export class GameRunner extends EventEmitter {
       return;
     }
 
-    // No RAM-based round/match-end detection available for this ROM.
-    // Only games with authoritative RAM counters are supported:
-    //   SFA2:  round counters at 0x0701 (P1) / 0x0A04 (P2)
-    //   KOF98: loss counters at 0xA859 (P1) / 0xA868 (P2)
-    // Health-based visual KO detection has been removed per user request.
-    if (this.memHealthP1 < 0 || this.memHealthP2 < 0) return;
+    // ── Basic health-based KO fallback (SFA2) ──────────────────────
+    // When round counters are unavailable, detect KOs from health RAM values.
+    // Logic: health=0% + was ever ≥50% this round + opponent alive (>0%) = KO.
+    if (this.matchEnded || this.memHealthP1 < 0 || this.memHealthP2 < 0) return;
+    if (this.healthKoCooldown > 0) { this.healthKoCooldown--; return; }
+
+    const KO_THRESHOLD = 0; // health must hit exactly 0% for a KO
+
+    // KO detection: a player is KO'd when their health reaches 0%.
+    // We track whether each player was ever ≥50% during the round (proves they
+    // were in active combat). The winner must be alive (>0%).
+    if (!this.healthKoDetected) {
+      // Track "was ever healthy" — must be set before we evaluate KO
+      if (this.memHealthP1 >= 50) this.roundP1WasHealthy = true;
+      if (this.memHealthP2 >= 50) this.roundP2WasHealthy = true;
+
+      const p1Ko = this.roundP1WasHealthy && this.memHealthP1 <= KO_THRESHOLD && this.memHealthP2 > 0;
+      const p2Ko = this.roundP2WasHealthy && this.memHealthP2 <= KO_THRESHOLD && this.memHealthP1 > 0;
+
+      if (p1Ko || p2Ko) {
+        this.healthKoDetected = true;
+        this.healthKoCooldown = 12; // ~3s at 250ms polls
+        const loser = p1Ko ? 1 : 2;
+        const winner = loser === 1 ? 2 : 1;
+
+        // Track perfect: winner's min health across round (sampled during combat)
+        const PERFECT_THRESHOLD = 95;
+        const winnerMinHealth = winner === 1 ? this.roundP1MinHealth : this.roundP2MinHealth;
+        const perfect = winnerMinHealth >= PERFECT_THRESHOLD;
+        if (perfect) this.matchPerfectKos.push({ round: this.roundNumber + 1, player: winner });
+
+        if (loser === 1) this.p1Losses++; else this.p2Losses++;
+        this.roundNumber++;
+        this.creditRoundWin(winner);
+
+        console.log(`[game-runner] ${this.readerTag} 🧠 Health-KO: P${loser} KO'd! P${winner} wins round ${this.roundNumber}${perfect ? " (perfect)" : ""}. Losses: P1=${this.p1Losses} P2=${this.p2Losses}`);
+        this.emit("roundResult", {
+          loser, winner,
+          p1Losses: this.p1Losses, p2Losses: this.p2Losses,
+          koType: perfect ? "perfect" : "normal",
+          ...this.charInfo(),
+        });
+
+        // Match end: first to 2 wins (SFA2 best-of-3)
+        if (!this.matchEnded && (this.p1Losses >= 2 || this.p2Losses >= 2)) {
+          this.matchEnded = true;
+          this.matchNumber++;
+          const mWinner = this.p2Losses >= 2 ? 1 : 2; // P2 lost 2+ → P1 wins
+          const mLoser = mWinner === 1 ? 2 : 1;
+          const totalRounds = this.roundNumber;
+          const perfectKos = this.matchPerfectKos.length;
+          console.log(`[game-runner] ${this.readerTag} 🧠 MATCH #${this.matchNumber} OVER (health-KO)! Winner: P${mWinner} P1=${this.p1Losses} P2=${this.p2Losses} rounds=${totalRounds} perfectKOs=${perfectKos}`);
+          this.emit("matchEnd", { winner: mWinner, loser: mLoser, p1Losses: this.p1Losses, p2Losses: this.p2Losses, matchNumber: this.matchNumber, totalRounds, perfectKos, perfectKoDetails: this.matchPerfectKos, ...this.charInfo(), ...this.matchMeta() });
+        }
+      }
+    }
+
+    // New round: both players back to full health → re-arm KO detection
+    if (this.healthKoDetected &&
+        this.memHealthP1 >= 80 && this.memHealthP2 >= 80) {
+      this.healthKoDetected = false;
+      this.roundP1WasHealthy = false;
+      this.roundP2WasHealthy = false;
+      this.roundP1MinHealth = 100;
+      this.roundP2MinHealth = 100;
+      console.log(`[game-runner] ${this.readerTag} 🧠 Health-KO re-armed for next round. P1=${this.memHealthP1}% P2=${this.memHealthP2}%`);
+    }
+
+    // Track min health during combat (for perfect KO detection)
+    if (!this.healthKoDetected && (this.memHealthP1 >= 50 || this.memHealthP2 >= 50)) {
+      if (this.memHealthP1 > 0) this.roundP1MinHealth = Math.min(this.roundP1MinHealth, this.memHealthP1);
+      if (this.memHealthP2 > 0) this.roundP2MinHealth = Math.min(this.roundP2MinHealth, this.memHealthP2);
+    }
+
+    this.prevHealthP1 = this.memHealthP1;
+    this.prevHealthP2 = this.memHealthP2;
   }
 
   /** Start the debug health log timer. Actual detection runs continuously via TCP health reader.
@@ -2104,6 +2186,12 @@ export class GameRunner extends EventEmitter {
     this.roundP2MinHealth = 100;
     this.roundTimerHitZero = false;
     this.lcPrevTimer16 = -1;
+    this.healthKoDetected = false;
+    this.healthKoCooldown = 0;
+    this.roundP1WasHealthy = false;
+    this.roundP2WasHealthy = false;
+    this.prevHealthP1 = -1;
+    this.prevHealthP2 = -1;
     // RAM loss-counter tracking: force a fresh re-baseline. The counters zero out at the next
     // char-select, and prevP1Lost/prevP2Lost < 0 makes processLossCounters re-baseline silently
     // (no phantom round from the 3→0 reset).
