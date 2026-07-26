@@ -41,7 +41,7 @@
 | Heartbeat + nettoyage stale entries | ✅ | `3115646` |
 | Un seul défi par joueur (FIFO) | ✅ | `919a1fb` |
 | Résolution défi mutuel (auto-accept) | ✅ | `c3fe573` |
-| Timeout défi 30s + auto-cancel | ✅ | `cc70b69` |
+| Timeout défi 40s + auto-cancel | ✅ | `cc70b69` |
 | 3 types de défi : Standard / XL / Fighter | ✅ | `6e5819d` |
 | Règles multilingues FR/EN | ✅ | `6e5819d` |
 | WSS URL régénérée (pas d'URL de tunnel morte) | 🔧 **WD** | Non commité |
@@ -323,7 +323,7 @@ Dossier untracké contenant :
 │ │ NES Emu     │ NeoGeo Emu   │ KOF98 RAM det.  │ Lobby Duel    │ │
 │ │ Auth JWT    │ CloudStream  │ SKY Economy     │ Duels 1v1     │ │
 │ │ DuelEnd     │ Revanche     │ Abandon/Forfeit  │ Historique    │ │
-│ │ i18n base   │ Admin panel  │ DuelGameSelector │ Timeout 30s   │ │
+│ │ i18n base   │ Admin panel  │ DuelGameSelector │ Timeout 40s   │ │
 │ │ RulesOverlay│ VPS deploy   │ Multi-challenge  │ vsync video   │ │
 │ └─────────────┴──────────────┴─────────────────┴───────────────┘ │
 │                                                                   │
@@ -373,4 +373,4 @@ Dossier untracké contenant :
 
 ---
 
-*Document mis à jour le 2026-07-22 — cleanup escrow dry-run OK, tempslates portrait SFA2 21/char intégrés, pick order KOF98 câblé, time-over guard déployé.*
+*Document mis à jour le 2026-07-26 — SFA2 play mode découvert + intégré, noms persos game-agnostic, timeouts ×2, DuelEndOverlay SFA2 complet.*

@@ -68,9 +68,9 @@
 
 <h1>SKY PLAY — État d'avancement complet</h1>
 
-<p><strong>Date</strong> : 2026-07-22</p>
-<p><strong>Branche</strong> : <code>main</code> — détection SFA2 complète (state machine, timer, time-over guard, perfect KO, match_state)</p>
-<p><strong>Dernier commit</strong> : <code>1babf5b</code> — fix(sfa2): prevent phantom time-over draws with roundTimerMaxSeen gate</p>
+<p><strong>Date</strong> : 2026-07-26</p>
+<p><strong>Branche</strong> : <code>main</code> — SFA2 play mode découvert + intégré, noms persos game-agnostic, timeouts ×2</p>
+<p><strong>Dernier commit</strong> : <code>a2ce061</code> — wip: template matching for SFA2 round-end detection</p>
 
 <hr>
 
@@ -114,7 +114,7 @@
 <tr><td>Heartbeat + nettoyage stale entries</td><td>✅</td><td><code>3115646</code></td></tr>
 <tr><td>Un seul défi par joueur (FIFO)</td><td>✅</td><td><code>919a1fb</code></td></tr>
 <tr><td>Résolution défi mutuel (auto-accept)</td><td>✅</td><td><code>c3fe573</code></td></tr>
-<tr><td>Timeout défi 30s + auto-cancel</td><td>✅</td><td><code>cc70b69</code></td></tr>
+<tr><td>Timeout défi 40s + auto-cancel</td><td>✅</td><td><code>cc70b69</code></td></tr>
 <tr><td>3 types de défi : Standard / XL / Fighter</td><td>✅</td><td><code>6e5819d</code></td></tr>
 <tr><td>Règles multilingues FR/EN</td><td>✅</td><td><code>6e5819d</code></td></tr>
 <tr><td>WSS URL régénérée (pas d'URL de tunnel morte)</td><td>🔧 <strong>WD</strong></td><td>Non commité</td></tr>
@@ -246,6 +246,12 @@
 <tr><td><strong>Portrait consensus templates</strong></td><td>✅ 22/07</td><td>Auto-générés 100% cross-val, 23.7% densité, all 18 chars OK, intégrés dans <code>pixel-game-config.ts</code></td></tr>
 <tr><td><strong>Time-over guard</strong></td><td>✅ 22/07</td><td><code>roundTimerMaxSeen ≥ 50</code> — bloque les faux draws inter-round (timer 73→3 artefact transitoire)</td></tr>
 <tr><td>Overlay SFA2 (noms persos)</td><td>✅</td><td>Templates portrait intégrés, <code>minConfidence</code> 0.40, <code>minMargin</code> 0.08</td></tr>
+<tr><td><strong>Play mode detection (Auto/Manual)</strong></td><td>✅ 26/07</td><td>P1=0x1C2A, P2=0x1C2B (+0x23 de char ID). 0=Manual, 1=Auto. Differ scan contrôlé 4-matchs</td></tr>
+<tr><td><strong>Play mode intégré</strong> (matchMeta + matchState)</td><td>✅ 26/07</td><td>game-runner.ts, game-config.ts, ws-handler.ts</td></tr>
+<tr><td><strong>Noms persos game-agnostic</strong> (KofMatchHUD)</td><td>✅ 26/07</td><td><code>p1ActiveName</code>/<code>p2ActiveName</code> serveur-side, plus de lookup KOF98 client</td></tr>
+<tr><td><strong>DuelEndOverlay game-agnostic</strong></td><td>✅ 26/07</td><td>SFA2 char names + play mode, client-side <code>sfa2Characters.ts</code></td></tr>
+<tr><td><strong>Timeouts ×2</strong></td><td>✅ 26/07</td><td>Acceptation défi 20→40s, règles 30→60s, overlay fin 10/30→20/60s</td></tr>
+<tr><td><strong>SFA2 char name display in DuelScoreHUD</strong></td><td>✅ 26/07</td><td>Déjà OK (cursor-tracked grid names via char_selected)</td></tr>
 </tbody></table>
 
 <h3>3.4 Config → DB (Turso variables)</h3>
@@ -430,7 +436,7 @@
 │ │ NES Emu     │ NeoGeo Emu   │ KOF98 RAM det.  │ Lobby Duel    │ │
 │ │ Auth JWT    │ CloudStream  │ SKY Economy     │ Duels 1v1     │ │
 │ │ DuelEnd     │ Revanche     │ Abandon/Forfeit  │ Historique    │ │
-│ │ i18n base   │ Admin panel  │ DuelGameSelector │ Timeout 30s   │ │
+│ │ i18n base   │ Admin panel  │ DuelGameSelector │ Timeout 40s   │ │
 │ │ RulesOverlay│ VPS deploy   │ Multi-challenge  │ vsync video   │ │
 │ └─────────────┴──────────────┴─────────────────┴───────────────┘ │
 │                                                                   │
@@ -483,7 +489,7 @@
 
 <hr>
 
-<p>*Document mis à jour le 2026-07-22 — cleanup escrow dry-run OK, tempslates portrait SFA2 21/char intégrés, pick order KOF98 câblé, time-over guard déployé.*</p>
+<p>*Document mis à jour le 2026-07-26 — SFA2 play mode découvert + intégré, noms persos game-agnostic, timeouts ×2, DuelEndOverlay SFA2 complet.*</p>
 
 
 </body>
