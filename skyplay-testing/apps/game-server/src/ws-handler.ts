@@ -534,6 +534,9 @@ async function handleInit(
 
         setTimeout(async () => {
           if (session.status !== "running") return;
+          // Lock player input during auto-start sequence — prevents players
+          // from interfering with menu navigation (START ×2, DOWN, START).
+          session.inputLocked = true;
           // 1) T+30s: START → skip intro, reach main menu
           console.log(`[ws] ▶️  SFA2 CPU T+30s: START → skip intro for ${msg.sessionId}`);
           tap(1, startButton, 300);
@@ -563,6 +566,8 @@ async function handleInit(
             await sleep(1500);
             if (session.status !== "running") return;
             console.log(`[ws] 🎮 SFA2 CPU: A → begin match for ${msg.sessionId}`);
+            // Auto-sequence done, unlock player input
+            session.inputLocked = false;
           }
         }, startDelay);
       }
@@ -697,6 +702,8 @@ function startCharSelectPhase(
 
   // Reset cursors to starting position
   session.charSelectActive = true;
+  // Unlock player input — auto-start sequence is done, players control their cursors
+  session.inputLocked = false;
   // Suspend pixel analysis: the portrait grid reads as "healthy bars" and the
   // selection countdown ticks like a fight timer → fabricated rounds.
   // Text detector always runs — no need to suspend during char select.
@@ -1051,13 +1058,30 @@ function handleInput(
         }
       }
 
-      // START is blocked during char select for NeoGeo only (auto-sequence handles it).
-      // SNES allows START for manual pause and for starting the match if auto-lock fails.
-      if (msg.button === SNES_START && session.system === "neogeo") {
-        console.log(`[ws] 🚫 START blocked during char select for P${msg.player} in ${info.sessionId}`);
-        return;
+      // START is ALWAYS blocked for SNES/SFA2 — the only way to pause is via
+      // the platform pause button (sends "pause" control message, which pauses
+      // the emulator itself, freezing the game behind the overlay).
+      // NeoGeo START is also blocked during char select only (auto-sequence handles it).
+      if (msg.button === SNES_START) {
+        if (session.system === "snes") {
+          // Silent drop — START is never allowed for SFA2 players
+          return;
+        }
+        if (session.system === "neogeo") {
+          console.log(`[ws] 🚫 START blocked during char select for P${msg.player} in ${info.sessionId}`);
+          return;
+        }
       }
     }
+  }
+
+  // ── Input lock during auto-start sequence ──
+  // All player input is dropped while the server is navigating menus
+  // (START ×2, DOWN, START for SFA2 PvP). This prevents players from
+  // interfering with the auto-sequence.
+  if (session && session.inputLocked) {
+    // Silent drop — auto-sequence is in progress
+    return;
   }
 
   if (session && session.mode === "pvp" && session.system === "neogeo" && (msg.button === 4 || msg.button === 5)) {
@@ -1309,6 +1333,9 @@ function startGameAutoSequence(
 
   console.log(`[ws] 🚀 Starting PvP auto-sequence for session ${sessionId}`);
 
+  // Lock player input during auto-start sequence
+  session.inputLocked = true;
+
   if (needCoins) {
     // Insert 2 coins via P1 (Neo Geo / PS1)
     setTimeout(() => {
@@ -1336,6 +1363,14 @@ function startGameAutoSequence(
       runner.injectInput(1, startButton, false);
       runner.injectInput(2, startButton, false);
       console.log(`[ws] ✅ Auto-start complete for session ${sessionId}`);
+
+      // For non-SNES systems (NeoGeo/PS1): game is now at char select /
+      // attract mode — unlock player input immediately.
+      // For SNES: input stays locked during the menu nav sequence below;
+      // startCharSelectPhase will unlock it when char select begins.
+      if (system !== "snes") {
+        session.inputLocked = false;
+      }
 
       // ── SNES menu navigation (SFA2) ──
       if (system === "snes") {
@@ -1395,6 +1430,8 @@ function startGameAutoSequence(
               tap(1, startButton);
               await sleep(200);
               tap(2, startButton);
+              // Auto-sequence done, unlock player input
+              session.inputLocked = false;
             }
           }
         }, navDelay);

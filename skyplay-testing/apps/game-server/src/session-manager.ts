@@ -55,6 +55,8 @@ export interface Session {
   clientReadyTimer: ReturnType<typeof setTimeout> | null;
   /** Portrait grid detection result from the character select screen (diagnostic only). */
   portraitResults?: PortraitGridResult;
+  /** Whether player input is locked (during auto-start sequence). */
+  inputLocked: boolean;
 }
 
 const sessions = new Map<string, Session>();
@@ -95,6 +97,7 @@ export function createSession(
     p1ClientReady: false,
     p2ClientReady: false,
     clientReadyTimer: null,
+    inputLocked: false,
   };
   sessions.set(id, session);
   console.log(`[session] Created session ${id} (${system} / ${rom}), total: ${sessions.size}`);
