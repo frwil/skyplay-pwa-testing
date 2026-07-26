@@ -328,7 +328,7 @@ async function handleInit(
     if (pr) {
       const p1Cell = pr.cells[session.p1CursorRow]?.[session.p1CursorCol];
       if (p1Cell?.isReliable) portraitP1 = p1Cell.charName ?? "?";
-      if (session.mode === "pvp") {
+      {
         const p2Cell = pr.cells[session.p2CursorRow]?.[session.p2CursorCol];
         if (p2Cell?.isReliable) portraitP2 = p2Cell.charName ?? "?";
       }

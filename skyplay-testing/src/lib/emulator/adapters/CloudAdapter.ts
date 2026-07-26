@@ -765,6 +765,19 @@ export class CloudAdapter implements EmulatorAdapter {
           this.callbacks.onCharSelected?.(csData.player, csData.charId, csData.charName);
           break;
         }
+        case "match_started": {
+          const msData = msg as unknown as { p1CharName?: string; p2CharName?: string };
+          if (msData.p1CharName && !this.p1CharName) {
+            this.p1CharName = msData.p1CharName;
+            this.callbacks.onCharSelected?.(1, -1, msData.p1CharName);
+          }
+          if (msData.p2CharName && !this.p2CharName) {
+            this.p2CharName = msData.p2CharName;
+            this.callbacks.onCharSelected?.(2, -1, msData.p2CharName);
+          }
+          console.log(`[Cloud:${this.systemType}] 🎬 Match started — P1=${msData.p1CharName ?? this.p1CharName ?? "?"} P2=${msData.p2CharName ?? this.p2CharName ?? "?"}`);
+          break;
+        }
         case "paused": {
           const pData = msg as unknown as { player: 1 | 2; countdown: number };
           console.log(`[Cloud:${this.systemType}] ⏸ Paused by P${pData.player} — ${pData.countdown}s`);
