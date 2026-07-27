@@ -1,8 +1,8 @@
 # SKY PLAY — État d'avancement complet
 
-**Date** : 2026-07-26  
-**Branche** : `main` — suppression détection visuelle SFA2, round counters RAM autoritaires  
-**Dernier commit** : à venir — remove visual/pixel-based detection for SFA2, RAM-only  
+**Date** : 2026-07-27  
+**Branche** : `main` — offline-first SQLite, winner_share DB, nettoyage configs hardcodées  
+**Dernier commit** : `d929fb5` — offline-first local SQLite + winner_share DB-configurable + hardcoded config cleanup  
 
 ---
 
@@ -188,26 +188,44 @@ Toute la détection visuelle/health-based KO ci-dessous a été retirée car red
 - `sky_transactions` — transactions SKY
 - `cloud_rooms` — mapping room code → session
 
-### 4.2 Nouvelles tables (🔧 WD — dans db.ts non commité)
+### 4.2 Nouvelles tables ✅ (commit `d929fb5`)
 
 | Table | Description |
 |-------|-------------|
-| `duel_games` | Registre de jeux (kof98, sf2, kof2002, sfa2) |
-| `duel_game_modes` | 3 modes par jeu (standard/XL/fighter) |
+| `duel_games` | Registre de jeux (kof98, sf2, kof2002, sfa2) avec winner_share, ram_config, category, cover_image, description |
+| `duel_game_modes` | 3 modes par jeu (standard/XL/fighter) avec rules i18n, winner_share |
 | `duel_game_controls` | Contrôles clavier par jeu/joueur |
-| `duel_game_config_versions` | Versioning git-like des configs |
+| `duel_game_config_versions` | Versioning git-like des configs RAM + contrôles |
+| `escrow_rooms` | Chambres d'escrow isolées par session (pot, settlement) |
+| `platform_bank` | Revenus plateforme tracés par match |
+| `sky_transactions` | Ledger transactions SKY (entry_fee, payout, dispute, seed, admin_adjust) |
+| `duel_recordings` | Enregistrements blob des matchs |
 
-### 4.3 Nouveaux seeds (🔧 WD)
+### 4.3 Seeds ✅ (commit `d929fb5`)
 
 - 4 jeux avec cover_image, description, category
 - KOF98 : RAM config complète en JSON + contrôles
 - KOF2002 : RAM config basic (health/timer/mode)
 - SF2 : contrôles 6 boutons
-- SFA2 : en attente de config pixel
+- SFA2 : contrôles SNES 6 boutons
+- Config versions v1 seedées pour chaque jeu
 
-### 4.4 Nouveaux ALTER TABLE (🔧 WD)
+### 4.4 ALTER TABLE migrations ✅ (commit `d929fb5`)
 
-- `duel_challenges` : mode_id, match_count, match_number, challenger_rules_accepted, target_rules_accepted
+- `duel_challenges` : mode_id, match_count, match_number, challenger_rules_accepted, target_rules_accepted, rules_pending_at
+- `duel_games` : entry_fee, winner_share, ram_config, category, cover_image, description
+- `duel_game_modes` : rules, winner_share
+- `duel_results` : perfect_ko_count
+
+### 4.5 Offline-first ✅ (commit `d929fb5`)
+
+| Fonctionnalité | Description |
+|----------------|-------------|
+| USE_LOCAL_DB=true | SQLite local (`skyplay-local.db`), zéro réseau |
+| Sync heartbeat | Probe Turso toutes les 60s, fail silencieux offline |
+| DbSyncPoller | Composant client : sync au mount, on `window.online`, et heartbeat 60s |
+| POST /api/admin/db/sync | Endpoint de sync manuel |
+| Fallback automatique | Sans config DB → SQLite local automatiquement |
 
 ---
 
@@ -216,15 +234,15 @@ Toute la détection visuelle/health-based KO ci-dessous a été retirée car red
 | Fonctionnalité | Statut | Notes |
 |----------------|--------|-------|
 | Balance compte | ✅ | |
-| Entry fee fixe 1000 SKY | ✅ → 🔧 | Devient `DEFAULT_ENTRY_FEE` |
-| Frais d'entrée par jeu/mode | 🔧 **WD** | Depuis `duel_games.entry_fee` / `duel_game_modes.entry_fee` |
-| WINNER_SHARE (75%) | ✅ | |
+| Entry fee par jeu/mode | ✅ | Lu depuis `duel_games.entry_fee` / `duel_game_modes.entry_fee` |
+| WINNER_SHARE DB-configurable | ✅ | Mode > jeu > DEFAULT_WINNER_SHARE (0.75) |
 | InsufficientFunds gate | ✅ | |
 | Admins (unlimited SKY) | ✅ | |
 | Charge au début du combat | ✅ | gated par `gameStarted` |
 | Litige (remboursement / award) | ✅ | `resolveDispute()` |
-| Litige avec frais dynamiques | 🔧 **WD** | Lit depuis `duel_games` |
+| Litige avec frais dynamiques | ✅ | Lit depuis `duel_games` |
 | Historique transactions | ✅ | |
+| Payout winner avec winner_share DB | ✅ | Mode-level > game-level > default |
 
 ---
 
@@ -318,15 +336,15 @@ Dossier untracké contenant :
 │ │ DuelEnd     │ Revanche     │ Abandon/Forfeit  │ Historique    │ │
 │ │ i18n base   │ Admin panel  │ DuelGameSelector │ Timeout 40s   │ │
 │ │ RulesOverlay│ VPS deploy   │ Multi-challenge  │ vsync video   │ │
+│ │ DB registre │ winner_share │ entry_fee dyn.  │ Offline-first │ │
+│ │ escrow rooms│ bank platform│ Sync heartbeat  │ SFA2 RAM      │ │
 │ └─────────────┴──────────────┴─────────────────┴───────────────┘ │
 │                                                                   │
 │ 🔧 NON COMMITÉ (working tree)                                     │
 │ ┌─────────────┬──────────────┬─────────────────┬───────────────┐ │
-│ │ Rules flow  │ Confirm-rule │ Recovery lobby   │ Frais dyn.    │ │
-│ │ DuelScore   │ DuelPause    │ DuelWizard      │ Auto-rematch  │ │
-│ │ HeaderAuth  │ Turso conf   │ DB registre     │ Lieu partage  │ │
-│ │ SSO Arcade  │              │                 │               │ │
-│ │ (début)     │              │                 │               │ │
+│ │ Rules flow  │ Confirm-rule │ Recovery lobby   │ DuelPause     │ │
+│ │ DuelScore   │ DuelWizard   │ Auto-rematch    │ HeaderAuth    │ │
+│ │ SSO Arcade  │ Lieu partage │ WSS URL regen   │               │ │
 │ └─────────────┴──────────────┴─────────────────┴───────────────┘ │
 │                                                                   │
 │ ❌ NON FAIT                                                       │

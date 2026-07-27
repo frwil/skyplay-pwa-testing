@@ -68,9 +68,9 @@
 
 <h1>SKY PLAY — État d'avancement complet</h1>
 
-<p><strong>Date</strong> : 2026-07-26</p>
-<p><strong>Branche</strong> : <code>main</code> — suppression détection visuelle SFA2, round counters RAM autoritaires</p>
-<p><strong>Dernier commit</strong> : à venir — remove visual/pixel-based detection for SFA2, RAM-only</p>
+<p><strong>Date</strong> : 2026-07-27</p>
+<p><strong>Branche</strong> : <code>main</code> — offline-first SQLite, winner_share DB, nettoyage configs hardcodées</p>
+<p><strong>Dernier commit</strong> : <code>d929fb5</code> — offline-first local SQLite + winner_share DB-configurable + hardcoded config cleanup</p>
 
 <hr>
 
@@ -284,32 +284,52 @@
 <li><code>cloud_rooms</code> — mapping room code → session</li>
 </ul>
 
-<h3>4.2 Nouvelles tables (🔧 WD — dans db.ts non commité)</h3>
+<h3>4.2 Nouvelles tables ✅ (commit <code>d929fb5</code>)</h3>
 
 <table>
 <thead><tr><th>Table</th><th>Description</th></tr></thead>
 <tbody>
-<tr><td><code>duel_games</code></td><td>Registre de jeux (kof98, sf2, kof2002, sfa2)</td></tr>
-<tr><td><code>duel_game_modes</code></td><td>3 modes par jeu (standard/XL/fighter)</td></tr>
+<tr><td><code>duel_games</code></td><td>Registre de jeux (kof98, sf2, kof2002, sfa2) avec winner_share, ram_config, category, cover_image, description</td></tr>
+<tr><td><code>duel_game_modes</code></td><td>3 modes par jeu (standard/XL/fighter) avec rules i18n, winner_share</td></tr>
 <tr><td><code>duel_game_controls</code></td><td>Contrôles clavier par jeu/joueur</td></tr>
-<tr><td><code>duel_game_config_versions</code></td><td>Versioning git-like des configs</td></tr>
+<tr><td><code>duel_game_config_versions</code></td><td>Versioning git-like des configs RAM + contrôles</td></tr>
+<tr><td><code>escrow_rooms</code></td><td>Chambres d'escrow isolées par session (pot, settlement)</td></tr>
+<tr><td><code>platform_bank</code></td><td>Revenus plateforme tracés par match</td></tr>
+<tr><td><code>sky_transactions</code></td><td>Ledger transactions SKY (entry_fee, payout, dispute, seed, admin_adjust)</td></tr>
+<tr><td><code>duel_recordings</code></td><td>Enregistrements blob des matchs</td></tr>
 </tbody></table>
 
-<h3>4.3 Nouveaux seeds (🔧 WD)</h3>
+<h3>4.3 Seeds ✅ (commit <code>d929fb5</code>)</h3>
 
 <ul>
 <li>4 jeux avec cover_image, description, category</li>
 <li>KOF98 : RAM config complète en JSON + contrôles</li>
 <li>KOF2002 : RAM config basic (health/timer/mode)</li>
 <li>SF2 : contrôles 6 boutons</li>
-<li>SFA2 : en attente de config pixel</li>
+<li>SFA2 : contrôles SNES 6 boutons</li>
+<li>Config versions v1 seedées pour chaque jeu</li>
 </ul>
 
-<h3>4.4 Nouveaux ALTER TABLE (🔧 WD)</h3>
+<h3>4.4 ALTER TABLE migrations ✅ (commit <code>d929fb5</code>)</h3>
 
 <ul>
-<li><code>duel_challenges</code> : mode_id, match_count, match_number, challenger_rules_accepted, target_rules_accepted</li>
+<li><code>duel_challenges</code> : mode_id, match_count, match_number, challenger_rules_accepted, target_rules_accepted, rules_pending_at</li>
+<li><code>duel_games</code> : entry_fee, winner_share, ram_config, category, cover_image, description</li>
+<li><code>duel_game_modes</code> : rules, winner_share</li>
+<li><code>duel_results</code> : perfect_ko_count</li>
 </ul>
+
+<h3>4.5 Offline-first ✅ (commit <code>d929fb5</code>)</h3>
+
+<table>
+<thead><tr><th>Fonctionnalité</th><th>Description</th></tr></thead>
+<tbody>
+<tr><td>USE_LOCAL_DB=true</td><td>SQLite local (<code>skyplay-local.db</code>), zéro réseau</td></tr>
+<tr><td>Sync heartbeat</td><td>Probe Turso toutes les 60s, fail silencieux offline</td></tr>
+<tr><td>DbSyncPoller</td><td>Composant client : sync au mount, on <code>window.online</code>, et heartbeat 60s</td></tr>
+<tr><td>POST /api/admin/db/sync</td><td>Endpoint de sync manuel</td></tr>
+<tr><td>Fallback automatique</td><td>Sans config DB → SQLite local automatiquement</td></tr>
+</tbody></table>
 
 <hr>
 
@@ -319,15 +339,15 @@
 <thead><tr><th>Fonctionnalité</th><th>Statut</th><th>Notes</th></tr></thead>
 <tbody>
 <tr><td>Balance compte</td><td>✅</td><td></td></tr>
-<tr><td>Entry fee fixe 1000 SKY</td><td>✅ → 🔧</td><td>Devient <code>DEFAULT_ENTRY_FEE</code></td></tr>
-<tr><td>Frais d'entrée par jeu/mode</td><td>🔧 <strong>WD</strong></td><td>Depuis <code>duel_games.entry_fee</code> / <code>duel_game_modes.entry_fee</code></td></tr>
-<tr><td>WINNER_SHARE (75%)</td><td>✅</td><td></td></tr>
+<tr><td>Entry fee par jeu/mode</td><td>✅</td><td>Lu depuis <code>duel_games.entry_fee</code> / <code>duel_game_modes.entry_fee</code></td></tr>
+<tr><td>WINNER_SHARE DB-configurable</td><td>✅</td><td>Mode > jeu > DEFAULT_WINNER_SHARE (0.75)</td></tr>
 <tr><td>InsufficientFunds gate</td><td>✅</td><td></td></tr>
 <tr><td>Admins (unlimited SKY)</td><td>✅</td><td></td></tr>
 <tr><td>Charge au début du combat</td><td>✅</td><td>gated par <code>gameStarted</code></td></tr>
 <tr><td>Litige (remboursement / award)</td><td>✅</td><td><code>resolveDispute()</code></td></tr>
-<tr><td>Litige avec frais dynamiques</td><td>🔧 <strong>WD</strong></td><td>Lit depuis <code>duel_games</code></td></tr>
+<tr><td>Litige avec frais dynamiques</td><td>✅</td><td>Lit depuis <code>duel_games</code></td></tr>
 <tr><td>Historique transactions</td><td>✅</td><td></td></tr>
+<tr><td>Payout winner avec winner_share DB</td><td>✅</td><td>Mode-level > game-level > default</td></tr>
 </tbody></table>
 
 <hr>
@@ -433,15 +453,15 @@
 │ │ DuelEnd     │ Revanche     │ Abandon/Forfeit  │ Historique    │ │
 │ │ i18n base   │ Admin panel  │ DuelGameSelector │ Timeout 40s   │ │
 │ │ RulesOverlay│ VPS deploy   │ Multi-challenge  │ vsync video   │ │
+│ │ DB registre │ winner_share │ entry_fee dyn.  │ Offline-first │ │
+│ │ escrow rooms│ bank platform│ Sync heartbeat  │ SFA2 RAM      │ │
 │ └─────────────┴──────────────┴─────────────────┴───────────────┘ │
 │                                                                   │
 │ 🔧 NON COMMITÉ (working tree)                                     │
 │ ┌─────────────┬──────────────┬─────────────────┬───────────────┐ │
-│ │ Rules flow  │ Confirm-rule │ Recovery lobby   │ Frais dyn.    │ │
-│ │ DuelScore   │ DuelPause    │ DuelWizard      │ Auto-rematch  │ │
-│ │ HeaderAuth  │ Turso conf   │ DB registre     │ Lieu partage  │ │
-│ │ SSO Arcade  │              │                 │               │ │
-│ │ (début)     │              │                 │               │ │
+│ │ Rules flow  │ Confirm-rule │ Recovery lobby   │ DuelPause     │ │
+│ │ DuelScore   │ DuelWizard   │ Auto-rematch    │ HeaderAuth    │ │
+│ │ SSO Arcade  │ Lieu partage │ WSS URL regen   │               │ │
 │ └─────────────┴──────────────┴─────────────────┴───────────────┘ │
 │                                                                   │
 │ ❌ NON FAIT                                                       │
