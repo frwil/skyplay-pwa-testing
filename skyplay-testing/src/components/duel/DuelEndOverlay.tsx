@@ -176,7 +176,7 @@ export default function DuelEndOverlay({
         </div>
 
         <div className="flex items-center justify-between text-xs text-white/60">
-          <span>{t.duel.perfectKos}: <span className="font-bold text-white/90">{totalPerfectKos}</span></span>
+          <PerfectKoLine result={result} matchHistory={matchHistory} localSide={localSide} t={t} />
           {matchHistory.length > 0 && (
             <button
               onClick={() => setShowDetails((v) => !v)}
@@ -503,5 +503,46 @@ function MatchBreakdown({ matchHistory, localSide }: {
         );
       })}
     </div>
+  );
+}
+
+/** Renders per-round perfect KO details: "👑 R1:You  R2:You" etc.
+ *  Falls back to a simple total count when per-round data is unavailable. */
+function PerfectKoLine({
+  result, matchHistory, localSide, t,
+}: {
+  result: DuelMatchResult;
+  matchHistory: DuelMatchResult[];
+  localSide: number;
+  t: ReturnType<typeof useTranslation>["t"];
+}) {
+  const totalPerfectKos = matchHistory.reduce((s, r) => s + (r.perfectKos || 0), 0);
+
+  // Build per-round perfect KO badges from the current match
+  const details = result.perfectKoDetails;
+  if (details && details.length > 0) {
+    const badges = details.map((d, i) => {
+      const who = d.player === localSide ? t.duel.you : t.duel.opponent;
+      return (
+        <span key={i} className="inline-flex items-center gap-0.5 font-bold" style={{ color: "#fbbf24" }}>
+          <Trophy size={10} />
+          <span>R{d.round}:{who}</span>
+        </span>
+      );
+    });
+    return (
+      <span className="flex items-center gap-2 flex-wrap">
+        <span>{t.duel.perfectKos}:</span>
+        {badges.reduce((prev, curr) => <>{prev} {curr}</>)}
+        {totalPerfectKos > details.length && (
+          <span className="text-white/40">(+{totalPerfectKos - details.length} more)</span>
+        )}
+      </span>
+    );
+  }
+
+  // Fallback: simple total count
+  return (
+    <span>{t.duel.perfectKos}: <span className="font-bold text-white/90">{totalPerfectKos}</span></span>
   );
 }

@@ -125,6 +125,7 @@ export function useEmulator(system: SystemType = "nes") {
         p1PlayMode?: "Auto" | "Manual"; p2PlayMode?: "Auto" | "Manual";
         p1CharWins?: Record<number, number>; p2CharWins?: Record<number, number>;
         p1CharName?: string; p2CharName?: string;
+        perfectKoDetails?: { round: number; player: number }[];
       },
     ) => {
       console.log(`[useEmulator] 🏁 Match #${matchNumber || "?"} over! P${winner} wins. P1=${p1Losses} P2=${p2Losses} perfectKOs=${perfectKos || 0}`);

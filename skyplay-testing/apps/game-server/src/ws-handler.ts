@@ -2,7 +2,8 @@ import { WebSocket } from "ws";
 import {
   createSession, addConnection, removeConnection, getSession,
   sendToSession, sendBinaryToSession, sendBinaryToConnection, resetIdleTimer, removeSession,
-  getPlayerInfo, hasActiveConnections, getConnections, getAllSessions, type Session,
+  getPlayerInfo, hasActiveConnections, getConnections, getAllSessions,
+  clearDisconnectTimer, startDisconnectTimer, type Session,
 } from "./session-manager.js";
 import { GameRunner } from "./game-runner.js";
 import type { ClientMessage } from "./types.js";
@@ -56,7 +57,7 @@ const matchLoserSide = new Map<string, number>();
  * matchEnd, cancelled by rematch_request/rematch_accept.
  */
 const matchEndTimers = new Map<string, ReturnType<typeof setTimeout>>();
-const MATCH_END_COUNTDOWN_MS = 30_000;
+const MATCH_END_COUNTDOWN_MS = 3_600_000; // DISABLED for debug: was 30_000 — wait 1h before auto-stop
 
 // ── Stats buffering for offline resilience ──────────────────────────
 const PENDING_STATS_DIR = process.env.PENDING_STATS_DIR || "/data/pending-stats";
@@ -144,6 +145,20 @@ export function handleConnection(ws: WebSocket, sessionId: string): void {
       if (session && hasActiveConnections(session)) {
         // One player remains — notify them
         sendToSession(session, { type: "player_disconnected", player: info.player });
+
+        // Pre-match disconnect: the game hasn't started yet, so no SKY has been
+        // debited. Give the disconnected player 10s to reconnect before destroying
+        // the session. No forfeit settlement — just clean up.
+        const runner = sessionRunners.get(info.sessionId);
+        if (runner && !runner.isGameStarted) {
+          console.log(`[ws] ⏳ Pre-match disconnect for ${sessionId} — 10s reconnection window`);
+          startDisconnectTimer(session, () => {
+            console.log(`[ws] ⏰ Reconnection window expired for ${sessionId} — destroying session`);
+            sendToSession(session, { type: "session_closed" });
+            stopSession(sessionId);
+          }, 10_000);
+        }
+
         resetIdleTimer(session);
       } else {
         // No connections left — cleanup entirely

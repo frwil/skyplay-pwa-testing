@@ -167,6 +167,10 @@ export class GameRunner extends EventEmitter {
   private prevHealthP2 = -1;
   /** KO detected this round (prevents double-counting). Reset on new round. */
   private healthKoDetected = false;
+  /** Draw detected this round (TIME OVER, no KO). Reset on new round. */
+  private roundDrawDetected = false;
+  /** Previous timer value for SFA2 draw detection (>0→0 = TIME OVER). */
+  private prevMemTimerForDraw = -1;
   /** Frames to suppress KO re-detection after a KO (prevents double-fire). */
   private healthKoCooldown = 0;
   /** Each player was ever ≥50% health during this round (proves they were in combat). Reset on new round. */
@@ -260,6 +264,8 @@ export class GameRunner extends EventEmitter {
   private runnerId: number;
   /** Set to true after auto-start/continue completes — suppress KO detection during demo mode. */
   private gameStarted = false;
+  /** Public read-only access for ws-handler (disconnect forfeit gating). */
+  get isGameStarted(): boolean { return this.gameStarted; }
   /** Emit matchStarted only once — when timer peaks at 99 then decrements. */
   private matchStartedEmitted = false;
   /** Peak timer value seen in this match (for detecting the 99→decrement transition). */
@@ -284,14 +290,19 @@ export class GameRunner extends EventEmitter {
   private paused = false;
   /** Build character info for event payloads using the locked team (frozen at char select). */
   private charInfo() {
-    const charMap = this.healthMemMap?.maxHealth === 0x60 ? SFA2_CHARACTERS : KOF98_CHARACTERS;
+    const isSfa2 = this.healthMemMap?.maxHealth === 0x60;
+    const charMap = isSfa2 ? SFA2_CHARACTERS : KOF98_CHARACTERS;
     const p1Name = charMap[this.memP1Char] || "?";
     const p2Name = charMap[this.memP2Char] || "?";
     // Prefer the locked team; fall back to current raw slots if we never captured char select.
     const p1Src = this.p1LockedTeam ?? this.p1TeamSlots;
     const p2Src = this.p2LockedTeam ?? this.p2TeamSlots;
-    const p1Team = p1Src.filter(c => c >= 0 && c <= 0x25).map(c => charMap[c] || "?");
-    const p2Team = p2Src.filter(c => c >= 0 && c <= 0x25).map(c => charMap[c] || "?");
+    let p1Team = p1Src.filter(c => c >= 0 && c <= 0x25).map(c => charMap[c] || "?");
+    let p2Team = p2Src.filter(c => c >= 0 && c <= 0x25).map(c => charMap[c] || "?");
+    // SFA2 (1v1, no team slots): use the current character as a singleton team so the
+    // client-side inCombat gate (p1Team.length > 0) passes and the wager charge fires.
+    if (isSfa2 && p1Team.length === 0 && p1Name !== "?") p1Team = [p1Name];
+    if (isSfa2 && p2Team.length === 0 && p2Name !== "?") p2Team = [p2Name];
     return { p1Char: p1Name, p2Char: p2Name, p1Team, p2Team };
   }
   /**
@@ -1385,14 +1396,66 @@ export class GameRunner extends EventEmitter {
       this.emit("roundResult", { loser: 1, winner: 2, p1Losses: p1, p2Losses: p2, koType: "normal", ...this.charInfo() });
     }
 
-    // ── Match end detection ────────────────────────────────────────
-    if (!this.matchEnded && (p1 >= 2 || p2 >= 2)) {
+    // ── Match end detection (same rules as health-KO path) ──────────
+    this.checkSfa2MatchEnd();
+  }
+
+  /**
+   * SFA2 match-end rules (health-KO path). Called after every round result (KO or draw).
+   *
+   * SFA2 is best-of-3 capped at 4 rounds:
+   *  - First to 2 wins → winner
+   *  - After round 2, both at 0 losses (double draw) → both lose, platform keeps pot
+   *  - After round 4, tied → both lose, platform keeps pot
+   */
+  private checkSfa2MatchEnd(): void {
+    if (this.matchEnded) return;
+    const p1 = this.p1Losses;
+    const p2 = this.p2Losses;
+    const rn = this.roundNumber;
+
+    // First to 2 wins (normal victory)
+    if (p1 >= 2 || p2 >= 2) {
       this.matchEnded = true;
-      const winner = p1 >= 2 ? 1 : 2;
-      const loser = winner === 1 ? 2 : 1;
-      const totalRounds = p1 + p2;
-      console.log(`[game-runner] ${this.readerTag} 🏆 MATCH #${this.matchNumber} OVER (SFA2 counters)! Winner: P${winner} P1=${p1} P2=${p2} rounds=${totalRounds}`);
-      this.emit("matchEnd", { winner, loser, p1Losses: p1, p2Losses: p2, matchNumber: this.matchNumber, totalRounds, perfectKos: this.matchPerfectKos.length, perfectKoDetails: this.matchPerfectKos, ...this.charInfo(), ...this.matchMeta() });
+      this.matchNumber++;
+      const mWinner = p2 >= 2 ? 1 : 2;
+      const mLoser = mWinner === 1 ? 2 : 1;
+      const perfectKos = this.matchPerfectKos.length;
+      console.log(`[game-runner] ${this.readerTag} 🧠 MATCH #${this.matchNumber} OVER (health-KO)! Winner: P${mWinner} P1=${p1} P2=${p2} rounds=${rn} perfectKOs=${perfectKos}`);
+      this.emit("matchEnd", { winner: mWinner, loser: mLoser, p1Losses: p1, p2Losses: p2, matchNumber: this.matchNumber, totalRounds: rn, perfectKos, perfectKoDetails: this.matchPerfectKos, ...this.charInfo(), ...this.matchMeta() });
+      return;
+    }
+
+    // Double draw: after 2 rounds, both at 0 losses → both forfeit
+    if (rn >= 2 && p1 === 0 && p2 === 0) {
+      this.matchEnded = true;
+      this.matchNumber++;
+      const perfectKos = this.matchPerfectKos.length;
+      console.log(`[game-runner] ${this.readerTag} 🧠 MATCH #${this.matchNumber} DOUBLE DRAW (both forfeit)! P1=${p1} P2=${p2} rounds=${rn}`);
+      this.emit("matchEnd", { winner: 0, loser: 0, p1Losses: p1, p2Losses: p2, matchNumber: this.matchNumber, totalRounds: rn, perfectKos, perfectKoDetails: this.matchPerfectKos, ...this.charInfo(), ...this.matchMeta() });
+      return;
+    }
+
+    // Tied after 4 rounds → both lose, platform keeps pot
+    if (rn >= 4 && p1 === p2) {
+      this.matchEnded = true;
+      this.matchNumber++;
+      const perfectKos = this.matchPerfectKos.length;
+      console.log(`[game-runner] ${this.readerTag} 🧠 MATCH #${this.matchNumber} TIED AFTER 4 (both forfeit)! P1=${p1} P2=${p2} rounds=${rn}`);
+      this.emit("matchEnd", { winner: 0, loser: 0, p1Losses: p1, p2Losses: p2, matchNumber: this.matchNumber, totalRounds: rn, perfectKos, perfectKoDetails: this.matchPerfectKos, ...this.charInfo(), ...this.matchMeta() });
+      return;
+    }
+
+    // Someone leads after 4 but hasn't reached 2 wins (e.g. 1-0 after 4 draws).
+    // The leader wins.
+    if (rn >= 4) {
+      this.matchEnded = true;
+      this.matchNumber++;
+      const mWinner = p1 > p2 ? 1 : 2;
+      const mLoser = mWinner === 1 ? 2 : 1;
+      const perfectKos = this.matchPerfectKos.length;
+      console.log(`[game-runner] ${this.readerTag} 🧠 MATCH #${this.matchNumber} OVER after 4 rounds (lead). Winner: P${mWinner} P1=${p1} P2=${p2} rounds=${rn} perfectKOs=${perfectKos}`);
+      this.emit("matchEnd", { winner: mWinner, loser: mLoser, p1Losses: p1, p2Losses: p2, matchNumber: this.matchNumber, totalRounds: rn, perfectKos, perfectKoDetails: this.matchPerfectKos, ...this.charInfo(), ...this.matchMeta() });
     }
   }
 
@@ -1419,10 +1482,34 @@ export class GameRunner extends EventEmitter {
       return;
     }
 
-    // ── Basic health-based KO fallback (SFA2) ──────────────────────
-    // When round counters are unavailable, detect KOs from health RAM values.
-    // Logic: health=0% + was ever ≥50% this round + opponent alive (>0%) = KO.
+    // ── Basic health-based round detection (SFA2 fallback) ──────────
+    // When round counters are unavailable, detect KOs and TIME-OVER draws
+    // from health + timer RAM values.
     if (this.matchEnded || this.memHealthP1 < 0 || this.memHealthP2 < 0) return;
+
+    const isRoundActive = !this.healthKoDetected && !this.roundDrawDetected;
+
+    // ── Timer tracking for TIME OVER (SFA2 draw detection) ───────
+    // Detect timer >0 → 0 transition. Between rounds the timer resets
+    // directly to 99 (never passes through 0), so this only fires on a
+    // real TIME OVER.
+    if (isRoundActive && this.prevMemTimerForDraw > 0 && this.memTimer <= 0 &&
+        (this.roundP1WasHealthy || this.roundP2WasHealthy)) {
+      // TIME OVER — no KO happened, round ends in a draw.
+      // No one gets a loss; only the round counter advances.
+      this.roundDrawDetected = true;
+      this.roundNumber++;
+      console.log(`[game-runner] ${this.readerTag} ⏰ TIME OVER draw! Round ${this.roundNumber}. Losses: P1=${this.p1Losses} P2=${this.p2Losses}`);
+      this.emit("roundResult", {
+        loser: 0, winner: 0,
+        p1Losses: this.p1Losses, p2Losses: this.p2Losses,
+        koType: "draw",
+        ...this.charInfo(),
+      });
+      this.checkSfa2MatchEnd();
+    }
+    if (this.memTimer >= 0) this.prevMemTimerForDraw = this.memTimer;
+
     if (this.healthKoCooldown > 0) { this.healthKoCooldown--; return; }
 
     const KO_THRESHOLD = 0; // health must hit exactly 0% for a KO
@@ -1431,6 +1518,13 @@ export class GameRunner extends EventEmitter {
     // We track whether each player was ever ≥50% during the round (proves they
     // were in active combat). The winner must be alive (>0%).
     if (!this.healthKoDetected) {
+      // Bootstrap first-round healthy state: both at ≥90% + timer ≥95 = round-start.
+      // Without this, a KO faster than the 250ms poll interval (100%→0% unseen)
+      // would never trip the "was ever ≥50%" check below and the KO is missed.
+      if (this.memHealthP1 >= 90 && this.memHealthP2 >= 90 && this.memTimer >= 95) {
+        this.roundP1WasHealthy = true;
+        this.roundP2WasHealthy = true;
+      }
       // Track "was ever healthy" — must be set before we evaluate KO
       if (this.memHealthP1 >= 50) this.roundP1WasHealthy = true;
       if (this.memHealthP2 >= 50) this.roundP2WasHealthy = true;
@@ -1462,26 +1556,20 @@ export class GameRunner extends EventEmitter {
           ...this.charInfo(),
         });
 
-        // Match end: first to 2 wins (SFA2 best-of-3)
-        if (!this.matchEnded && (this.p1Losses >= 2 || this.p2Losses >= 2)) {
-          this.matchEnded = true;
-          this.matchNumber++;
-          const mWinner = this.p2Losses >= 2 ? 1 : 2; // P2 lost 2+ → P1 wins
-          const mLoser = mWinner === 1 ? 2 : 1;
-          const totalRounds = this.roundNumber;
-          const perfectKos = this.matchPerfectKos.length;
-          console.log(`[game-runner] ${this.readerTag} 🧠 MATCH #${this.matchNumber} OVER (health-KO)! Winner: P${mWinner} P1=${this.p1Losses} P2=${this.p2Losses} rounds=${totalRounds} perfectKOs=${perfectKos}`);
-          this.emit("matchEnd", { winner: mWinner, loser: mLoser, p1Losses: this.p1Losses, p2Losses: this.p2Losses, matchNumber: this.matchNumber, totalRounds, perfectKos, perfectKoDetails: this.matchPerfectKos, ...this.charInfo(), ...this.matchMeta() });
-        }
+        this.checkSfa2MatchEnd();
       }
     }
 
-    // New round: both players back to full health → re-arm KO detection
-    if (this.healthKoDetected &&
+    // New round: both players back to full health → re-arm KO + draw detection.
+    // Set healthy flags to TRUE (not false) — at round start both players are at
+    // ≥80%. This is critical: a KO can happen so fast (<250ms between polls) that
+    // health goes 100%→0% without the poll ever seeing ≥50% mid-combat.
+    if ((this.healthKoDetected || this.roundDrawDetected) &&
         this.memHealthP1 >= 80 && this.memHealthP2 >= 80) {
       this.healthKoDetected = false;
-      this.roundP1WasHealthy = false;
-      this.roundP2WasHealthy = false;
+      this.roundDrawDetected = false;
+      this.roundP1WasHealthy = true;
+      this.roundP2WasHealthy = true;
       this.roundP1MinHealth = 100;
       this.roundP2MinHealth = 100;
       console.log(`[game-runner] ${this.readerTag} 🧠 Health-KO re-armed for next round. P1=${this.memHealthP1}% P2=${this.memHealthP2}%`);
@@ -2188,8 +2276,10 @@ export class GameRunner extends EventEmitter {
     this.lcPrevTimer16 = -1;
     this.healthKoDetected = false;
     this.healthKoCooldown = 0;
-    this.roundP1WasHealthy = false;
-    this.roundP2WasHealthy = false;
+    this.roundDrawDetected = false;
+    this.prevMemTimerForDraw = -1;
+    this.roundP1WasHealthy = true;
+    this.roundP2WasHealthy = true;
     this.prevHealthP1 = -1;
     this.prevHealthP2 = -1;
     // RAM loss-counter tracking: force a fresh re-baseline. The counters zero out at the next

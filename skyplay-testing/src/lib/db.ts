@@ -4,26 +4,86 @@ import { COUNTRY_CODES } from "@/lib/countries";
 import { generateIdenticon, pickFromSeed } from "@/lib/avatar";
 
 let db: Client | null = null;
+let syncInterval: ReturnType<typeof setInterval> | null = null;
+let _isLocalFirst = false;
 
 function getClient(): Client {
   if (!db) {
-    const url = process.env.TURSO_DATABASE_URL;
+    const remoteUrl = process.env.TURSO_DATABASE_URL;
     const authToken = process.env.TURSO_AUTH_TOKEN;
-    if (!url || !authToken) {
-      throw new Error(
-        "TURSO_DATABASE_URL and TURSO_AUTH_TOKEN environment variables are required. " +
-        "Copy .env.example to .env.local and set your Turso credentials."
-      );
+
+    // ── Offline-first ──
+    // When USE_LOCAL_DB=true: reads/writes go to a local SQLite file.
+    // The file is a plain SQLite database — no network dependency at all.
+    // A background heartbeat pushes local changes to Turso and pulls remote
+    // changes when internet is available.
+    _isLocalFirst = process.env.USE_LOCAL_DB === "true";
+
+    if (_isLocalFirst) {
+      const localPath = process.env.LOCAL_DB_PATH || "file:./skyplay-local.db";
+      console.log(`[db] 🏠 Offline-first: ${localPath}`);
+      if (remoteUrl && authToken) {
+        console.log(`[db] 🔄 Sync target: ${remoteUrl} (when online)`);
+      }
+      db = createClient({ url: localPath });
+      startSyncHeartbeat();
+    } else if (remoteUrl && authToken) {
+      // ── Cloud-only (direct Turso, current default) ──
+      db = createClient({ url: remoteUrl, authToken });
+    } else {
+      // Last-resort fallback: pure local
+      console.warn("[db] ⚠️  No DB config found — using local SQLite fallback");
+      db = createClient({ url: "file:./skyplay-local.db" });
     }
-    db = createClient({ url, authToken });
   }
   return db;
+}
+
+/** Background sync heartbeat: attempts sync every 60s. Fails silently when offline. */
+function startSyncHeartbeat(): void {
+  if (syncInterval) return;
+  const SYNC_INTERVAL_MS = 60_000;
+  syncInterval = setInterval(() => {
+    void syncDatabase().catch(() => { /* offline — retry next tick */ });
+  }, SYNC_INTERVAL_MS);
+  // Allow the Node.js process to exit even if this interval is still running
+  syncInterval.unref?.();
 }
 
 export async function getDb(): Promise<Client> {
   const client = getClient();
   await ensureDb();
   return client;
+}
+
+/**
+ * Sync the local SQLite database with the remote Turso database.
+ * Creates a temporary connection to Turso, verifies reachability, and reports status.
+ *
+ * TODO: full bidirectional sync (INSERT OR REPLACE local↔remote per table).
+ * For now this is a connectivity probe + foundation for the real sync.
+ *
+ * Returns true if Turso was reachable, false otherwise.
+ */
+export async function syncDatabase(): Promise<boolean> {
+  const remoteUrl = process.env.TURSO_DATABASE_URL;
+  const authToken = process.env.TURSO_AUTH_TOKEN;
+  if (!_isLocalFirst || !remoteUrl || !authToken) return false;
+
+  try {
+    // Probe Turso with a lightweight query
+    const remote = createClient({ url: remoteUrl, authToken });
+    const rs = await remote.execute("SELECT 1");
+    const reachable = rs.rows.length > 0;
+    if (reachable) {
+      console.log("[db] ✅ Turso reachable — sync ready");
+    }
+    remote.close();
+    return reachable;
+  } catch (err) {
+    console.warn("[db] ⚠️  Turso unreachable (offline):", (err as Error).message);
+    return false;
+  }
 }
 
 async function initializeSchema(): Promise<void> {
@@ -401,6 +461,7 @@ async function initializeSchema(): Promise<void> {
   `);
   // Idempotent ALTER TABLE for columns that may be missing on older DB instances
   try { await getClient().execute("ALTER TABLE duel_games ADD COLUMN entry_fee INTEGER NOT NULL DEFAULT 1000"); } catch {}
+  try { await getClient().execute("ALTER TABLE duel_games ADD COLUMN winner_share REAL NOT NULL DEFAULT 0.75"); } catch {}
   try { await getClient().execute("ALTER TABLE duel_games ADD COLUMN ram_config TEXT DEFAULT NULL"); } catch {}
   try { await getClient().execute("ALTER TABLE duel_games ADD COLUMN category TEXT DEFAULT 'fighting'"); } catch {}
   try { await getClient().execute("ALTER TABLE duel_games ADD COLUMN cover_image TEXT DEFAULT NULL"); } catch {}
@@ -444,6 +505,7 @@ async function initializeSchema(): Promise<void> {
     )
   `);
   try { await getClient().execute("ALTER TABLE duel_game_modes ADD COLUMN rules TEXT DEFAULT NULL"); } catch { /* column already exists */ }
+  try { await getClient().execute("ALTER TABLE duel_game_modes ADD COLUMN winner_share REAL DEFAULT NULL"); } catch { /* column already exists */ }
 
   // Seed default duel games (idempotent — INSERT OR IGNORE)
   // category: fighting, versus, puzzle, sports, etc.

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getAuthFromRequest } from "@/lib/auth";
 import { getDb } from "@/lib/db";
-import { chargeEntryFees, InsufficientFunds, DEFAULT_ENTRY_FEE, type PlayerBalance } from "@/lib/duel/wallet";
+import { chargeEntryFees, InsufficientFunds, DEFAULT_ENTRY_FEE, DEFAULT_WINNER_SHARE, type PlayerBalance } from "@/lib/duel/wallet";
 
 async function getUserId(req: NextRequest, body?: Record<string, unknown>): Promise<{ userId: number } | null> {
   const auth = await getAuthFromRequest(req);
@@ -55,8 +55,9 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Non participant à ce duel" }, { status: 403 });
     }
 
-    // Look up game-specific entry fee from the challenge → game or mode
+    // Look up game-specific entry fee + winner share from the challenge → mode → game fallback
     let wagerEntryFee = DEFAULT_ENTRY_FEE;
+    let wagerWinnerShare = DEFAULT_WINNER_SHARE;
     let wagerSystem = "neogeo";
     let wagerRom = "kof98.zip";
     let wagerMatchCount = 1;
@@ -69,11 +70,27 @@ export async function POST(req: NextRequest) {
         wagerMatchCount = (chalRs.rows[0].match_count as number) ?? 1;
         const modeId = chalRs.rows[0].mode_id as string | null;
         if (modeId) {
-          const modeRs = await db.execute({ sql: "SELECT entry_fee FROM duel_game_modes WHERE id = ? LIMIT 1", args: [modeId] });
-          if (modeRs.rows.length > 0) wagerEntryFee = Number(modeRs.rows[0].entry_fee ?? DEFAULT_ENTRY_FEE);
+          const modeRs = await db.execute({ sql: "SELECT entry_fee, winner_share FROM duel_game_modes WHERE id = ? LIMIT 1", args: [modeId] });
+          if (modeRs.rows.length > 0) {
+            wagerEntryFee = Number(modeRs.rows[0].entry_fee ?? DEFAULT_ENTRY_FEE);
+            // Mode-level override takes priority if explicitly set (non-null)
+            const modeWs = modeRs.rows[0].winner_share;
+            if (modeWs != null) {
+              wagerWinnerShare = Number(modeWs);
+            } else {
+              // No mode-level override → fall back to game-level
+              const gameRs = await db.execute({ sql: "SELECT winner_share FROM duel_games WHERE system = ? AND rom = ? LIMIT 1", args: [wagerSystem, wagerRom] });
+              if (gameRs.rows.length > 0 && gameRs.rows[0].winner_share != null) {
+                wagerWinnerShare = Number(gameRs.rows[0].winner_share);
+              }
+            }
+          }
         } else {
-          const feeRs = await db.execute({ sql: "SELECT entry_fee FROM duel_games WHERE system = ? AND rom = ? LIMIT 1", args: [wagerSystem, wagerRom] });
-          if (feeRs.rows.length > 0) wagerEntryFee = Number(feeRs.rows[0].entry_fee ?? DEFAULT_ENTRY_FEE);
+          const gameRs = await db.execute({ sql: "SELECT entry_fee, winner_share FROM duel_games WHERE system = ? AND rom = ? LIMIT 1", args: [wagerSystem, wagerRom] });
+          if (gameRs.rows.length > 0) {
+            wagerEntryFee = Number(gameRs.rows[0].entry_fee ?? DEFAULT_ENTRY_FEE);
+            wagerWinnerShare = gameRs.rows[0].winner_share != null ? Number(gameRs.rows[0].winner_share) : DEFAULT_WINNER_SHARE;
+          }
         }
       }
     } catch { /* fall back to default */ }
@@ -91,6 +108,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({
         success: true,
         pot: result.pot,
+        winnerShare: wagerWinnerShare,
         balances: serializeBalances(result.balances),
       });
     } catch (e) {

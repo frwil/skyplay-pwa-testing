@@ -712,6 +712,7 @@ export class CloudAdapter implements EmulatorAdapter {
               p1PlayMode: meData.p1PlayMode, p2PlayMode: meData.p2PlayMode,
               p1CharWins: meData.p1CharWins, p2CharWins: meData.p2CharWins,
               p1CharName: meData.p1CharName, p2CharName: meData.p2CharName,
+              perfectKoDetails: meData.perfectKoDetails,
             },
           );
           break;
@@ -1099,6 +1100,7 @@ export interface CloudCallbacks {
       p1PlayMode?: "Auto" | "Manual"; p2PlayMode?: "Auto" | "Manual";
       p1CharWins?: Record<number, number>; p2CharWins?: Record<number, number>;
       p1CharName?: string; p2CharName?: string;
+      perfectKoDetails?: { round: number; player: number }[];
     },
   ) => void;
   /** Called when the opponent requests a rematch. */

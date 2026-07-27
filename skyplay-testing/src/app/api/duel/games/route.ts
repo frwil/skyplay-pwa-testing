@@ -21,6 +21,7 @@ export interface DuelGameMode {
   label: string;
   matchCount: number;
   entryFee: number;
+  winnerShare: number | null;
   rules: Record<string, DuelGameModeRules> | null;
 }
 
@@ -31,6 +32,7 @@ export interface DuelGameEntry {
   rom: string;
   mode: string;
   entryFee: number;
+  winnerShare: number | null;
   ramConfig: Record<string, unknown> | null;
   enabled: boolean;
   controls: DuelGameControl[];
@@ -55,7 +57,7 @@ export async function GET() {
     const db = await getDb();
 
     const gamesRs = await db.execute(
-      "SELECT id, label, system, rom, mode, entry_fee, ram_config, enabled, category, cover_image, description FROM duel_games WHERE enabled = 1 ORDER BY id"
+      "SELECT id, label, system, rom, mode, entry_fee, winner_share, ram_config, enabled, category, cover_image, description FROM duel_games WHERE enabled = 1 ORDER BY id"
     );
 
     const games: DuelGameEntry[] = [];
@@ -106,7 +108,7 @@ export async function GET() {
 
       // ── Fetch modes for this game ──
       const modesRs = await db.execute({
-        sql: "SELECT id, mode_key, label, match_count, entry_fee, rules FROM duel_game_modes WHERE game_id = ? AND enabled = 1 ORDER BY match_count",
+        sql: "SELECT id, mode_key, label, match_count, entry_fee, winner_share, rules FROM duel_game_modes WHERE game_id = ? AND enabled = 1 ORDER BY match_count",
         args: [gameId],
       });
       const modes: DuelGameMode[] = modesRs.rows.map((m) => {
@@ -118,6 +120,7 @@ export async function GET() {
           label: m.label as string,
           matchCount: m.match_count as number,
           entryFee: m.entry_fee as number,
+          winnerShare: m.winner_share != null ? Number(m.winner_share) : null,
           rules,
         };
       });
@@ -129,6 +132,7 @@ export async function GET() {
         rom: row.rom as string,
         mode: row.mode as string,
         entryFee: row.entry_fee as number,
+        winnerShare: row.winner_share != null ? Number(row.winner_share) : null,
         ramConfig,
         enabled: (row.enabled as number) === 1,
         controls,

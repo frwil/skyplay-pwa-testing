@@ -573,6 +573,8 @@ export interface Dictionary {
     abandonTitle: string;
     abandonWin: string;
     abandonDesc: string;
+    waitingTitle: string;
+    waitingDesc: string;
     // Live RTMP broadcast (Plan A, MVP paste key)
     streamTitle: string;
     streamHint: string;

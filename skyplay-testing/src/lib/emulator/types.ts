@@ -204,6 +204,8 @@ export interface DuelMatchResult {
   matchNumber?: number;
   totalRounds?: number;
   perfectKos?: number;
+  /** Per-round perfect KO detail: which player scored a perfect in which round. */
+  perfectKoDetails?: { round: number; player: number }[];
   /** Team rosters as character IDs (0x00-0x25), slot order — for end-match stats. */
   p1TeamIds?: number[];
   p2TeamIds?: number[];

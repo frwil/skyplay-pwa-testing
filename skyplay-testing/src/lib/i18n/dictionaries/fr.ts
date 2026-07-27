@@ -651,6 +651,8 @@ const fr: Dictionary = {
     abandonTitle: "Adversaire absent",
     abandonWin: "Victoire par forfait",
     abandonDesc: "Ton adversaire a quitté le match. Tu remportes le duel.",
+    waitingTitle: "Adversaire déconnecté",
+    waitingDesc: "En attente de reconnexion… Aucun SKY n'a été débité.",
     streamTitle: "Diffuser en direct (RTMP)",
     streamHint: "Colle l'URL d'ingestion RTMP (clé de flux incluse), ex. rtmp://a.rtmp.youtube.com/live2/TA-CLE. Applique avant de lancer le duel.",
     streamPlaceholder: "rtmp://…/live/clé",

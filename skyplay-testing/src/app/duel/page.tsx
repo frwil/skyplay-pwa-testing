@@ -395,6 +395,7 @@ export default function DuelPage() {
   // When the opponent leaves mid-match the server emits player_disconnected (emu.opponentAbandoned);
   // we declare a forfeit win, freeze behind a blocking overlay for 10s, then return to the Cage.
   const [abandonWin, setAbandonWin] = useState(false);
+  const [preMatchAbandon, setPreMatchAbandon] = useState(false);
   const [abandonCountdown, setAbandonCountdown] = useState(10);
   const abandonFiredRef = useRef(false);
 
@@ -540,7 +541,7 @@ export default function DuelPage() {
   // revengePhase !== "stats".
   useEffect(() => {
     if (revengePhase !== "stats") return;
-    if (countdown <= 0) { handleExit(); return; }
+    if (countdown <= 0) { return; /* disabled auto-exit — wait for manual "New Duel" */ }
     const t = setTimeout(() => setCountdown((c) => c - 1), 1000);
     return () => clearTimeout(t);
   }, [revengePhase, countdown]);
@@ -748,30 +749,38 @@ export default function DuelPage() {
     };
   }, [gameActive, revengePhase, enterFullscreen, exitFullscreen]);
 
-  // ── Opponent abandon → automatic forfeit win (client-side, no Docker rebuild) ──
+  // ── Opponent abandon → forfeit win (post-match) or waiting overlay (pre-match) ──
   // emu.opponentAbandoned holds the leaver's side (server-sent, can't be forged). Only treat it
-  // as a forfeit when a match is genuinely live and not already ending — rematch/teardown churn
-  // also fires disconnects. Fire once per session (abandonFiredRef).
+  // as a forfeit when the game actually started (SKY was debited). Pre-match disconnect just
+  // shows a waiting overlay — the server will destroy the session after 10s if no reconnection.
   useEffect(() => {
     if (emu.opponentAbandoned == null) return;
     const session = lobby.duelSession;
     if (
       !session ||
       !gameActive ||
-      revengePhase ||               // match already resolved (stats / rematch negotiation)
-      emu.duelSessionClosed ||      // server already tore the session down
+      revengePhase ||
+      emu.duelSessionClosed ||
       abandonFiredRef.current ||
       !currentUserId
     ) {
       return;
     }
     abandonFiredRef.current = true;
+
+    // Pre-match disconnect: no SKY debited yet. Show a waiting overlay and let the server's
+    // 10s reconnection timer handle cleanup. If the opponent reconnects, player_joined clears
+    // opponentAbandoned and the overlay disappears.
+    if (!emu.matchState?.gameStarted) {
+      setPreMatchAbandon(true);
+      setAbandonCountdown(10);
+      return;
+    }
+
+    // Post-match disconnect: forfeit win. Settle the escrow (75% payout to the remaining player).
     setAbandonWin(true);
     setAbandonCountdown(10);
 
-    // Declare the forfeit win: winner = me, loser = the opponent who left. Only my client remains,
-    // so this single POST settles the escrow (75% payout to me) — idempotent per session. Use the
-    // CURRENT adapter session id (a rematch opens a fresh chamber keyed by its new session id).
     const settleSessionId = emu.sessionId || session.sessionId;
     const winnerId = currentUserId;
     const loserId = session.player1Id === currentUserId ? session.player2Id : session.player1Id;
@@ -797,13 +806,21 @@ export default function DuelPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [emu.opponentAbandoned, gameActive, revengePhase, emu.duelSessionClosed, currentUserId]);
 
+  // Clear pre-match abandon + abandonFiredRef when opponent reconnects
+  useEffect(() => {
+    if (emu.opponentAbandoned == null) {
+      setPreMatchAbandon(false);
+      abandonFiredRef.current = false;
+    }
+  }, [emu.opponentAbandoned]);
+
   // Abandon countdown → freeze behind the blocking overlay for 10s then auto-return to the Cage.
   useEffect(() => {
-    if (!abandonWin) return;
+    if (!abandonWin && !preMatchAbandon) return;
     if (abandonCountdown <= 0) { handleExit(); return; }
     const t = setTimeout(() => setAbandonCountdown((c) => c - 1), 1000);
     return () => clearTimeout(t);
-  }, [abandonWin, abandonCountdown]);
+  }, [abandonWin, preMatchAbandon, abandonCountdown]);
 
   const [copied, setCopied] = useState(false);
   const handleCopyCode = useCallback(async () => {
@@ -999,6 +1016,7 @@ export default function DuelPage() {
 
       {/* ── Opponent-abandon forfeit overlay (blocking freeze, 10s → Cage) ── */}
       {abandonWin && <DuelAbandonOverlay countdown={abandonCountdown} onExit={handleExit} />}
+      {preMatchAbandon && <DuelAbandonOverlay countdown={abandonCountdown} onExit={handleExit} waiting />}
 
       <section className="relative z-10 max-w-5xl mx-auto px-4 py-8 pb-20">
         {/* Title */}

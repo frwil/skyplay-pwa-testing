@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb, ensureUser } from "@/lib/db";
 import { getAuthFromRequest } from "@/lib/auth";
-import { payoutWinner, type PlayerBalance } from "@/lib/duel/wallet";
+import { payoutWinner, DEFAULT_WINNER_SHARE, type PlayerBalance } from "@/lib/duel/wallet";
 
 /** Serialize balances for JSON: Infinity (admin) → null, flagged by `unlimited`. */
 function serializeBalances(balances: Record<number, PlayerBalance>) {
@@ -64,13 +64,34 @@ export async function POST(req: NextRequest) {
       await ensureUser(user.userId, user.username);
     }
 
-    // Get system/rom from the challenge
+    // Get system/rom/mode_id from the challenge
     const chRs = await db.execute({
-      sql: "SELECT system, rom FROM duel_challenges WHERE id = ?",
+      sql: "SELECT system, rom, mode_id FROM duel_challenges WHERE id = ?",
       args: [challengeId],
     });
     const system = (chRs.rows[0]?.system as string) || "neogeo";
     const rom = (chRs.rows[0]?.rom as string) || "kof98.zip";
+    const modeId = chRs.rows[0]?.mode_id as string | null;
+
+    // Resolve winner_share: mode override → game default → hardcoded fallback
+    let winnerShare = DEFAULT_WINNER_SHARE;
+    let modeProvidedShare = false;
+    try {
+      if (modeId) {
+        const modeRs = await db.execute({ sql: "SELECT winner_share FROM duel_game_modes WHERE id = ? LIMIT 1", args: [modeId] });
+        if (modeRs.rows.length > 0 && modeRs.rows[0].winner_share != null) {
+          winnerShare = Number(modeRs.rows[0].winner_share);
+          modeProvidedShare = true;
+        }
+      }
+      // If mode didn't provide an explicit value, fall back to game-level
+      if (!modeProvidedShare) {
+        const gameRs = await db.execute({ sql: "SELECT winner_share FROM duel_games WHERE system = ? AND rom = ? LIMIT 1", args: [system, rom] });
+        if (gameRs.rows.length > 0 && gameRs.rows[0].winner_share != null) {
+          winnerShare = Number(gameRs.rows[0].winner_share);
+        }
+      }
+    } catch { /* use default */ }
 
     // Increment match_number for multi-match tracking (idempotent — increments on every result POST)
     await db.execute({
@@ -97,7 +118,7 @@ export async function POST(req: NextRequest) {
     // whole pot. Idempotent per session (the chamber is deleted on the first settlement).
     let settlement: Awaited<ReturnType<typeof payoutWinner>> | null = null;
     if (sessionId) {
-      settlement = await payoutWinner({ challengeId, sessionId, winnerId, loserId });
+      settlement = await payoutWinner({ challengeId, sessionId, winnerId, loserId, winnerShare });
     }
 
     // Mark challenge as completed only when the session is explicitly stopped

@@ -37,6 +37,8 @@ export interface Session {
   clientReadyTimer: ReturnType<typeof setTimeout> | null;
   /** Whether player input is locked (during auto-start sequence). */
   inputLocked: boolean;
+  /** Timer handle for pre-match disconnect grace period (10s). */
+  disconnectTimer: ReturnType<typeof setTimeout> | null;
 }
 
 const sessions = new Map<string, Session>();
@@ -66,10 +68,26 @@ export function createSession(
     p2ClientReady: false,
     clientReadyTimer: null,
     inputLocked: false,
+    disconnectTimer: null,
   };
   sessions.set(id, session);
   console.log(`[session] Created session ${id} (${system} / ${rom}), total: ${sessions.size}`);
   return session;
+}
+
+export function clearDisconnectTimer(session: Session): void {
+  if (session.disconnectTimer) {
+    clearTimeout(session.disconnectTimer);
+    session.disconnectTimer = null;
+  }
+}
+
+export function startDisconnectTimer(session: Session, callback: () => void, ms = 10_000): void {
+  clearDisconnectTimer(session);
+  session.disconnectTimer = setTimeout(() => {
+    session.disconnectTimer = null;
+    callback();
+  }, ms);
 }
 
 export function addConnection(
@@ -106,6 +124,8 @@ export function addConnection(
   session.connections.push({ ws, player, joinedAt: Date.now() });
   wsToPlayer.set(ws, { sessionId, player });
   resetIdleTimer(session);
+  // Cancel any pending disconnect timer — the player reconnected
+  clearDisconnectTimer(session);
   console.log(`[session] Added P${player} to ${sessionId}, connections: ${session.connections.length}`);
 }
 
@@ -157,6 +177,9 @@ export function removeSession(id: string): void {
   }
   if (session.clientReadyTimer) {
     clearTimeout(session.clientReadyTimer);
+  }
+  if (session.disconnectTimer) {
+    clearTimeout(session.disconnectTimer);
   }
   // Close all remaining connections
   for (const conn of session.connections) {

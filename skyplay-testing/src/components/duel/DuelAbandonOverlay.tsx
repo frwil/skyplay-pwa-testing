@@ -1,7 +1,7 @@
 "use client";
 
 import { useTranslation } from "@/lib/i18n/TranslationContext";
-import { Trophy, LogOut } from "lucide-react";
+import { Trophy, Clock, LogOut } from "lucide-react";
 
 /**
  * Blocking full-screen overlay shown to the remaining player when the opponent leaves a
@@ -13,9 +13,12 @@ import { Trophy, LogOut } from "lucide-react";
 export default function DuelAbandonOverlay({
   countdown,
   onExit,
+  waiting = false,
 }: {
   countdown: number;
   onExit: () => void;
+  /** True = pre-match disconnect (opponent may reconnect within 10s). False = post-match forfeit win. */
+  waiting?: boolean;
 }) {
   const { t } = useTranslation();
 
@@ -28,19 +31,25 @@ export default function DuelAbandonOverlay({
         className="w-full max-w-md rounded-3xl border p-8 flex flex-col items-center gap-4 text-center"
         style={{
           backgroundColor: "rgba(13,15,28,0.97)",
-          borderColor: "rgba(52,211,153,0.3)",
+          borderColor: waiting ? "rgba(251,191,36,0.3)" : "rgba(52,211,153,0.3)",
           boxShadow: "0 30px 80px rgba(0,0,0,0.6)",
         }}
       >
         <div
           className="flex h-14 w-14 items-center justify-center rounded-2xl"
-          style={{ backgroundColor: "rgba(52,211,153,0.15)" }}
+          style={{ backgroundColor: waiting ? "rgba(251,191,36,0.15)" : "rgba(52,211,153,0.15)" }}
         >
-          <Trophy size={28} style={{ color: "#34d399" }} />
+          {waiting ? (
+            <Clock size={28} style={{ color: "#fbbf24" }} />
+          ) : (
+            <Trophy size={28} style={{ color: "#34d399" }} />
+          )}
         </div>
-        <h2 className="text-xl font-bold text-white">{t.duel.abandonTitle}</h2>
-        <p className="text-base font-semibold" style={{ color: "#34d399" }}>
-          {t.duel.abandonWin}
+        <h2 className="text-xl font-bold text-white">
+          {waiting ? t.duel.waitingTitle : t.duel.abandonTitle}
+        </h2>
+        <p className="text-base font-semibold" style={{ color: waiting ? "#fbbf24" : "#34d399" }}>
+          {waiting ? t.duel.waitingDesc : t.duel.abandonWin}
         </p>
         <p className="text-sm text-white/60">{t.duel.abandonDesc}</p>
         <p className="text-xs text-white/40">{t.duel.redirectingIn(countdown)}</p>

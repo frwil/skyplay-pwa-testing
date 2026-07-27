@@ -18,7 +18,7 @@ import { getDb } from "@/lib/db";
  */
 
 export const DEFAULT_ENTRY_FEE = 1000;
-export const WINNER_SHARE = 0.75;
+export const DEFAULT_WINNER_SHARE = 0.75;
 
 /** Thrown by chargeEntryFees when a non-admin player lacks the entry fee. */
 export class InsufficientFunds extends Error {
@@ -216,8 +216,9 @@ export async function payoutWinner(opts: {
   sessionId: string;
   winnerId: number;
   loserId: number;
+  winnerShare?: number;
 }): Promise<PayoutResult> {
-  const { challengeId, sessionId, winnerId, loserId } = opts;
+  const { challengeId, sessionId, winnerId, loserId, winnerShare = DEFAULT_WINNER_SHARE } = opts;
   const db = await getDb();
 
   const room = await db.execute({
@@ -258,7 +259,7 @@ export async function payoutWinner(opts: {
   } else if (winnerAdmin) {
     reason = "admin_win"; // admin winner takes no credit; platform keeps the pot
   } else {
-    payout = Math.floor(pot * WINNER_SHARE);
+    payout = Math.floor(pot * winnerShare);
     reason = "commission";
   }
   const bankAmount = pot - payout;
@@ -469,7 +470,7 @@ export async function resolveDispute(
     if (winnerId !== p1 && winnerId !== p2) throw new Error("winnerId must be one of the participants");
     loserId = winnerId === p1 ? p2 : p1;
     const winnerAdmin = winnerId === p1 ? a1 : a2;
-    const award = winnerAdmin ? 0 : Math.floor(pot * WINNER_SHARE);
+    const award = winnerAdmin ? 0 : Math.floor(pot * DEFAULT_WINNER_SHARE);
     if (winnerId === p1) c1 = award; else c2 = award;
   } else if (action === "all_to_bank") {
     // Whole pot forfeited to the bank; players get nothing.

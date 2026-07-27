@@ -1,7 +1,8 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { DUEL_GAMES, type DuelGameDef } from "./games";
+/** Duel mode — determines HUD, stats collection, and winner detection. */
+export type DuelMode = "fighting" | "versus";
 
 interface DuelGameControl {
   player: number;
@@ -46,7 +47,7 @@ export interface ResolvedDuelGame {
   label: string;
   system: string;
   rom: string;
-  mode: DuelGameDef["mode"];
+  mode: DuelMode;
   entryFee: number;
   p1Controls: { label: string; keys: string }[];
   p2Controls: { label: string; keys: string }[];
@@ -68,7 +69,7 @@ function apiEntryToGame(entry: DuelGameEntry): ResolvedDuelGame {
     label: entry.label,
     system: entry.system,
     rom: entry.rom,
-    mode: entry.mode as DuelGameDef["mode"],
+    mode: entry.mode as DuelMode,
     entryFee: entry.entryFee,
     p1Controls,
     p2Controls,
@@ -79,34 +80,14 @@ function apiEntryToGame(entry: DuelGameEntry): ResolvedDuelGame {
   };
 }
 
-/** Fallback: use the static config from games.ts when the API is unreachable. */
-function fallbackGames(): ResolvedDuelGame[] {
-  return DUEL_GAMES.map((g) => ({
-    id: g.id,
-    label: g.label,
-    system: g.system,
-    rom: g.rom,
-    mode: g.mode,
-    entryFee: 1000,
-    p1Controls: g.p1Controls,
-    p2Controls: g.p2Controls,
-    category: g.category ?? null,
-    coverImage: g.coverImage ?? null,
-    description: g.description ?? null,
-    modes: [
-      { id: `${g.id}_standard`, modeKey: "standard", label: `${g.label} — Standard`, matchCount: 1, entryFee: 1000, rules: null },
-      { id: `${g.id}_xl`, modeKey: "xl", label: `${g.label} — XL`, matchCount: 3, entryFee: 2500, rules: null },
-      { id: `${g.id}_fighter`, modeKey: "fighter", label: `${g.label} — Fighter`, matchCount: 5, entryFee: 4000, rules: null },
-    ],
-  }));
-}
+/** Minimal empty fallback — games are fetched from the DB-backed API. */
 
 /**
- * Fetch enabled duel games from the API.
- * Falls back to the static DUEL_GAMES config if the API fails.
+ * Fetch enabled duel games from the DB-backed API.
+ * Starts empty — games populate when the API responds.
  */
 export function useDuelGames() {
-  const [games, setGames] = useState<ResolvedDuelGame[]>(fallbackGames);
+  const [games, setGames] = useState<ResolvedDuelGame[]>([]);
   const [loading, setLoading] = useState(true);
   const [entryFee, setEntryFee] = useState(1000);
 
@@ -124,7 +105,7 @@ export function useDuelGames() {
         }
       })
       .catch(() => {
-        // API down — keep fallback
+        // API unreachable — stay empty, will retry on next navigation
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
