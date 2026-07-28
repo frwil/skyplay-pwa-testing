@@ -59,6 +59,25 @@ export const enum NesButton {
   RIGHT  = 0x80,
 }
 
+// ─── Gift Notification Data ─────────────────────────────────────────
+/** Gift notification received from game-server (real-time overlay). */
+export interface GiftNotifyData {
+  gift: {
+    id: string;
+    name: string;
+    iconUrl: string;
+    animationUrl?: string;
+    category: string;
+  };
+  from: {
+    username: string;
+    avatar?: string;
+  };
+  quantity: number;
+  diamondAmount: number;
+  message?: string;
+}
+
 // ─── Emulator State (exposed by useEmulator hook) ──────────────────
 export interface EmulatorState {
   status: EmulatorStatus;
@@ -157,6 +176,8 @@ export interface EmulatorState {
   /** Character names selected by each player (from char_selected / match_end messages). */
   p1CharName: string | null;
   p2CharName: string | null;
+  /** Active gift notifications for the GiftOverlay (auto-removed after 5s). */
+  giftNotifications: GiftNotifyData[];
 }
 
 /** Live in-match state for the on-canvas HUD (cloud/neogeo/snes only). */

@@ -1,8 +1,8 @@
 # SKY PLAY — État d'avancement complet
 
-**Date** : 2026-07-27  
-**Branche** : `main` — offline-first SQLite, winner_share DB, nettoyage configs hardcodées  
-**Dernier commit** : `d929fb5` — offline-first local SQLite + winner_share DB-configurable + hardcoded config cleanup  
+**Date** : 2026-07-28  
+**Branche** : `main` — Sprint 3 Gift System terminé (GiftPanel, DonorRanking, API proxy, hostUserId)  
+**Dernier commit** : `8e0408f` — docs: update project status — offline-first, winner_share DB, hardcoded config cleanup  
 
 ---
 
@@ -259,7 +259,47 @@ Toute la détection visuelle/health-based KO ci-dessous a été retirée car red
 
 ---
 
-## 7. SSO Arcade
+## 6. Système de cadeaux virtuels (Gift System) ✅ Sprints 0-3
+
+### 6.1 Plateforme principale (NestJS)
+| Fonctionnalité | Statut | Notes |
+|----------------|--------|-------|
+| Modèles Prisma | ✅ | VirtualWallet, Gift, GiftTransaction, GiftCategory |
+| API catalog | ✅ | GET public, POST/PATCH/DELETE admin |
+| API wallet | ✅ | GET auth JWT |
+| API buy-coins | ✅ | POST auth — debit XAF, credit SkyCoins |
+| API send gift | ✅ | POST auth — atomic Prisma tx, forward game-server |
+| API withdraw diamonds | ✅ | POST auth — Diamond → XAF conversion |
+| API leaderboard | ✅ | GET public — daily/weekly/alltime |
+| API history | ✅ | GET auth — sent/received filter |
+| Socket.IO events | ✅ | gift_received, gift_sent, wallet_update, diamonds_withdrawn |
+| Notifications DB | ✅ | GIFT_RECEIVED type |
+| 10 demo gifts seeded | ✅ | FREE/COMMON/RARE/EPIC/LEGENDARY |
+
+### 6.2 Game-server (spectator + gift forwarding)
+| Fonctionnalité | Statut | Notes |
+|----------------|--------|-------|
+| Spectator WebSocket | ✅ | JWT HS256 auth, read-only guards |
+| Spectator binary relay | ✅ | H.264 video + codec config broadcast |
+| POST /gift-notify | ✅ | Bearer auth, forward to all session viewers |
+
+### 6.3 Frontend Next.js (skyplay-testing)
+| Fonctionnalité | Statut | Fichier |
+|----------------|--------|---------|
+| API proxy routes | ✅ | `src/app/api/gifts/{catalog,send,leaderboard,wallet}/route.ts` |
+| Proxy helper | ✅ | `src/lib/gifts-proxy.ts` |
+| GiftPanel modal | ✅ | `src/components/overlay/GiftPanel.tsx` |
+| DonorRanking sidebar | ✅ | `src/components/overlay/DonorRanking.tsx` |
+| GiftOverlay animation | ✅ | `src/components/overlay/GiftOverlay.tsx` |
+| Spectate page gifts | ✅ | GiftPanel + DonorRanking + gift button |
+| Play page gifts | ✅ | receiverId = opponentId (PvP), gift button + GiftOverlay |
+| CloudAdapter onGiftNotify | ✅ | Callback + gift_notify case |
+| useEmulator gift state | ✅ | giftNotifications array, auto-remove 5s |
+| Host user ID resolution | ✅ | cloud_rooms.user_id, spectate API returns hostUserId |
+
+---
+
+## 8. SSO Arcade
 
 | Fichier | Statut |
 |---------|--------|
@@ -268,7 +308,7 @@ Toute la détection visuelle/health-based KO ci-dessous a été retirée car red
 
 ---
 
-## 8. Migration + Hébergement
+## 9. Migration + Hébergement
 
 ### 8.1 Railway → Northflank
 
@@ -289,7 +329,7 @@ Toute la détection visuelle/health-based KO ci-dessous a été retirée car red
 
 ---
 
-## 9. Plateforme principale (SKY-PLAY-Platform-main/)
+## 10. Plateforme principale (SKY-PLAY-Platform-main/)
 
 Dossier untracké contenant :
 
@@ -307,7 +347,7 @@ Dossier untracké contenant :
 
 ---
 
-## 10. Scripts & Tests (untrackés)
+## 11. Scripts & Tests (untrackés)
 
 | Script | Description |
 |--------|-------------|
@@ -322,7 +362,7 @@ Dossier untracké contenant :
 
 ---
 
-## 11. Résumé visuel
+## 12. Résumé visuel
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
@@ -338,6 +378,8 @@ Dossier untracké contenant :
 │ │ RulesOverlay│ VPS deploy   │ Multi-challenge  │ vsync video   │ │
 │ │ DB registre │ winner_share │ entry_fee dyn.  │ Offline-first │ │
 │ │ escrow rooms│ bank platform│ Sync heartbeat  │ SFA2 RAM      │ │
+│ │ Gift System │ GiftPanel    │ DonorRanking    │ API proxy     │ │
+│ │ Spectate WS │ GiftOverlay  │ Wallet virtuel  │ Leaderboard   │ │
 │ └─────────────┴──────────────┴─────────────────┴───────────────┘ │
 │                                                                   │
 │ 🔧 NON COMMITÉ (working tree)                                     │
@@ -358,7 +400,7 @@ Dossier untracké contenant :
 
 ---
 
-## 12. Priorités restantes
+## 13. Priorités restantes
 
 ### 🔴 URGENT
 *Aucune tâche urgente en cours.*
@@ -386,4 +428,4 @@ Dossier untracké contenant :
 
 ---
 
-*Document mis à jour le 2026-07-26 — suppression détection visuelle SFA2, round counters RAM autoritaires, D-pad tracking retiré, noms persos game-agnostic, timeouts ×2.*
+*Document mis à jour le 2026-07-28 — Sprint 3 Gift System terminé (GiftPanel, DonorRanking, API proxy, hostUserId resolution, CloudAdapter onGiftNotify).*

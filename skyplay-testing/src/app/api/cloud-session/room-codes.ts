@@ -16,10 +16,14 @@ async function ensureTable(): Promise<void> {
     session_id TEXT NOT NULL,
     created_at INTEGER NOT NULL DEFAULT (unixepoch())
   )`);
+  // Add user_id column for gift receiver resolution (idempotent)
+  try {
+    await db.execute(`ALTER TABLE cloud_rooms ADD COLUMN user_id TEXT`);
+  } catch { /* column already exists */ }
 }
 
 /** Store a room code → sessionId mapping (expires after 30 min). */
-export async function setRoomCode(code: string, sessionId: string): Promise<void> {
+export async function setRoomCode(code: string, sessionId: string, userId?: string): Promise<void> {
   const db = await getDb();
   await ensureTable();
   // Clean up expired entries on every write (lazy GC)
@@ -28,9 +32,21 @@ export async function setRoomCode(code: string, sessionId: string): Promise<void
     args: [Math.floor(Date.now() / 1000) - 1800], // 30 min TTL
   });
   await db.execute({
-    sql: "INSERT OR REPLACE INTO cloud_rooms (code, session_id, created_at) VALUES (?, ?, ?)",
-    args: [code, sessionId, Math.floor(Date.now() / 1000)],
+    sql: "INSERT OR REPLACE INTO cloud_rooms (code, session_id, created_at, user_id) VALUES (?, ?, ?, ?)",
+    args: [code, sessionId, Math.floor(Date.now() / 1000), userId ?? null],
   });
+}
+
+/** Look up the host user ID by session ID. Returns null if not found. */
+export async function getHostUserId(sessionId: string): Promise<string | null> {
+  const db = await getDb();
+  await ensureTable();
+  const rs = await db.execute({
+    sql: "SELECT user_id FROM cloud_rooms WHERE session_id = ? AND created_at > ?",
+    args: [sessionId, Math.floor(Date.now() / 1000) - 1800],
+  });
+  if (rs.rows.length === 0 || !rs.rows[0].user_id) return null;
+  return rs.rows[0].user_id as string;
 }
 
 /** Look up a sessionId by room code. Returns null if not found or expired. */

@@ -4,11 +4,13 @@ import { useState, useCallback, useEffect } from "react";
 import type { EmulatorState, SystemType } from "@/lib/emulator/types";
 import { SYSTEM_CONFIGS } from "@/lib/emulator/EmulatorAdapter";
 import { useTranslation } from "@/lib/i18n/TranslationContext";
-import { Gamepad2, Pause, RotateCcw, Maximize2, Minimize2, Info, Activity, Zap, Wifi, Cloud, Copy, Users } from "lucide-react";
+import { Gamepad2, Pause, RotateCcw, Maximize2, Minimize2, Info, Activity, Zap, Wifi, Cloud, Copy, Users, Gift } from "lucide-react";
 import GameControls from "./GameControls";
 import TouchControls from "./TouchControls";
 import AutoDetectBanner from "./AutoDetectBanner";
 import { KofMatchHUD } from "./KofMatchHUD";
+import { GiftOverlay } from "@/components/overlay/GiftOverlay";
+import GiftPanel from "@/components/overlay/GiftPanel";
 import { useAutoDetect } from "@/lib/emulator/hooks/useAutoDetect";
 import { useFullscreen } from "@/lib/emulator/hooks/useFullscreen";
 import type { DetectedResult } from "@/lib/emulator/memory-watcher";
@@ -38,6 +40,8 @@ interface EmulatorCoreProps {
   isPopup?: boolean;
   /** Called when the user clicks "Open in Popup". */
   onOpenPopup?: () => void;
+  /** User ID of the gift receiver (streamer in CPU mode, opponent in PvP). If set, the gift button appears. */
+  receiverId?: string | null;
 }
 
 /**
@@ -54,6 +58,7 @@ export default function EmulatorCore({
   netplayInfo,
   isPopup,
   onOpenPopup,
+  receiverId,
 }: EmulatorCoreProps) {
   const { t } = useTranslation();
   const cfg = SYSTEM_CONFIGS[system];
@@ -88,6 +93,9 @@ export default function EmulatorCore({
 
   // ─── Info Overlay ───────────────────────────────────────
   const [showInfo, setShowInfo] = useState(true);
+
+  // ─── Gift Panel ─────────────────────────────────────────
+  const [showGiftPanel, setShowGiftPanel] = useState(false);
 
   // ─── Room Code Join ─────────────────────────────────────
   const [joinCode, setJoinCode] = useState("");
@@ -207,6 +215,18 @@ export default function EmulatorCore({
             display: gameActive ? "block" : "none",
           }}
         />
+
+        {/* ─── Gift Button (cloud mode, has receiver) ──────── */}
+        {gameActive && cfg.cloud && emu.isCloud && receiverId && (
+          <button
+            onClick={() => setShowGiftPanel(true)}
+            className="absolute top-3 right-12 z-30 p-2 rounded-lg opacity-0 group-hover/canvas:opacity-100 transition-opacity hover:bg-white/10"
+            style={{ color: "rgba(255,215,0,0.6)" }}
+            title="Envoyer un cadeau"
+          >
+            <Gift className="w-4 h-4" />
+          </button>
+        )}
 
         {/* ─── Fullscreen Button ───────────────────────────── */}
         {gameActive && (
@@ -378,6 +398,21 @@ export default function EmulatorCore({
           onButtonUp={emu.buttonUp}
           visible={showTouchControls}
         />
+
+        {/* ─── Gift Overlays ─────────────────────────────── */}
+        {emu.giftNotifications.map((gift, i) => (
+          <GiftOverlay key={`gift-${gift.gift?.id || "g"}-${i}`} gift={gift} index={i} />
+        ))}
+
+        {/* ─── Gift Panel Modal ──────────────────────────── */}
+        {showGiftPanel && receiverId && (
+          <GiftPanel
+            open={showGiftPanel}
+            onClose={() => setShowGiftPanel(false)}
+            receiverId={receiverId}
+            sessionId={emu.sessionId}
+          />
+        )}
 
         {/* ─── Placeholder / Idle / Loading / Error ──────────── */}
         {showPlaceholder && (

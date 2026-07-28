@@ -771,6 +771,16 @@ export class CloudAdapter implements EmulatorAdapter {
           console.log(`[Cloud:${this.systemType}] 🎬 Match started — P1=${msData.p1CharName ?? this.p1CharName ?? "?"} P2=${msData.p2CharName ?? this.p2CharName ?? "?"}`);
           break;
         }
+        case "gift_notify": {
+          this.callbacks.onGiftNotify?.(msg as unknown as {
+            gift: { id: string; name: string; iconUrl: string; animationUrl?: string; category: string };
+            from: { username: string; avatar?: string };
+            quantity: number;
+            diamondAmount: number;
+            message?: string;
+          });
+          break;
+        }
         case "paused": {
           const pData = msg as unknown as { player: 1 | 2; countdown: number };
           console.log(`[Cloud:${this.systemType}] ⏸ Paused by P${pData.player} — ${pData.countdown}s`);
@@ -1123,4 +1133,12 @@ export interface CloudCallbacks {
   onPaused?: (player: 1 | 2, countdown: number) => void;
   /** Called when the game resumes after a pause. */
   onResumed?: () => void;
+  /** Called when a gift notification is received from the game-server (real-time overlay). */
+  onGiftNotify?: (data: {
+    gift: { id: string; name: string; iconUrl: string; animationUrl?: string; category: string };
+    from: { username: string; avatar?: string };
+    quantity: number;
+    diamondAmount: number;
+    message?: string;
+  }) => void;
 }

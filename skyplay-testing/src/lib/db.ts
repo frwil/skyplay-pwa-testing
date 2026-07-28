@@ -586,7 +586,8 @@ async function initializeSchema(): Promise<void> {
     });
   } catch {}
 
-  // Set ram_config for KOF2002 (idempotent — basic health/timer/mode only, team/loss/pick order TBD)
+  // Set ram_config for KOF2002 (full config — same engine/memory map as KOF98)
+  // ⚠️ Mode, team, lost, pick-order addresses: same as KOF98, need live verification with compatible ROM
   try {
     await getClient().execute({
       sql: "UPDATE duel_games SET ram_config = ? WHERE id = 'kof2002' AND ram_config IS NULL",
@@ -594,7 +595,14 @@ async function initializeSchema(): Promise<void> {
         p1: 0x8238, p2: 0x8438, size: 1, maxHealth: 0x67,
         timer: 0xA83A, timerAlt: 0x85D2,
         p1Char: 0x823F, p2Char: 0x843F,
-        p1Mode: 0x81F0, p2Mode: 0x83F0,
+        p1Mode: 0x821E, p2Mode: 0x841E,
+        p1TeamBase: 0xA84E, p2TeamBase: 0xA85E,
+        p1TeamOffsets: [0, 1, 3], p2TeamOffsets: [0, 2, 3],
+        p1Active: 0x8256, p2Active: 0x8456,
+        matchFlag: 0xA840,
+        p1Lost: 0xA859, p2Lost: 0xA868,
+        p1PickOrder: [0x15CB, 0x15CA, 0x15CD],
+        p2PickOrder: [0x17CB, 0x17CA, 0x17CD],
       })],
     });
   } catch {}
@@ -652,17 +660,30 @@ async function initializeSchema(): Promise<void> {
   };
   await seedVersion1("kof98", "v1 — RAM + contrôles initiaux", kof98RamConfig, kofControls.map(([action, keys, player]) => ({ player, actionKey: action, labelKey: action, defaultKeys: keys })));
 
-  // KOF2002 v1: basic health/timer/mode (team/loss/pick order TBD via RAM scan)
+  // KOF2002 v1: full config (same engine as KOF98 — addresses identical, need live verification)
   const kof2002RamConfig = {
     p1: 0x8238, p2: 0x8438, size: 1, maxHealth: 0x67,
     timer: 0xA83A, timerAlt: 0x85D2,
     p1Char: 0x823F, p2Char: 0x843F,
-    p1Mode: 0x81F0, p2Mode: 0x83F0,
+    p1Mode: 0x821E, p2Mode: 0x841E,
+    p1TeamBase: 0xA84E, p2TeamBase: 0xA85E,
+    p1TeamOffsets: [0, 1, 3], p2TeamOffsets: [0, 2, 3],
+    p1Active: 0x8256, p2Active: 0x8456,
+    matchFlag: 0xA840,
+    p1Lost: 0xA859, p2Lost: 0xA868,
+    p1PickOrder: [0x15CB, 0x15CA, 0x15CD],
+    p2PickOrder: [0x17CB, 0x17CA, 0x17CD],
   };
-  await seedVersion1("kof2002", "v1 — santé + timer + mode (détection basique)", kof2002RamConfig, kofControls.map(([action, keys, player]) => ({ player, actionKey: action, labelKey: action, defaultKeys: keys })));
+  await seedVersion1("kof2002", "v1 — full RAM config (same engine as KOF98, addresses need live verification)", kof2002RamConfig, kofControls.map(([action, keys, player]) => ({ player, actionKey: action, labelKey: action, defaultKeys: keys })));
 
-  // SF2 v1: no RAM config yet (pixel-based detection), controls only
-  await seedVersion1("sf2", "v1 — contrôles uniquement (détection pixel)", null, sf2Controls.map(([action, keys, player]) => ({ player, actionKey: action, labelKey: action, defaultKeys: keys })));
+  // SF2 v1: basic RAM config (PAR-based addresses, need live verification)
+  const sf2RamConfig = {
+    p1: 0x0530, p2: 0x0730, size: 1, maxHealth: 0xB0,
+    timer: 0x18F3, timerAlt: 0x18F3,
+    p1Char: 0x0530, p2Char: 0x0730,
+    p1Mode: 0x0530, p2Mode: 0x0730,
+  };
+  await seedVersion1("sf2", "v1 — RAM basique (PAR-based, need live verification)", sf2RamConfig, sf2Controls.map(([action, keys, player]) => ({ player, actionKey: action, labelKey: action, defaultKeys: keys })));
 
   // ─── Duel SKY economy (wagering) ───
   // Player ledger: every movement that affects a player's spendable balance.

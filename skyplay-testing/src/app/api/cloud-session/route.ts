@@ -75,9 +75,20 @@ export async function POST(req: NextRequest) {
       wsUrl = `ws://${localHost}:${localPort}?sessionId=${sessionId}`;
     }
 
+    // ── Get user ID from auth cookie ─────────────────────────
+    let sessionUserId: string | undefined;
+    try {
+      const token = (await cookies()).get("auth_token")?.value;
+      if (token) {
+        const secret = new TextEncoder().encode(process.env.AUTH_SECRET || "dev-secret");
+        const { payload } = await jwtVerify(token, secret);
+        sessionUserId = String(payload.userId ?? "");
+      }
+    } catch { /* non-fatal */ }
+
     // ── Room code for P2 join ──
     const roomCode = generateRoomCode();
-    await setRoomCode(roomCode, sessionId);
+    await setRoomCode(roomCode, sessionId, sessionUserId);
 
     return NextResponse.json({ sessionId, wsUrl, roomCode });
   } catch (err) {

@@ -804,6 +804,7 @@ export default function PlayPage() {
           netplayInfo={netplayInfo}
           isPopup={isPopup}
           onOpenPopup={handleOpenPopup}
+          receiverId={netplay.session?.opponentId ? String(netplay.session.opponentId) : null}
         />
       </section>
 

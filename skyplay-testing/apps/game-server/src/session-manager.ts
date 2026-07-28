@@ -7,6 +7,13 @@ export interface PlayerConnection {
   joinedAt: number;
 }
 
+export interface SpectatorConnection {
+  ws: WebSocket;
+  userId: string;
+  username: string;
+  joinedAt: number;
+}
+
 export interface Session {
   id: string;
   connections: PlayerConnection[];
@@ -39,6 +46,8 @@ export interface Session {
   inputLocked: boolean;
   /** Timer handle for pre-match disconnect grace period (10s). */
   disconnectTimer: ReturnType<typeof setTimeout> | null;
+  /** Spectators watching the session (read-only, no input allowed). */
+  spectators: SpectatorConnection[];
 }
 
 const sessions = new Map<string, Session>();
@@ -46,6 +55,9 @@ const IDLE_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 
 /** Reverse lookup: WebSocket → { sessionId, player } for input routing. */
 const wsToPlayer = new Map<WebSocket, { sessionId: string; player: number }>();
+
+/** Reverse lookup: WebSocket → { sessionId, userId } for spectator tracking. */
+const wsToSpectator = new Map<WebSocket, { sessionId: string; userId: string }>();
 
 export function createSession(
   id: string,
@@ -69,6 +81,7 @@ export function createSession(
     clientReadyTimer: null,
     inputLocked: false,
     disconnectTimer: null,
+    spectators: [],
   };
   sessions.set(id, session);
   console.log(`[session] Created session ${id} (${system} / ${rom}), total: ${sessions.size}`);
@@ -149,6 +162,73 @@ export function getPlayerInfo(ws: WebSocket): { sessionId: string; player: numbe
   return wsToPlayer.get(ws);
 }
 
+/** Get which session+userId a spectator WebSocket belongs to. */
+export function getSpectatorInfo(ws: WebSocket): { sessionId: string; userId: string } | undefined {
+  return wsToSpectator.get(ws);
+}
+
+// ── Spectator management ──────────────────────────────────────────────
+
+export function addSpectator(
+  sessionId: string,
+  ws: WebSocket,
+  userId: string,
+  username: string,
+): void {
+  const session = sessions.get(sessionId);
+  if (!session) {
+    console.warn(`[session] addSpectator: session ${sessionId} not found`);
+    return;
+  }
+
+  // Cross-session dedup: remove this WS from any other session's spectator list
+  const oldInfo = wsToSpectator.get(ws);
+  if (oldInfo && oldInfo.sessionId !== sessionId) {
+    const oldSession = sessions.get(oldInfo.sessionId);
+    if (oldSession) {
+      const idx = oldSession.spectators.findIndex((s) => s.ws === ws);
+      if (idx !== -1) oldSession.spectators.splice(idx, 1);
+    }
+  }
+
+  // Don't add as spectator if already a player in this session
+  const playerInfo = wsToPlayer.get(ws);
+  if (playerInfo && playerInfo.sessionId === sessionId) {
+    console.warn(`[session] addSpectator: WS is already P${playerInfo.player} in ${sessionId} — not adding as spectator`);
+    return;
+  }
+
+  // Prevent duplicate spectator connections from same WS
+  const existingIdx = session.spectators.findIndex((s) => s.ws === ws);
+  if (existingIdx !== -1) {
+    session.spectators.splice(existingIdx, 1);
+  }
+
+  session.spectators.push({ ws, userId, username, joinedAt: Date.now() });
+  wsToSpectator.set(ws, { sessionId, userId });
+  resetIdleTimer(session);
+  console.log(`[session] Added spectator ${username} (${userId}) to ${sessionId}, spectators: ${session.spectators.length}`);
+}
+
+export function removeSpectator(
+  sessionId: string,
+  ws: WebSocket,
+): SpectatorConnection | undefined {
+  const session = sessions.get(sessionId);
+  if (!session) return undefined;
+  const idx = session.spectators.findIndex((s) => s.ws === ws);
+  if (idx === -1) return undefined;
+  const spec = session.spectators[idx];
+  wsToSpectator.delete(spec.ws);
+  session.spectators.splice(idx, 1);
+  console.log(`[session] Removed spectator from ${sessionId}, remaining: ${session.spectators.length}`);
+  return spec;
+}
+
+export function getSpectatorCount(sessionId: string): number {
+  return sessions.get(sessionId)?.spectators.length ?? 0;
+}
+
 /** Check if a player slot is taken. */
 export function hasConnection(sessionId: string, player: 1 | 2): boolean {
   const session = sessions.get(sessionId);
@@ -187,6 +267,12 @@ export function removeSession(id: string): void {
     try { conn.ws.close(1000, "Session ended"); } catch { /* ok */ }
   }
   session.connections = [];
+  // Close all spectator connections
+  for (const spec of session.spectators) {
+    wsToSpectator.delete(spec.ws);
+    try { spec.ws.close(1000, "Session ended"); } catch { /* ok */ }
+  }
+  session.spectators = [];
   sessions.delete(id);
   console.log(`[session] Removed session ${id}, remaining: ${sessions.size}`);
 }
@@ -212,11 +298,16 @@ export function resetIdleTimer(session: Session): void {
       try { conn.ws.close(1000, "Idle timeout"); } catch { /* ok */ }
     }
     session.connections = [];
+    for (const spec of session.spectators) {
+      wsToSpectator.delete(spec.ws);
+      try { spec.ws.close(1000, "Idle timeout"); } catch { /* ok */ }
+    }
+    session.spectators = [];
     removeSession(session.id);
   }, IDLE_TIMEOUT_MS);
 }
 
-/** Broadcast a JSON message to all connections in a session. */
+/** Broadcast a JSON message to all connections AND spectators in a session. */
 export function sendToSession(session: Session, msg: ServerMessage): void {
   const data = JSON.stringify(msg);
   for (const conn of session.connections) {
@@ -224,14 +315,31 @@ export function sendToSession(session: Session, msg: ServerMessage): void {
       conn.ws.send(data);
     }
   }
+  for (const spec of session.spectators) {
+    if (spec.ws.readyState === WebSocket.OPEN) {
+      spec.ws.send(data);
+    }
+  }
 }
 
-/** Broadcast binary data to all connections in a session. */
+/** Broadcast binary data to all connections AND spectators in a session. */
 export function sendBinaryToSession(session: Session, data: Buffer): void {
   for (const conn of session.connections) {
     if (conn.ws.readyState === WebSocket.OPEN) {
       conn.ws.send(data);
     }
+  }
+  for (const spec of session.spectators) {
+    if (spec.ws.readyState === WebSocket.OPEN) {
+      spec.ws.send(data);
+    }
+  }
+}
+
+/** Send binary data to a spectator connection. */
+export function sendBinaryToSpectator(spec: SpectatorConnection, data: Buffer): void {
+  if (spec.ws.readyState === WebSocket.OPEN) {
+    spec.ws.send(data);
   }
 }
 

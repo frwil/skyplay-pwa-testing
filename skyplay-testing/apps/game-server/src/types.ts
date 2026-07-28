@@ -74,6 +74,14 @@ export interface ClientReadyMessage {
   type: "client_ready";
 }
 
+/** Spectator joins a session to watch (read-only, no input). */
+export interface SpectatorJoinMessage {
+  type: "spectator_join";
+  sessionId: string;
+  /** JWT token from Platform-main (HS256, signed with JWT_SECRET). */
+  token: string;
+}
+
 export type ClientMessage =
   | InitMessage
   | JoinMessage
@@ -85,7 +93,8 @@ export type ClientMessage =
   | RematchDeclineMessage
   | StopDuelMessage
   | AutoRematchMessage
-  | ClientReadyMessage;
+  | ClientReadyMessage
+  | SpectatorJoinMessage;
 
 export interface StatusMessage {
   type: "status";
@@ -268,6 +277,31 @@ export interface MatchStartedMessage {
   p2Health?: number;
 }
 
+/** Number of spectators watching the session. Sent on join/leave. */
+export interface SpectatorCountMessage {
+  type: "spectator_count";
+  count: number;
+}
+
+/** Gift notification — forwarded from Platform-main to all viewers (players + spectators). */
+export interface GiftNotifyMessage {
+  type: "gift_notify";
+  gift: {
+    id: string;
+    name: string;
+    iconUrl: string;
+    animationUrl?: string;
+    category: string;
+  };
+  from: {
+    username: string;
+    avatar?: string;
+  };
+  quantity: number;
+  diamondAmount: number;
+  message?: string;
+}
+
 export type ServerMessage =
   | StatusMessage
   | ReadyMessage
@@ -287,7 +321,9 @@ export type ServerMessage =
   | AutoRematchServerMessage
   | PausedMessage
   | ResumedMessage
-  | SessionCancelledMessage;
+  | SessionCancelledMessage
+  | SpectatorCountMessage
+  | GiftNotifyMessage;
 
 /** Binary frame header: 0x01 + width(u16) + height(u16) + frameId(u32) + nalLength(u32) + H.264 NAL data */
 export const FRAME_MAGIC = 0x01;

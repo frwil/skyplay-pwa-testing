@@ -66,7 +66,59 @@ const HEALTH_MEMORY_MAP: Record<string, { p1: number; p2: number; size: number; 
     // Beni>Yuri>Kyo, Kyo>Yuri>Beni) + P1 mirror at -0x200 (2026-07-10). Values are char IDs.
     p1PickOrder: [0x15CB, 0x15CA, 0x15CD], p2PickOrder: [0x17CB, 0x17CA, 0x17CD],
   },
-  "kof2002.zip": { p1: 0x8238, p2: 0x8438, size: 1, maxHealth: 0x67, timer: 0xA83A, timerAlt: 0x85D2, p1Char: 0x823F, p2Char: 0x843F, p1Mode: 0x81F0, p2Mode: 0x83F0 },
+  // ── KOF2002 (NeoGeo) — same engine & memory map as KOF98 ─────────────────
+  // Health, timer, char IDs, active char, match flag, team roster base addresses
+  // are IDENTICAL to KOF98 (same NeoGeo hardware, same FBNeo core addressing).
+  //
+  // Gauge mode: KOF2002 uses 0x821E/0x841E (same as KOF98 corrected addresses).
+  //   0x81F0/0x83F0 was WRONG for KOF98, confirmed wrong 2026-07-09.
+  //   ⚠️ For KOF2002 specifically: needs live verification. KOF2002 may store
+  //   mode at a different offset due to engine changes. Test with compatible ROM.
+  //
+  // Team offsets: [0,1,3] confirmed for KOF98 via multi-snapshot diff. KOF2002
+  //   uses same engine → same irregular layout with 0x00 separator at offset 2.
+  //   ⚠️ Verify with compatible ROM.
+  //
+  // Lost counters: 0xA859/0xA868 — same "characters eliminated" counters.
+  //   ⚠️ Verify with compatible ROM (may be at different offset if KOF2002
+  //   changed the player struct layout).
+  //
+  // Pick order: 0x15CB/0x15CA/0x15CD — same buffer addresses. Layout [2nd, 1st, sep, 3rd].
+  //   ⚠️ Verify with compatible ROM.
+  //
+  // Character map: KOF2002_CHARACTERS defined separately — KOF2002 roster differs
+  //   significantly from KOF98 (adds K', Maxima, Kula, K9999, Angel, May Lee etc.).
+  //   ⚠️ IDs are GUESSED based on KOF98 scheme; verify with compatible ROM.
+  //   ⚠️ ROM CURRENTLY INCOMPATIBLE: kof2002.zip has .rom extensions, FBNeo expects
+  //   .c1/.sp2/etc. Replace ROM with FBNeo-compatible set before live testing.
+  "kof2002.zip": {
+    p1: 0x8238, p2: 0x8438, size: 1, maxHealth: 0x67,
+    timer: 0xA83A, timerAlt: 0x85D2,
+    p1Char: 0x823F, p2Char: 0x843F,
+    p1Mode: 0x821E, p2Mode: 0x841E,   // ⚠️ same as KOF98 corrected; verify for 2002
+    p1TeamBase: 0xA84E, p2TeamBase: 0xA85E,
+    p1TeamOffsets: [0, 1, 3], p2TeamOffsets: [0, 2, 3],
+    p1Active: 0x8256, p2Active: 0x8456,
+    matchFlag: 0xA840,
+    p1Lost: 0xA859, p2Lost: 0xA868,
+    p1PickOrder: [0x15CB, 0x15CA, 0x15CD],
+    p2PickOrder: [0x17CB, 0x17CA, 0x17CD],
+  },
+  // ── SF2 (Street Fighter II, SNES) — "Street Fighter 5 (Hack).smc" ─────────
+  // ⚠️ ALL ADDRESSES UNVERIFIED — placeholder based on PAR codes (SF2 Turbo USA).
+  // SNES WRAM addressing: $7E:XXXX → offset XXXX for READ_CORE_RAM.
+  // Health: PAR 7E0530xx (P1), 7E0730xx (P2, +0x200). Max health = 176 (0xB0).
+  // Timer: PAR 7E18F3xx (99 = full). BCD-encoded? Verify.
+  // Char IDs: Not yet discovered. Likely in 0x0500-0x0600 region near health.
+  // Round counters: Not yet discovered. Check 0x0000-0x0200 (mirrors) and 0x18E0+.
+  //   ⚠️ This ROM is a hack — all addresses may be non-standard. Full discovery needed.
+  //   Run discover-sf2.mjs in Docker during a live match to find real addresses.
+  "Street Fighter 5 (Hack).smc": {
+    p1: 0x0530, p2: 0x0730, size: 1, maxHealth: 0xB0,   // ⚠️ unverified
+    timer: 0x18F3, timerAlt: 0x18F3,                       // ⚠️ unverified
+    p1Char: 0x0530, p2Char: 0x0730,                       // ⚠️ PLACEHOLDER — same as health, WRONG
+    p1Mode: 0x0530, p2Mode: 0x0730,                       // ⚠️ PLACEHOLDER — no mode in SF2
+  },
   // SFA2 SNES (Europe) — RAM addresses discovered 2026-07-25 via full WRAM scans + live match differential.
   // Health: 4-byte block (P1 real, P1 visual, P2 real, P2 visual), max 96 (0x60), P2 offset +2.
   // Timer: BCD-encoded at 0x1B7D (0x57 = 57s), sub-second counter at 0x1B7E. Confirmed 99→0.
@@ -115,6 +167,44 @@ const SFA2_CHARACTERS: Record<number, string> = {
   0x09: "Rose",       0x0A: "M. Bison",   0x0B: "Sagat",
   0x0C: "Dan",       0x0D: "Sakura",     0x0E: "Rolento",
   0x0F: "Dhalsim",   0x10: "Zangief",    0x11: "Gen",
+};
+
+/** KOF2002 (NeoGeo) character ID → name mapping.
+ *  ⚠️ IDs are UNVERIFIED — ROM incompatible with current FBNeo (needs .c1/.sp2 format).
+ *  Based on KOF98 encoding scheme. Verify all IDs via RAM scan once compatible ROM is available.
+ *  KOF2002 roster differs significantly from KOF98:
+ *    New: K', Maxima, Whip, Kula, K9999, Angel, May Lee, Vanessa, Seth, Ramon
+ *    Removed vs KOF98: Chizuru, Mature, Vice, Shingo, Saisyu, Heavy D!, Lucky, Brian, Rugal */
+const KOF2002_CHARACTERS: Record<number, string> = {
+  0x00: "Kyo Kusanagi",     0x01: "Benimaru Nikaido",  0x02: "Goro Daimon",
+  0x03: "Terry Bogard",     0x04: "Andy Bogard",       0x05: "Joe Higashi",
+  0x06: "Ryo Sakazaki",     0x07: "Robert Garcia",     0x08: "Yuri Sakazaki",
+  0x09: "Leona Heidern",    0x0A: "Ralf Jones",        0x0B: "Clark Still",
+  0x0C: "Athena Asamiya",   0x0D: "Sie Kensou",        0x0E: "Chin Gentsai",
+  0x0F: "Mai Shiranui",     0x10: "King",              0x11: "Kim Kaphwan",
+  0x12: "Chang Koehan",     0x13: "Choi Bounge",
+  0x14: "Yashiro Nanakase", 0x15: "Shermie",           0x16: "Chris",
+  0x17: "Ryuji Yamazaki",   0x18: "Blue Mary",         0x19: "Billy Kane",
+  0x1A: "Iori Yagami",      0x1B: "Heidern",           0x1C: "Takuma Sakazaki",
+  // KOF2002 newcomers — ⚠️ IDs guessed, verify!
+  0x1D: "K'",               0x1E: "Maxima",            0x1F: "Whip",
+  0x20: "Kula Diamond",     0x21: "K9999",             0x22: "Angel",
+  0x23: "May Lee",          0x24: "Vanessa",           0x25: "Seth",
+  0x26: "Ramon",
+  // Boss
+  0x30: "Omega Rugal",
+};
+
+/** SF2 (Street Fighter II, SNES) character ID → name mapping.
+ *  ⚠️ IDs are UNVERIFIED — based on standard SF2 Turbo PAR data.
+ *  The ROM is a hack ("Street Fighter 5 (Hack).smc") — verify all IDs via RAM scan. */
+const SF2_CHARACTERS: Record<number, string> = {
+  0x00: "Ryu",       0x01: "Ken",        0x02: "E. Honda",
+  0x03: "Chun-Li",   0x04: "Blanka",     0x05: "Zangief",
+  0x06: "Guile",     0x07: "Dhalsim",
+  0x08: "Balrog",    0x09: "Vega",       0x0A: "Sagat",
+  0x0B: "M. Bison",  0x0C: "Fei Long",   0x0D: "Cammy",
+  0x0E: "T. Hawk",   0x0F: "Dee Jay",    0x10: "Akuma",
 };
 
 /**
@@ -289,16 +379,27 @@ export class GameRunner extends EventEmitter {
    *  attract/demo never starts; cleared on rematch. Tracked to keep pause/resume idempotent. */
   private paused = false;
   /** Build character info for event payloads using the locked team (frozen at char select). */
+  /** Resolve the correct character ID→name map for the currently-loaded game. */
+  private resolveCharMap(): Record<number, string> {
+    const maxH = this.healthMemMap?.maxHealth;
+    if (maxH === 0x60) return SFA2_CHARACTERS;
+    if (maxH === 0xB0) return SF2_CHARACTERS;
+    // Both KOF98 and KOF2002 use maxHealth 0x67 — distinguish by ROM name
+    const romLower = this.rom.toLowerCase();
+    if (romLower.includes("kof2002")) return KOF2002_CHARACTERS;
+    return KOF98_CHARACTERS;
+  }
+
   private charInfo() {
     const isSfa2 = this.healthMemMap?.maxHealth === 0x60;
-    const charMap = isSfa2 ? SFA2_CHARACTERS : KOF98_CHARACTERS;
+    const charMap = this.resolveCharMap();
     const p1Name = charMap[this.memP1Char] || "?";
     const p2Name = charMap[this.memP2Char] || "?";
     // Prefer the locked team; fall back to current raw slots if we never captured char select.
     const p1Src = this.p1LockedTeam ?? this.p1TeamSlots;
     const p2Src = this.p2LockedTeam ?? this.p2TeamSlots;
-    let p1Team = p1Src.filter(c => c >= 0 && c <= 0x25).map(c => charMap[c] || "?");
-    let p2Team = p2Src.filter(c => c >= 0 && c <= 0x25).map(c => charMap[c] || "?");
+    let p1Team = p1Src.filter(c => c >= 0 && c <= 0x3F).map(c => charMap[c] || "?");
+    let p2Team = p2Src.filter(c => c >= 0 && c <= 0x3F).map(c => charMap[c] || "?");
     // SFA2 (1v1, no team slots): use the current character as a singleton team so the
     // client-side inCombat gate (p1Team.length > 0) passes and the wager charge fires.
     if (isSfa2 && p1Team.length === 0 && p1Name !== "?") p1Team = [p1Name];
@@ -312,7 +413,7 @@ export class GameRunner extends EventEmitter {
    */
   private matchMeta() {
     const ids = (locked: number[] | null, slots: number[]) =>
-      (locked ?? slots).filter(c => c >= 0x00 && c <= 0x25);
+      (locked ?? slots).filter(c => c >= 0x00 && c <= 0x3F);
     const wins = (m: Map<number, number>): Record<number, number> => {
       const o: Record<number, number> = {};
       for (const [id, n] of m) o[id] = n;
@@ -339,7 +440,7 @@ export class GameRunner extends EventEmitter {
    *  per-character win tally). No-op for draws (winner 0) or invalid/unknown active IDs. */
   private creditRoundWin(winner: number): void {
     const active = winner === 1 ? this.memP1Active : winner === 2 ? this.memP2Active : -1;
-    if (active < 0x00 || active > 0x25) return;
+    if (active < 0x00 || active > 0x3F) return;
     const m = winner === 1 ? this.p1CharWins : this.p2CharWins;
     m.set(active, (m.get(active) ?? 0) + 1);
   }
@@ -644,7 +745,7 @@ export class GameRunner extends EventEmitter {
           const steadyCombat = this.memMatchFlag === 0x40 || this.memMatchFlag === 0x48;
           if (steadyCombat && !this.pickOrderCaptured) {
             const track = (active: number, order: number[], locked: number[] | null) => {
-              if (active < 0x00 || active > 0x25) return;
+              if (active < 0x00 || active > 0x3F) return;
               if (locked && !locked.includes(active)) return; // ignore noise not in the team
               if (!order.includes(active)) order.push(active);
             };
@@ -667,7 +768,7 @@ export class GameRunner extends EventEmitter {
           // transitions/KOs, so we freeze the roster here and ignore later reads (kills false positives
           // like the phantom "Terry Bogard" the old seen-set accumulator picked up).
           const validTeam = (t: number[] | null): t is number[] =>
-            t != null && t.every(id => id >= 0x00 && id <= 0x25);
+            t != null && t.every(id => id >= 0x00 && id <= 0x3F);
           // NOTE: re-arming match scoring for a same-session rematch is now EXPLICIT
           // (GameRunner.beginRematch(), called by ws-handler on rematch_accept). The old
           // auto "new match char-select detected" reset used to fire here on the post-match
@@ -760,9 +861,10 @@ export class GameRunner extends EventEmitter {
 
           // Verbose logging for first 100 reads (25s) to capture ephemeral team data during char select
           if (DEBUG_RAM && (successCount <= 100 || successCount % 30 === 0)) {
-            const charMap = maxHealth === 0x60 ? SFA2_CHARACTERS : KOF98_CHARACTERS;
+            const charMap = this.resolveCharMap();
             const p1Name = charMap[this.memP1Char] || `0x${this.memP1Char.toString(16)}`;
             const p2Name = charMap[this.memP2Char] || `0x${this.memP2Char.toString(16)}`;
+            const maxHealth = this.healthMemMap?.maxHealth ?? 0x67;
             const p1Mode = maxHealth === 0x60
               ? (this.memP1PlayMode === 1 ? "Auto" : "Manual")
               : (this.memP1Mode === 1 ? "ADVANCED" : "EXTRA");
@@ -923,7 +1025,7 @@ export class GameRunner extends EventEmitter {
       rosterUdp.close();
 
       // Search each chunk independently for 3+ consecutive valid char IDs
-      const allChars = new Set([0x00,0x01,0x02,0x03,0x04,0x05,0x06,0x07,0x08,0x09,0x0A,0x0B,0x0C,0x0D,0x0E,0x0F,0x10,0x11,0x12,0x13,0x14,0x15,0x16,0x17,0x18,0x19,0x1A,0x1B,0x1C,0x1D,0x1E,0x1F,0x20,0x21,0x22,0x23,0x24,0x25]);
+      const allChars = new Set([0x00,0x01,0x02,0x03,0x04,0x05,0x06,0x07,0x08,0x09,0x0A,0x0B,0x0C,0x0D,0x0E,0x0F,0x10,0x11,0x12,0x13,0x14,0x15,0x16,0x17,0x18,0x19,0x1A,0x1B,0x1C,0x1D,0x1E,0x1F,0x20,0x21,0x22,0x23,0x24,0x25,0x26,0x27,0x28,0x29,0x2A,0x2B,0x2C,0x2D,0x2E,0x2F,0x30]);
 
       // Find all positions with 3+ consecutive valid char IDs (excluding all-Kyo = likely empty)
       const triplets: { addr: number; ids: number[]; names: string[] }[] = [];
@@ -1603,7 +1705,7 @@ export class GameRunner extends EventEmitter {
       if (!this.running || this.matchEnded) return;
       if (this.memHealthP1 >= 0 && this.memHealthP2 >= 0) {
         const isSfa2 = this.healthMemMap?.maxHealth === 0x60;
-        const charMap = isSfa2 ? SFA2_CHARACTERS : KOF98_CHARACTERS;
+        const charMap = this.resolveCharMap();
         const p1Name = charMap[this.memP1Char] || `0x${this.memP1Char.toString(16)}`;
         const p2Name = charMap[this.memP2Char] || `0x${this.memP2Char.toString(16)}`;
         if (isSfa2) {
@@ -2196,7 +2298,7 @@ export class GameRunner extends EventEmitter {
   /** Read the authoritative pick-order (fight order) from the player-struct buffers and set
    *  p1/p2SelectOrder. Addresses (fight order 1st/2nd/3rd) come from the health map:
    *  P1 0x15CB/0x15CA/0x15CD, P2 mirror +0x200 0x17CB/0x17CA/0x17CD. Values are KOF98 char IDs.
-   *  Requires all 3 picks valid (0x00-0x25) and distinct for BOTH players before latching, so a
+   *  Requires all 3 picks valid (0x00-0x3F) and distinct for BOTH players before latching, so a
    *  torn/early read never freezes a wrong order. Falls back silently (the round-by-round tracker
    *  keeps filling the order until this lands). Validated via controlled diff, 3 orders (2026-07-10). */
   private async capturePickOrders(): Promise<void> {
@@ -2208,7 +2310,7 @@ export class GameRunner extends EventEmitter {
       const raw = await this.readRamRange(base, span);
       if (!raw) return null;
       const order = addrs.map(a => raw[a - base]);
-      if (order.some(v => v == null || v < 0x00 || v > 0x25)) return null;
+      if (order.some(v => v == null || v < 0x00 || v > 0x3F)) return null;
       if (new Set(order).size !== order.length) return null; // 3 distinct picks
       return order;
     };

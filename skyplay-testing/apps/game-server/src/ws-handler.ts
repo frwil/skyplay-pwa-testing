@@ -3,7 +3,9 @@ import {
   createSession, addConnection, removeConnection, getSession,
   sendToSession, sendBinaryToSession, sendBinaryToConnection, resetIdleTimer, removeSession,
   getPlayerInfo, hasActiveConnections, getConnections, getAllSessions,
-  clearDisconnectTimer, startDisconnectTimer, type Session,
+  clearDisconnectTimer, startDisconnectTimer,
+  addSpectator, removeSpectator, getSpectatorInfo, getSpectatorCount,
+  type Session,
 } from "./session-manager.js";
 import { GameRunner } from "./game-runner.js";
 import type { ClientMessage } from "./types.js";
@@ -11,6 +13,7 @@ import { FRAME_MAGIC, AUDIO_MAGIC, CODEC_CONFIG_MAGIC } from "./types.js";
 import { getGameConfig } from "./game-config.js";
 import { writeFile, mkdir, readdir, readFile, unlink } from "node:fs/promises";
 import { join } from "node:path";
+import { createHmac } from "node:crypto";
 
 /** Map sessionId → GameRunner for lifecycle management. */
 const sessionRunners = new Map<string, GameRunner>();
@@ -134,6 +137,20 @@ export function handleConnection(ws: WebSocket, sessionId: string): void {
   });
 
   ws.on("close", (code, reason) => {
+    // ── Spectator disconnect ────────────────────────────────────────
+    const specInfo = getSpectatorInfo(ws);
+    if (specInfo) {
+      console.log(`[ws] 👁️ Spectator disconnected: ${specInfo.sessionId} (${specInfo.userId})`);
+      removeSpectator(specInfo.sessionId, ws);
+      const specSession = getSession(specInfo.sessionId);
+      if (specSession) {
+        sendToSession(specSession, { type: "spectator_count", count: getSpectatorCount(specInfo.sessionId) });
+        resetIdleTimer(specSession);
+      }
+      return;
+    }
+
+    // ── Player disconnect ──────────────────────────────────────────
     const info = getPlayerInfo(ws);
     const playerLabel = info ? `P${info.player}` : "?";
     console.log(`[ws] ${playerLabel} disconnected: ${sessionId} (${code})`);
@@ -184,6 +201,12 @@ function logMsg(label: string, extra?: string): void {
 }
 
 function handleMessage(ws: WebSocket, msg: ClientMessage, sessionId: string): void {
+  // ── Spectator guard: only allow ping/spectator_join ──
+  const isSpectator = !!getSpectatorInfo(ws);
+  if (isSpectator && msg.type !== "spectator_join" && msg.type !== "ping") {
+    return; // Silent drop — spectators cannot control the session
+  }
+
   // Reset idle timer on ANY message from ANY connection
   const info = getPlayerInfo(ws);
   if (info) {
@@ -251,6 +274,11 @@ function handleMessage(ws: WebSocket, msg: ClientMessage, sessionId: string): vo
     case "ping":
       // Too frequent to log
       handlePing(ws, msg.t);
+      break;
+
+    case "spectator_join":
+      logMsg("spectator_join");
+      void handleSpectatorJoin(ws, msg as any);
       break;
 
     default:
@@ -743,6 +771,9 @@ function handleInput(
   // 🔍 DEBUG: Log every input message (disabled — too verbose)
   // console.log(`[ws] 🎮 INPUT P${msg.player} btn=${msg.button} ${msg.pressed ? "DOWN" : "UP"}`);
 
+  // Spectators cannot send input — silent drop
+  if (getSpectatorInfo(ws)) return;
+
   // Route input to the correct session's runner
   const info = getPlayerInfo(ws);
   if (!info) {
@@ -790,6 +821,9 @@ function handleInput(
 
 /** Which player sent the pause/resume message — resolved from the WebSocket connection. */
 function handleControl(action: "pause" | "resume", sessionId: string, initiatorWs?: WebSocket): void {
+  // Spectators cannot control the game
+  if (initiatorWs && getSpectatorInfo(initiatorWs)) return;
+
   const session = getSession(sessionId);
   const runner = sessionRunners.get(sessionId);
   if (!session || !runner) return;
@@ -840,6 +874,147 @@ function handlePing(ws: WebSocket, t: number): void {
   if (ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({ type: "pong", t }));
   }
+}
+
+// ── JWT Verification (HS256, same secret as Platform-main) ──────────
+
+/** Verify a Platform-main JWT (HS256, signed with JWT_SECRET). Extracts sub (userId) and username. */
+function verifyJwt(token: string): { sub: string; username: string } {
+  const parts = token.split(".");
+  if (parts.length !== 3) {
+    throw new Error("Invalid JWT format");
+  }
+
+  const [headerB64, payloadB64, signatureB64] = parts;
+  const signingInput = `${headerB64}.${payloadB64}`;
+
+  const secret = process.env.JWT_SECRET || process.env.AUTH_SECRET;
+  if (!secret) {
+    throw new Error("JWT_SECRET or AUTH_SECRET not configured on game-server");
+  }
+
+  // Verify HMAC-SHA256 signature
+  const expectedSig = createHmac("sha256", secret)
+    .update(signingInput)
+    .digest("base64url");
+
+  if (signatureB64 !== expectedSig) {
+    throw new Error("Invalid JWT signature");
+  }
+
+  // Decode payload
+  const payloadJson = Buffer.from(payloadB64, "base64url").toString("utf-8");
+  const payload = JSON.parse(payloadJson);
+
+  // Check expiration
+  if (payload.exp && Date.now() >= payload.exp * 1000) {
+    throw new Error("JWT expired");
+  }
+
+  if (!payload.sub || !payload.username) {
+    throw new Error("JWT missing required claims (sub, username)");
+  }
+
+  return { sub: payload.sub, username: payload.username };
+}
+
+// ── Spectator handlers ───────────────────────────────────────────────
+
+async function handleSpectatorJoin(
+  ws: WebSocket,
+  msg: { type: "spectator_join"; sessionId: string; token: string },
+): Promise<void> {
+  // 1. Verify JWT
+  let payload: { sub: string; username: string };
+  try {
+    payload = verifyJwt(msg.token);
+  } catch (err) {
+    console.warn(`[ws] Spectator JWT verification failed: ${(err as Error).message}`);
+    ws.send(JSON.stringify({ type: "error", message: "Invalid spectator token" }));
+    ws.close(4001, "Unauthorized");
+    return;
+  }
+
+  // 2. Find session
+  const session = getSession(msg.sessionId);
+  if (!session) {
+    ws.send(JSON.stringify({ type: "error", message: "Session not found" }));
+    ws.close(4004, "Session not found");
+    return;
+  }
+
+  if (session.status === "stopped") {
+    ws.send(JSON.stringify({ type: "error", message: "Session has ended" }));
+    ws.close(4004, "Session ended");
+    return;
+  }
+
+  // 3. Add as spectator
+  addSpectator(msg.sessionId, ws, payload.sub, payload.username);
+
+  // 4. Send codec config so spectator can decode video
+  if (session.codecVideoDesc && session.codecAudioDesc) {
+    const videoLen = Buffer.alloc(2);
+    videoLen.writeUInt16LE(session.codecVideoDesc.length, 0);
+    const codecPayload = Buffer.concat([
+      videoLen,
+      Buffer.from(session.codecVideoDesc),
+      Buffer.from(session.codecAudioDesc),
+    ]);
+
+    const header = Buffer.alloc(3);
+    header.writeUInt8(CODEC_CONFIG_MAGIC, 0);
+    header.writeUInt16LE(codecPayload.length, 1);
+
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(Buffer.concat([header, codecPayload]));
+    }
+  }
+
+  // 5. Send session info (same format as player "ready" message)
+  ws.send(JSON.stringify({
+    type: "ready",
+    width: session.videoWidth,
+    height: session.videoHeight,
+  }));
+
+  // 6. Broadcast updated spectator count to all viewers
+  const count = getSpectatorCount(msg.sessionId);
+  sendToSession(session, { type: "spectator_count", count });
+  console.log(`[ws] 👁️ Spectator ${payload.username} joined session ${msg.sessionId} (count: ${count})`);
+}
+
+/** Called by REST endpoint POST /gift-notify — broadcasts gift to all session viewers. */
+export function handleGiftNotify(body: {
+  sessionId: string;
+  gift: { id: string; name: string; iconUrl: string; animationUrl?: string; category: string };
+  from: { username: string; avatar?: string };
+  quantity: number;
+  diamondAmount: number;
+  message?: string;
+}): { success: boolean; error?: string } {
+  const session = getSession(body.sessionId);
+  if (!session) {
+    return { success: false, error: "Session not found" };
+  }
+  if (session.status === "stopped") {
+    return { success: false, error: "Session has ended" };
+  }
+
+  sendToSession(session, {
+    type: "gift_notify",
+    gift: body.gift,
+    from: body.from,
+    quantity: body.quantity,
+    diamondAmount: body.diamondAmount,
+    message: body.message,
+  });
+
+  console.log(
+    `[ws] 🎁 Gift notify: ${body.from.username} sent ${body.quantity}x ${body.gift.name} ` +
+    `to session ${body.sessionId} (${body.diamondAmount} diamonds)`,
+  );
+  return { success: true };
 }
 
 /** Track sessions currently being stopped to prevent double-cleanup races

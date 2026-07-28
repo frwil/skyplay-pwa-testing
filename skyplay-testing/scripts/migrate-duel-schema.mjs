@@ -28,7 +28,21 @@ const KOF2002_RAM_CONFIG = {
   p1: 0x8238, p2: 0x8438, size: 1, maxHealth: 0x67,
   timer: 0xA83A, timerAlt: 0x85D2,
   p1Char: 0x823F, p2Char: 0x843F,
-  p1Mode: 0x81F0, p2Mode: 0x83F0,
+  p1Mode: 0x821E, p2Mode: 0x841E,
+  p1TeamBase: 0xA84E, p2TeamBase: 0xA85E,
+  p1TeamOffsets: [0, 1, 3], p2TeamOffsets: [0, 2, 3],
+  p1Active: 0x8256, p2Active: 0x8456,
+  matchFlag: 0xA840,
+  p1Lost: 0xA859, p2Lost: 0xA868,
+  p1PickOrder: [0x15CB, 0x15CA, 0x15CD],
+  p2PickOrder: [0x17CB, 0x17CA, 0x17CD],
+};
+
+const SF2_RAM_CONFIG = {
+  p1: 0x0530, p2: 0x0730, size: 1, maxHealth: 0xB0,
+  timer: 0x18F3, timerAlt: 0x18F3,
+  p1Char: 0x0530, p2Char: 0x0730,
+  p1Mode: 0x0530, p2Mode: 0x0730,
 };
 
 const KOF98_CONTROLS = [
@@ -72,15 +86,20 @@ async function main() {
   });
   console.log("  ✓ KOF2002 ram_config set");
 
-  // 4. Set entry_fee for SF2
+  // 4. Set entry_fee + ram_config for SF2
   await db.execute({ sql: "UPDATE duel_games SET entry_fee = 1000 WHERE id = 'sf2' AND entry_fee IS NULL" });
+  await db.execute({
+    sql: "UPDATE duel_games SET ram_config = ? WHERE id = 'sf2' AND ram_config IS NULL",
+    args: [JSON.stringify(SF2_RAM_CONFIG)],
+  });
+  console.log("  ✓ SF2 ram_config set");
 
   // 5. Seed version 1 snapshots (idempotent)
   console.log("🔧 Seeding config versions...");
   const seeds = [
     ["kof98", KOF98_RAM_CONFIG, "v1 — RAM + contrôles initiaux", KOF98_CONTROLS],
-    ["kof2002", KOF2002_RAM_CONFIG, "v1 — santé + timer + mode (détection basique)", KOF98_CONTROLS],
-    ["sf2", null, "v1 — contrôles uniquement (détection pixel)", []],
+    ["kof2002", KOF2002_RAM_CONFIG, "v1 — full RAM config (same engine as KOF98, addresses need live verification)", KOF98_CONTROLS],
+    ["sf2", SF2_RAM_CONFIG, "v1 — RAM basique (PAR-based, needs live verification)", []],
   ];
   for (const seed of seeds) {
     const gameId = seed[0];

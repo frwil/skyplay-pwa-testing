@@ -108,6 +108,8 @@ export function useEmulator(system: SystemType = "nes") {
   /** Character names selected by each player (from char_selected / match_end messages). */
   const [p1CharName, setP1CharName] = useState<string | null>(null);
   const [p2CharName, setP2CharName] = useState<string | null>(null);
+  /** Active gift notifications for the GiftOverlay (auto-removed after 5s). */
+  const [giftNotifications, setGiftNotifications] = useState<import("../types").GiftNotifyData[]>([]);
 
   // ── Duel callbacks (stable refs) ──────────────────────────────────
   const duelCallbacksRef = useRef({
@@ -218,6 +220,13 @@ export function useEmulator(system: SystemType = "nes") {
     onResumed: () => {
       console.log("[useEmulator] ▶ Resumed");
       setPauseState(null);
+    },
+    onGiftNotify: (data: import("../types").GiftNotifyData) => {
+      setGiftNotifications((prev) => [...prev, data]);
+      // Auto-remove after 5s
+      setTimeout(() => {
+        setGiftNotifications((prev) => prev.filter((g) => g !== data));
+      }, 5000);
     },
   });
 
@@ -517,6 +526,7 @@ export function useEmulator(system: SystemType = "nes") {
             onAutoRematch: duelCallbacksRef.current.onAutoRematch,
             onPaused: duelCallbacksRef.current.onPaused,
             onResumed: duelCallbacksRef.current.onResumed,
+            onGiftNotify: duelCallbacksRef.current.onGiftNotify,
           });
         }
         return new SnesEmulatorAdapter({ onStatusChange: setStatus });
@@ -545,6 +555,7 @@ export function useEmulator(system: SystemType = "nes") {
             onAutoRematch: duelCallbacksRef.current.onAutoRematch,
             onPaused: duelCallbacksRef.current.onPaused,
             onResumed: duelCallbacksRef.current.onResumed,
+            onGiftNotify: duelCallbacksRef.current.onGiftNotify,
           });
         }
         return new NeoGeoEmulatorAdapter({ onStatusChange: setStatus });
@@ -565,6 +576,7 @@ export function useEmulator(system: SystemType = "nes") {
             onAutoRematch: duelCallbacksRef.current.onAutoRematch,
             onPaused: duelCallbacksRef.current.onPaused,
             onResumed: duelCallbacksRef.current.onResumed,
+            onGiftNotify: duelCallbacksRef.current.onGiftNotify,
         });
       default:
         return null;
@@ -833,6 +845,7 @@ export function useEmulator(system: SystemType = "nes") {
             onAutoRematch: duelCallbacksRef.current.onAutoRematch,
             onPaused: duelCallbacksRef.current.onPaused,
             onResumed: duelCallbacksRef.current.onResumed,
+            onGiftNotify: duelCallbacksRef.current.onGiftNotify,
       });
       adapterRef.current = adapter;
       const canvas = canvasRef.current;
@@ -862,6 +875,7 @@ export function useEmulator(system: SystemType = "nes") {
             onAutoRematch: duelCallbacksRef.current.onAutoRematch,
             onPaused: duelCallbacksRef.current.onPaused,
             onResumed: duelCallbacksRef.current.onResumed,
+            onGiftNotify: duelCallbacksRef.current.onGiftNotify,
       });
       adapterRef.current = adapter;
       const canvas = canvasRef.current;
@@ -947,6 +961,7 @@ export function useEmulator(system: SystemType = "nes") {
     pauseState,
     p1CharName,
     p2CharName,
+    giftNotifications,
     clearOpponentAbandoned: useCallback(() => setOpponentAbandoned(null), []),
     stopDuel: useCallback(() => {
       const adapter = adapterRef.current;
