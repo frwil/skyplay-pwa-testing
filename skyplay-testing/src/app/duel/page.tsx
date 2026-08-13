@@ -32,11 +32,12 @@ export default function DuelPage() {
   const { t } = useTranslation();
 
   // ── Game selection (fetched from DB, falls back to games.ts) ────
-  const { games: duelGames, getEntryFee, getModeEntryFee, getMode } = useDuelGames();
+  const { games: duelGames, loading: duelGamesLoading, getEntryFee, getModeEntryFee, getMode } = useDuelGames();
   // Persist game/mode selection across page refreshes via localStorage.
   // Initializer must return the SAME value on server & client to avoid hydration mismatch.
   const [selectedGameId, setSelectedGameId] = useState<string>("kof98");
-  const game: ResolvedDuelGame = duelGames.find((g) => g.id === selectedGameId) ?? duelGames[0];
+  const game: ResolvedDuelGame | undefined = duelGames.find((g) => g.id === selectedGameId) ?? duelGames[0];
+  const loading = duelGamesLoading || !game;
   const [selectedModeId, setSelectedModeId] = useState<string>("kof98_standard");
   // Hydrate from localStorage after first render (client-only)
   useEffect(() => {
@@ -154,9 +155,9 @@ export default function DuelPage() {
     userId: currentUserId,
     username: currentUsername,
     isDevMode,
-    enabled: authChecked && !!currentUserId && emu.status === "idle",
-    system: game.system,
-    rom: game.rom,
+    enabled: authChecked && !!currentUserId && emu.status === "idle" && !!game,
+    system: game?.system ?? "neogeo",
+    rom: game?.rom ?? "",
   });
 
   // Auto-join lobby when authenticated and idle
@@ -178,7 +179,7 @@ export default function DuelPage() {
 
   // When duelSession is set, connect to the game
   useEffect(() => {
-    if (!lobby.duelSession || emu.status !== "idle") return;
+    if (!lobby.duelSession || emu.status !== "idle" || !game) return;
 
     const session = lobby.duelSession;
     const isHost = session.player1Id === currentUserId;
@@ -286,14 +287,14 @@ export default function DuelPage() {
         setRulesChallenge({
           challengeId: c.id as number,
           opponentName,
-          gameLabel: game.label,
+          gameLabel: game?.label ?? "",
           modeLabel: currentMode?.label?.split(" — ").pop() ?? "Standard",
           matchCount: (c.matchCount as number) ?? 1,
           entryFee: entryFee,
         });
       })
       .catch(() => { setRulesError("Impossible de charger les détails du défi"); });
-  }, [lobby.rulesPendingChallenge?.duelChallengeId, currentUserId, game.label, currentMode?.label, entryFee, isDevMode, duelProfiles]);
+  }, [lobby.rulesPendingChallenge?.duelChallengeId, currentUserId, game?.label, currentMode?.label, entryFee, isDevMode, duelProfiles]);
 
   const handleRulesAccept = useCallback(async () => {
     if (!rulesChallenge || rulesAccepting || rulesWaitingOpponent) return;
@@ -831,6 +832,15 @@ export default function DuelPage() {
       setTimeout(() => setCopied(false), 2000);
     } catch { /* clipboard denied */ }
   }, [emu.roomCode]);
+
+  // Loading guard — placed after ALL hooks
+  if (duelGamesLoading || !game) {
+    return (
+      <main className="min-h-screen bg-black flex items-center justify-center">
+        <div className="text-white text-lg">Chargement des jeux...</div>
+      </main>
+    );
+  }
 
   return (
     <main className="relative min-h-screen">
@@ -1383,6 +1393,42 @@ export default function DuelPage() {
 
           {/* Live in-match HUD: teams + active char + gauge mode */}
           {gameActive && <KofMatchHUD state={emu.matchState} />}
+
+          {/* Brawler game-over overlay */}
+          {emu.brawlerGameOver && (
+            <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/70 backdrop-blur-[4px]">
+              <div className="flex flex-col items-center gap-4 p-8 rounded-xl" style={{ backgroundColor: "rgba(20,20,20,0.95)", border: "2px solid rgba(255,50,50,0.6)" }}>
+                <span className="text-5xl font-black tracking-widest uppercase" style={{ color: "#ff3333", textShadow: "0 0 20px rgba(255,0,0,0.5)" }}>
+                  GAME OVER
+                </span>
+                <div className="flex gap-8 text-center">
+                  <div>
+                    <p className="text-xs uppercase tracking-wider text-gray-400">Score</p>
+                    <p className="text-2xl font-bold text-white">{emu.brawlerGameOver.p1Score}</p>
+                  </div>
+                  {emu.brawlerGameOver.p1Rank != null && (
+                    <div>
+                      <p className="text-xs uppercase tracking-wider text-gray-400">Rank</p>
+                      <p className="text-2xl font-bold text-cyan-300">
+                        {emu.brawlerGameOver.p1Rank}
+                        {emu.brawlerGameOver.p1RankSuffix ?? ""}
+                      </p>
+                    </div>
+                  )}
+                  <div>
+                    <p className="text-xs uppercase tracking-wider text-gray-400">Level</p>
+                    <p className="text-2xl font-bold text-yellow-400">{emu.brawlerGameOver.levelReached}</p>
+                  </div>
+                </div>
+                <button
+                  onClick={handleExit}
+                  className="mt-4 px-6 py-2 rounded-lg bg-red-600 text-white font-bold hover:bg-red-500 transition"
+                >
+                  Quitter
+                </button>
+              </div>
+            </div>
+          )}
 
           {/* Paused overlay — rich countdown overlay (duel pause via server) */}
           {emu.pauseState && lobby.duelSession && (() => {

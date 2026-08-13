@@ -165,6 +165,7 @@ function xdotoolToRetroarchKey(xdo: string): string | null {
 /** Core name mapping for each system type. */
 export const SYSTEM_CORES: Record<string, string> = {
   neogeo: "fbneo_libretro.so",
+  cps1: "fbneo_libretro.so",   // CPS1 arcade — same FBNeo core as NeoGeo
   ps1: "pcsx_rearmed_libretro.so",
   snes: "snes9x_libretro.so",
 };
@@ -172,9 +173,30 @@ export const SYSTEM_CORES: Record<string, string> = {
 /** System display resolution. */
 export const SYSTEM_RESOLUTIONS: Record<string, { w: number; h: number }> = {
   neogeo: { w: 320, h: 224 },
-  ps1: { w: 640, h: 480 },
-  snes: { w: 256, h: 224 },
+  cps1:   { w: 384, h: 224 },   // CPS1 native — wider than NeoGeo
+  ps1:    { w: 640, h: 480 },
+  snes:   { w: 256, h: 224 },
 };
 
 /** 3x upscale for the display (Xvfb screen size). */
 export const UPSCALE = 3;
+
+// ── Pixel-based brawler detection constants ──────────────────────────
+
+/** Frame rate for the pixel health/lives capture stream. */
+export const BRAWLER_PIXEL_FPS = 4;
+/** Minimum game duration before game-over can trigger (30s guard). */
+export const BRAWLER_MIN_GAME_MS = 30_000;
+/** Consecutive frames where all visible players are dead to confirm game-over.
+ *  Must be larger than deathConfirmFrames (6) so individual deaths fire first. */
+export const BRAWLER_GAME_OVER_STREAK = 12;
+/** Minimum fraction of ROI row height for a column to be "filled" with health pixels. */
+export const MIN_COL_PIXELS_RATIO = 0.33;
+/** Health-pixel predicate: minimum saturation (max-min). */
+export const HEALTH_MIN_SATURATION = 30;
+/** Health-pixel predicate: minimum brightness (max channel). */
+export const HEALTH_MIN_BRIGHTNESS = 80;
+/** Smoothing window for health % (median-of-N). */
+export const HEALTH_SMOOTH_WINDOW = 5;
+/** Death cooldown in frames after a confirmed death (~2.5s at 4 fps). */
+export const BRAWLER_DEATH_COOLDOWN = 10;

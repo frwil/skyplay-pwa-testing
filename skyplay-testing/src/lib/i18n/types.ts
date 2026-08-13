@@ -419,6 +419,7 @@ export interface Dictionary {
       gba: string;
       neogeo: string;
       ps1: string;
+      cps1: string;
     };
     desktopBanner: {
       title: string;

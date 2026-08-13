@@ -791,21 +791,58 @@ export default function PlayPage() {
         )}
 
         {/* Emulator */}
-        <EmulatorCore
-          emu={emu}
-          system={system}
-          onSystemChange={setSystem}
-          onAutoDetectConfirm={(detected) => {
-            setAutoDetectResult({
-              result: detected.trigger.result,
-              romName: detected.profile.romName,
-            });
-          }}
-          netplayInfo={netplayInfo}
-          isPopup={isPopup}
-          onOpenPopup={handleOpenPopup}
-          receiverId={netplay.session?.opponentId ? String(netplay.session.opponentId) : null}
-        />
+        <div className="relative">
+          <EmulatorCore
+            emu={emu}
+            system={system}
+            onSystemChange={setSystem}
+            onAutoDetectConfirm={(detected) => {
+              setAutoDetectResult({
+                result: detected.trigger.result,
+                romName: detected.profile.romName,
+              });
+            }}
+            netplayInfo={netplayInfo}
+            isPopup={isPopup}
+            onOpenPopup={handleOpenPopup}
+            receiverId={netplay.session?.opponentId ? String(netplay.session.opponentId) : null}
+          />
+          {/* Brawler game-over overlay */}
+          {emu.brawlerGameOver && (
+            <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/70 backdrop-blur-[4px]">
+              <div className="flex flex-col items-center gap-4 p-8 rounded-xl" style={{ backgroundColor: "rgba(20,20,20,0.95)", border: "2px solid rgba(255,50,50,0.6)" }}>
+                <span className="text-5xl font-black tracking-widest uppercase" style={{ color: "#ff3333", textShadow: "0 0 20px rgba(255,0,0,0.5)" }}>
+                  GAME OVER
+                </span>
+                <div className="flex gap-8 text-center">
+                  <div>
+                    <p className="text-xs uppercase tracking-wider text-gray-400">Score</p>
+                    <p className="text-2xl font-bold text-white">{emu.brawlerGameOver.p1Score}</p>
+                  </div>
+                  {emu.brawlerGameOver.p1Rank != null && (
+                    <div>
+                      <p className="text-xs uppercase tracking-wider text-gray-400">Rank</p>
+                      <p className="text-2xl font-bold text-cyan-300">
+                        {emu.brawlerGameOver.p1Rank}
+                        {emu.brawlerGameOver.p1RankSuffix ?? ""}
+                      </p>
+                    </div>
+                  )}
+                  <div>
+                    <p className="text-xs uppercase tracking-wider text-gray-400">Level</p>
+                    <p className="text-2xl font-bold text-yellow-400">{emu.brawlerGameOver.levelReached}</p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => window.location.reload()}
+                  className="mt-4 px-6 py-2 rounded-lg bg-red-600 text-white font-bold hover:bg-red-500 transition"
+                >
+                  Quitter
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
       </section>
 
       {/* Footer — hidden in popup mode */}

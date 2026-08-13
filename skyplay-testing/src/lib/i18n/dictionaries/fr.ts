@@ -504,6 +504,7 @@ const fr: Dictionary = {
       gba: "Game Boy Advance",
       neogeo: "Neo Geo (Desktop)",
       ps1: "PlayStation (Desktop)",
+      cps1: "CPS1 Arcade (Desktop)",
     },
     desktopBanner: {
       title: "Neo Geo & PlayStation disponibles sur desktop",

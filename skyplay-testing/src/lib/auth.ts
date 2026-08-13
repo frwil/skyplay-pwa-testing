@@ -23,9 +23,11 @@ export function generatePin(): string {
 
 // ── JWT utilities ──
 
-const AUTH_SECRET = new TextEncoder().encode(
-  process.env.AUTH_SECRET || "skyplay-dev-secret-change-in-production"
-);
+const _rawSecret = process.env.AUTH_SECRET;
+if (!_rawSecret) {
+  throw new Error("AUTH_SECRET environment variable is required. Set it before starting the server.");
+}
+const AUTH_SECRET = new TextEncoder().encode(_rawSecret);
 
 const COOKIE_NAME = "auth_token";
 const TOKEN_MAX_AGE = 60 * 60 * 24; // 24 hours

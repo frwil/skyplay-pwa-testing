@@ -515,12 +515,14 @@ async function initializeSchema(): Promise<void> {
   try { await getClient().execute("INSERT OR IGNORE INTO duel_games (id, label, system, rom, mode, category, cover_image, description) VALUES ('sf2', 'Street Fighter 2', 'snes', 'Street Fighter 5 (Hack).smc', 'fighting', 'fighting', 'https://upload.wikimedia.org/wikipedia/en/1/1d/SF2_JPN_flyer.jpg', 'The classic that defined the genre. Pick your world warrior and fight through 1v1 matches with unique special moves and combos.')"); } catch {}
   try { await getClient().execute("INSERT OR IGNORE INTO duel_games (id, label, system, rom, mode, category, cover_image, description) VALUES ('kof2002', 'KOF 2002', 'neogeo', 'kof2002.zip', 'fighting', 'fighting', 'https://upload.wikimedia.org/wikipedia/en/3/3b/The_King_of_Fighters_2002_arcade_flyer.jpg', 'The ultimate KOF dream match. Refined 3v3 mechanics, massive character roster, and the fan-favorite MAX mode system.')"); } catch {}
   try { await getClient().execute("INSERT OR IGNORE INTO duel_games (id, label, system, rom, mode, category, cover_image, description) VALUES ('sfa2', 'Street Fighter Alpha 2', 'snes', 'Street Fighter Alpha 2 (Europe).sfc', 'fighting', 'fighting', 'https://upload.wikimedia.org/wikipedia/en/3/3f/Street_Fighter_Alpha_2_flyer.png', 'The Alpha series on SNES. Expanded roster with custom combos, alpha counters, and a dramatic battle system.')"); } catch {}
+  try { await getClient().execute("INSERT OR IGNORE INTO duel_games (id, label, system, rom, mode, category, cover_image, description) VALUES ('dino', 'Cadillacs and Dinosaurs', 'cps1', 'dino.zip', 'brawler', 'brawler', 'https://upload.wikimedia.org/wikipedia/en/e/ec/Cadillacs_and_dinosaurs_flyer.png', 'The classic CPS1 beat-em-up. Four heroes fight through a post-apocalyptic world filled with dinosaurs and punks. Co-op arcade action at its finest.')"); } catch {}
 
   // Update existing rows that were seeded before category/description/cover_image columns existed
   try { await getClient().execute({ sql: "UPDATE duel_games SET category = 'fighting', cover_image = 'https://upload.wikimedia.org/wikipedia/en/1/18/The_King_of_Fighters_%2798_arcade_flyer.jpg', description = 'The legendary Neo Geo fighting game. 3v3 team battles, advanced gauge system, and a roster of 38 iconic characters.' WHERE id = 'kof98' AND (category IS NULL OR cover_image IS NULL)" }); } catch {}
   try { await getClient().execute({ sql: "UPDATE duel_games SET category = 'fighting', cover_image = 'https://upload.wikimedia.org/wikipedia/en/1/1d/SF2_JPN_flyer.jpg', description = 'The classic that defined the genre. Pick your world warrior and fight through 1v1 matches with unique special moves and combos.' WHERE id = 'sf2' AND (category IS NULL OR cover_image IS NULL)" }); } catch {}
   try { await getClient().execute({ sql: "UPDATE duel_games SET category = 'fighting', cover_image = 'https://upload.wikimedia.org/wikipedia/en/3/3b/The_King_of_Fighters_2002_arcade_flyer.jpg', description = 'The ultimate KOF dream match. Refined 3v3 mechanics, massive character roster, and the fan-favorite MAX mode system.' WHERE id = 'kof2002' AND (category IS NULL OR cover_image IS NULL)" }); } catch {}
   try { await getClient().execute({ sql: "UPDATE duel_games SET category = 'fighting', cover_image = 'https://upload.wikimedia.org/wikipedia/en/3/3f/Street_Fighter_Alpha_2_flyer.png', description = 'The Alpha series on SNES. Expanded roster with custom combos, alpha counters, and a dramatic battle system.' WHERE id = 'sfa2' AND (category IS NULL OR cover_image IS NULL)" }); } catch {}
+  try { await getClient().execute({ sql: "UPDATE duel_games SET category = 'brawler', cover_image = 'https://upload.wikimedia.org/wikipedia/en/e/ec/Cadillacs_and_dinosaurs_flyer.png', description = 'The classic CPS1 beat-em-up. Four heroes fight through a post-apocalyptic world filled with dinosaurs and punks. Co-op arcade action at its finest.' WHERE id = 'dino' AND (category IS NULL OR cover_image IS NULL)" }); } catch {}
 
   // Seed default modes for each game (idempotent)
   const GAME_MODES = [
@@ -536,6 +538,9 @@ async function initializeSchema(): Promise<void> {
     { id: "sfa2_standard", game_id: "sfa2", mode_key: "standard", label: "Street Fighter Alpha 2 — Standard", match_count: 1, entry_fee: 1000 },
     { id: "sfa2_xl", game_id: "sfa2", mode_key: "xl", label: "Street Fighter Alpha 2 — XL", match_count: 3, entry_fee: 2500 },
     { id: "sfa2_fighter", game_id: "sfa2", mode_key: "fighter", label: "Street Fighter Alpha 2 — Fighter", match_count: 5, entry_fee: 4000 },
+    { id: "dino_standard", game_id: "dino", mode_key: "standard", label: "Cadillacs & Dinos — Standard", match_count: 1, entry_fee: 1000 },
+    { id: "dino_xl", game_id: "dino", mode_key: "xl", label: "Cadillacs & Dinos — XL", match_count: 3, entry_fee: 2500 },
+    { id: "dino_survival", game_id: "dino", mode_key: "survival", label: "Cadillacs & Dinos — Survival", match_count: 1, entry_fee: 2000 },
   ];
 
   // Build multilingual rules JSON for a mode
@@ -621,6 +626,14 @@ async function initializeSchema(): Promise<void> {
   ];
   for (const [action, keys, player] of sf2Controls) {
     try { await getClient().execute({ sql: "INSERT OR IGNORE INTO duel_game_controls (game_id, player, action_key, label_key, default_keys) VALUES (?,?,?,?,?)", args: ["sf2", player, action, action, keys] }); } catch {}
+  }
+  // Cadillacs and Dinosaurs controls (CPS1 brawler)
+  const dinoControls = [
+    ["ctrlMove","W A S D",1],["ctrlAttack","Z",1],["ctrlJump","X",1],["ctrlSpecial","C",1],["ctrlCoin","Space",1],["ctrlStart","Enter",1],
+    ["ctrlMove","↑ ↓ ← →",2],["ctrlAttack","I",2],["ctrlJump","O",2],["ctrlSpecial","K",2],["ctrlCoin","Shift",2],["ctrlStart","Ctrl",2],
+  ];
+  for (const [action, keys, player] of dinoControls) {
+    try { await getClient().execute({ sql: "INSERT OR IGNORE INTO duel_game_controls (game_id, player, action_key, label_key, default_keys) VALUES (?,?,?,?,?)", args: ["dino", player, action, action, keys] }); } catch {}
   }
 
   // ─── Seed config version 1 for each game (idempotent) ───

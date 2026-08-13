@@ -40,37 +40,37 @@
 <body>
 <div class="header">
 <h1>SKY PLAY — État d&rsquo;avancement complet</h1>
-<p>2026-07-22 &middot; Branche <code>main</code> &middot; SFA2 complet + cleanup escrow + pick order KOF98 câblé</p>
+<p>2026-07-30 &middot; Branche <code>main</code> &middot; CPS1 Cadillacs &amp; Dinosaurs int&eacute;gr&eacute; + Scan RAM #1 termin&eacute; + Analyse co&ucirc;ts prod</p>
 </div>
 
 <div class="summary-grid">
 <div class="summary-box box-committed">
 <h3>&#x2705; Commités</h3>
-<div class="count">85+</div>
+<div class="count">163</div>
 <div>commits depuis juin</div>
 </div>
 <div class="summary-box box-wip">
 <h3>&#x1F527; En cours (WD)</h3>
-<div class="count">~30</div>
+<div class="count">~20</div>
 <div>fichiers modifiés/nouveaux</div>
 </div>
 <div class="summary-box box-todo">
 <h3>&#x274C; Reste à faire</h3>
-<div class="count">~10</div>
+<div class="count">~8</div>
 <div>tâches identifiées</div>
 </div>
 <div class="summary-box box-docs">
 <h3>&#x1F4C4; Docs</h3>
-<div class="count">14</div>
+<div class="count">23</div>
 <div>memory files + status</div>
 </div>
 </div>
 
 <h1>SKY PLAY — État d'avancement complet</h1>
 
-<p><strong>Date</strong> : 2026-07-27</p>
-<p><strong>Branche</strong> : <code>main</code> — offline-first SQLite, winner_share DB, nettoyage configs hardcodées</p>
-<p><strong>Dernier commit</strong> : <code>d929fb5</code> — offline-first local SQLite + winner_share DB-configurable + hardcoded config cleanup</p>
+<p><strong>Date</strong> : 2026-07-30</p>
+<p><strong>Branche</strong> : <code>main</code> — CPS1/Cadillacs & Dinosaurs intégré (non commité), RAM discovery en cours</p>
+<p><strong>Dernier commit</strong> : <code>82b10e0</code> — feat(sprint3): real-time gift UI — GiftPanel, DonorRanking, API proxy, hostUserId</p>
 
 <hr>
 
@@ -189,6 +189,7 @@
 <tr><td>Neo Geo</td><td>fbneo_libretro.so</td><td>320×224 (3x=960×672)</td><td>✅ Stable</td></tr>
 <tr><td>PS1</td><td>pcsx_rearmed_libretro.so</td><td>640×480 (3x=1920×1440)</td><td>✅ Stable</td></tr>
 <tr><td>SNES</td><td>snes9x_libretro.so</td><td>256×224 (3x=768×672)</td><td>✅ (Docker + code)</td></tr>
+<tr><td>CPS1</td><td>fbneo_libretro.so</td><td>384×224 (3x=1152×672)</td><td>🔧 WD (non commité)</td></tr>
 </tbody></table>
 
 <h3>3.2 Détection santé KOF98 (RAM — FBNeo) ✅</h3>
@@ -235,7 +236,92 @@
 <tr><td><strong>Perfect KO (KOF98 seulement)</strong></td><td>✅</td><td>RAM health + timer > 0, KOF98 only. SFA2 : compteurs ne donnent pas le perfect</td></tr>
 </tbody></table>
 
-<h3>3.4 Ancienne détection pixel SFA2 (SUPPRIMÉE 26/07)</h3>
+<h3>3.4 Cadillacs and Dinosaurs (CPS1) — Brawler Mode 🔧 WD</h3>
+
+<p><strong>17 fichiers modifiés, +521/-40 lignes (non commité)</strong></p>
+
+<h4>3.4.1 Intégration système CPS1 ✅ (non commité)</h4>
+
+<table>
+<thead><tr><th>Composant</th><th>Fichier</th><th>Changement</th></tr></thead>
+<tbody>
+<tr><td>SystemType</td><td><code>types.ts</code></td><td>Ajout <code>"cps1"</code> au discriminated union</td></tr>
+<tr><td>SYSTEM_CONFIGS</td><td><code>EmulatorAdapter.ts</code></td><td>CPS1: 384×224, 10 boutons, fbneo, cloud:true</td></tr>
+<tr><td>SYSTEM_KEY_MAPS</td><td><code>EmulatorAdapter.ts</code></td><td>Mapping clavier CPS1 (Arrow+WASD pour d-pad, Z/X/C/V actions)</td></tr>
+<tr><td>GAMEPAD_MAPPINGS</td><td><code>EmulatorAdapter.ts</code></td><td>Mapping manette CPS1</td></tr>
+<tr><td>useEmulator</td><td><code>hooks/useEmulator.ts</code></td><td><code>case "cps1"</code> → CloudAdapter (mêmes callbacks que neogeo)</td></tr>
+<tr><td>cloud-session API</td><td><code>route.ts</code></td><td><code>cps1</code> ajouté à la validation system</td></tr>
+<tr><td>ROM list API</td><td><code>roms/route.ts</code></td><td>Override <code>CPS1_ROMS</code> set (dino.zip → cps1, pas neogeo)</td></tr>
+<tr><td>GameControls</td><td><code>GameControls.tsx</code></td><td><code>cps1</code> dans <code>SYSTEM_LIST</code></td></tr>
+<tr><td>i18n</td><td><code>types.ts</code> + <code>en.ts</code> + <code>fr.ts</code></td><td>Label <code>cps1: "CPS1 Arcade (Desktop)"</code></td></tr>
+</tbody></table>
+
+<h4>3.4.2 Game-server brawler prep 🔧 WD</h4>
+
+<table>
+<thead><tr><th>Composant</th><th>Fichier</th><th>Description</th></tr></thead>
+<tbody>
+<tr><td>config.ts</td><td>+6 lignes</td><td>SYSTEM_CORES cps1 → fbneo, SYSTEM_RESOLUTIONS 384×224</td></tr>
+<tr><td>game-config.ts</td><td>+65 lignes</td><td>Fallback RAM config dino (adresses placeholder), champs brawler (lives, score, level, gameOverFlag)</td></tr>
+<tr><td>game-runner.ts</td><td>+250 lignes</td><td>Mode brawler: processBrawlerFrame(), événements playerDied/brawlerGameOver/brawlerState/brawlerLevelStart, auto-start gameplay (past char select + intro), pause hotkey fix (<code>input_pause_toggle = "nul"</code> + <code>xdotool key F12</code> uppercase)</td></tr>
+<tr><td>types.ts</td><td>+49 lignes</td><td>Interfaces messages brawler (BrawlerPlayerDied, BrawlerGameOver, BrawlerState, BrawlerLevelStart)</td></tr>
+<tr><td>ws-handler.ts</td><td>+43 lignes</td><td>Handlers forward brawlerPlayerDied/GameOver/State vers WebSocket clients</td></tr>
+</tbody></table>
+
+<h4>3.4.3 RAM Discovery 🔧 En cours (Scan #1 terminé 30/07)</h4>
+
+<p><strong>Scan #1 — Jack Tenrec, gameplay actif P1 (180s) :</strong></p>
+
+<table>
+<thead><tr><th>Donnée</th><th>Adresse</th><th>Confiance</th><th>Détails</th></tr></thead>
+<tbody>
+<tr><td><strong>Vies P1</strong></td><td><strong><code>0xdd15</code></strong></td><td>🟢 Élevée</td><td>Range 0-2, 14 stepDecs, valeur=1 après 1 vie perdue. Validé live.</td></tr>
+<tr><td>Niveau</td><td><code>0x879d</code> / <code>0x87a1</code></td><td>🟡 Moyenne</td><td>0→7 range, 15 jumps (trop élevé), valeur=1 après niveau 1</td></tr>
+<tr><td>Santé</td><td><code>0xd3e7</code> / <code>0xd4c7</code></td><td>🔴 Faible</td><td>200→180→0, mais à 0 quand P1 vivant (faux négatif)</td></tr>
+<tr><td>Score</td><td>—</td><td>❌ Introuvable</td><td>130 700 absent en binaire 24-bit et BCD dans les 64KB</td></tr>
+<tr><td>Char ID</td><td><code>0x0000-0x000E</code></td><td>❌ Échec</td><td>Tous à 0x00, pas discriminant</td></tr>
+<tr><td>Game Over</td><td><code>0xb2ac</code></td><td>❌ Faux positif</td><td>=1 alors que le jeu était actif</td></tr>
+<tr><td>Paire P1/P2</td><td><code>0xec32+0xec34</code></td><td>🔴 Incertain</td><td>Corr=3, max=188, mais FF en lecture live</td></tr>
+</tbody></table>
+
+<p><strong>Problèmes identifiés :</strong></p>
+<ul>
+<li>Score introuvable → encoding custom ou dynamique. Scan #2 : noter le score à plusieurs moments.</li>
+<li>Santé peu de variations → P1 n'a peut-être pas pris assez de coups variés.</li>
+<li>Pas de P2 actif → impossible de différencier P1/P2 par contraste.</li>
+</ul>
+
+<p><strong>Scan #2 planifié :</strong></p>
+<p>1. Personnage différent (Hannah/Mustapha) → trouver char ID</p>
+<p>2. P1 + P2 actifs avec dégâts différenciés</p>
+<p>3. Relever le score à T+0s, T+60s, T+120s, T+180s</p>
+<p>4. Scan ciblé sur les zones chaudes + régions 0xdd00-0xde00 et 0x8700-0x8900</p>
+
+<table>
+<thead><tr><th>Tâche</th><th>Statut</th></tr></thead>
+<tbody>
+<tr><td>Script <code>discover-dino.mjs</code></td><td>✅ Écrit (600 lignes)</td></tr>
+<tr><td>Docker rebuild avec correctifs pause</td><td>✅ Fait (30/07)</td></tr>
+<tr><td><strong>Scan #1 (Jack, P1 actif, 180s)</strong></td><td>✅ Terminé 30/07</td></tr>
+<tr><td><strong>Scan #2 (autre perso, P1+P2 actifs)</strong></td><td>🔧 <strong>En attente</strong> — utilisateur va lancer</td></tr>
+<tr><td>Adresses confirmées → game-config.ts</td><td>❌ Après scan #2</td></tr>
+<tr><td>Test end-to-end brawler</td><td>❌ Après adresses</td></tr>
+</tbody></table>
+
+<h4>3.4.4 Correctifs divers (non commité)</h4>
+
+<table>
+<thead><tr><th>Fix</th><th>Fichier</th><th>Description</th></tr></thead>
+<tbody>
+<tr><td>Pause hotkey désactivée</td><td><code>game-runner.ts</code></td><td><code>input_pause_toggle = "nul"</code> (était "f12" — causait pause involontaire)</td></tr>
+<tr><td>xdotool case fix</td><td><code>game-runner.ts</code></td><td><code>xdotool key F12</code> majuscule (minuscule <code>f12</code> ignoré par xdotool)</td></tr>
+<tr><td>layout.tsx Script</td><td><code>layout.tsx</code></td><td>Suppression <code>&lt;Script&gt;</code> next/script (bloquait le rendu React)</td></tr>
+<tr><td>/duel loading guards</td><td><code>page.tsx</code></td><td>Loading state + <code>!game</code> null guard + optional chaining (évite crash si duelGames vide)</td></tr>
+<tr><td>SKY balance test</td><td><code>sky_transactions</code></td><td>testplayer1 + testplayer2 → 20000 SKY (SQLite local)</td></tr>
+<tr><td>db.ts seed dino</td><td><code>db.ts</code></td><td>INSERT duel_games pour dino (CPS1, mode brawler)</td></tr>
+</tbody></table>
+
+<h3>3.5 Ancienne détection pixel SFA2 (SUPPRIMÉE 26/07)</h3>
 
 <p>Toute la détection visuelle/health-based KO ci-dessous a été retirée car redondante avec les round counters RAM :</p>
 <ul>
@@ -249,7 +335,7 @@
 
 <p><strong>Raison</strong> : les round counters RAM (0x0701/0x0A04) sont le ground truth — ils incrémentent atomiquement en fin de round, indépendants des heuristiques visuelles (time-over winner erroné, draw manqué, calibration asymétrique).</p>
 
-<h3>3.5 Config → DB (Turso variables)</h3>
+<h3>3.6 Config → DB (Turso variables)</h3>
 
 <ul>
 <li>TURSO_DATABASE_URL + TURSO_AUTH_TOKEN ajoutés au Docker compose</li>
@@ -257,7 +343,7 @@
 <li>🔧 <strong>WD</strong> — pas encore utilisé par le code, moins prioritaire maintenant (config RAM chargée directement)</li>
 </ul>
 
-<h3>3.6 Déploiement VPS</h3>
+<h3>3.7 Déploiement VPS</h3>
 
 <table>
 <thead><tr><th>Fichier</th><th>Statut</th></tr></thead>
@@ -367,7 +453,53 @@
 
 <hr>
 
-<h2>7. SSO Arcade</h2>
+<h2>7. Système de cadeaux virtuels (Gift System) ✅ Sprints 0-3</h2>
+
+<h3>6.1 Plateforme principale (NestJS)</h3>
+<table>
+<thead><tr><th>Fonctionnalité</th><th>Statut</th><th>Notes</th></tr></thead>
+<tbody>
+<tr><td>Modèles Prisma</td><td>✅</td><td>VirtualWallet, Gift, GiftTransaction, GiftCategory</td></tr>
+<tr><td>API catalog</td><td>✅</td><td>GET public, POST/PATCH/DELETE admin</td></tr>
+<tr><td>API wallet</td><td>✅</td><td>GET auth JWT</td></tr>
+<tr><td>API buy-coins</td><td>✅</td><td>POST auth — debit XAF, credit SkyCoins</td></tr>
+<tr><td>API send gift</td><td>✅</td><td>POST auth — atomic Prisma tx, forward game-server</td></tr>
+<tr><td>API withdraw diamonds</td><td>✅</td><td>POST auth — Diamond → XAF conversion</td></tr>
+<tr><td>API leaderboard</td><td>✅</td><td>GET public — daily/weekly/alltime</td></tr>
+<tr><td>API history</td><td>✅</td><td>GET auth — sent/received filter</td></tr>
+<tr><td>Socket.IO events</td><td>✅</td><td>gift_received, gift_sent, wallet_update, diamonds_withdrawn</td></tr>
+<tr><td>Notifications DB</td><td>✅</td><td>GIFT_RECEIVED type</td></tr>
+<tr><td>10 demo gifts seeded</td><td>✅</td><td>FREE/COMMON/RARE/EPIC/LEGENDARY</td></tr>
+</tbody></table>
+
+<h3>6.2 Game-server (spectator + gift forwarding)</h3>
+<table>
+<thead><tr><th>Fonctionnalité</th><th>Statut</th><th>Notes</th></tr></thead>
+<tbody>
+<tr><td>Spectator WebSocket</td><td>✅</td><td>JWT HS256 auth, read-only guards</td></tr>
+<tr><td>Spectator binary relay</td><td>✅</td><td>H.264 video + codec config broadcast</td></tr>
+<tr><td>POST /gift-notify</td><td>✅</td><td>Bearer auth, forward to all session viewers</td></tr>
+</tbody></table>
+
+<h3>6.3 Frontend Next.js (skyplay-testing)</h3>
+<table>
+<thead><tr><th>Fonctionnalité</th><th>Statut</th><th>Fichier</th></tr></thead>
+<tbody>
+<tr><td>API proxy routes</td><td>✅</td><td><code>src/app/api/gifts/{catalog,send,leaderboard,wallet}/route.ts</code></td></tr>
+<tr><td>Proxy helper</td><td>✅</td><td><code>src/lib/gifts-proxy.ts</code></td></tr>
+<tr><td>GiftPanel modal</td><td>✅</td><td><code>src/components/overlay/GiftPanel.tsx</code></td></tr>
+<tr><td>DonorRanking sidebar</td><td>✅</td><td><code>src/components/overlay/DonorRanking.tsx</code></td></tr>
+<tr><td>GiftOverlay animation</td><td>✅</td><td><code>src/components/overlay/GiftOverlay.tsx</code></td></tr>
+<tr><td>Spectate page gifts</td><td>✅</td><td>GiftPanel + DonorRanking + gift button</td></tr>
+<tr><td>Play page gifts</td><td>✅</td><td>receiverId = opponentId (PvP), gift button + GiftOverlay</td></tr>
+<tr><td>CloudAdapter onGiftNotify</td><td>✅</td><td>Callback + gift_notify case</td></tr>
+<tr><td>useEmulator gift state</td><td>✅</td><td>giftNotifications array, auto-remove 5s</td></tr>
+<tr><td>Host user ID resolution</td><td>✅</td><td>cloud_rooms.user_id, spectate API returns hostUserId</td></tr>
+</tbody></table>
+
+<hr>
+
+<h2>8. SSO Arcade</h2>
 
 <table>
 <thead><tr><th>Fichier</th><th>Statut</th></tr></thead>
@@ -378,9 +510,9 @@
 
 <hr>
 
-<h2>8. Migration + Hébergement</h2>
+<h2>9. Migration + Hébergement</h2>
 
-<h3>8.1 Railway → Northflank</h3>
+<h3>9.1 Railway → Northflank</h3>
 
 <table>
 <thead><tr><th>Tâche</th><th>Statut</th></tr></thead>
@@ -391,7 +523,7 @@
 <tr><td>3 WSS placeholders Northflank</td><td>Scaffolded, pas configuré</td></tr>
 </tbody></table>
 
-<h3>8.2 VPS (alternative)</h3>
+<h3>9.2 VPS (alternative)</h3>
 
 <table>
 <thead><tr><th>Tâche</th><th>Statut</th></tr></thead>
@@ -403,7 +535,7 @@
 
 <hr>
 
-<h2>9. Plateforme principale (SKY-PLAY-Platform-main/)</h2>
+<h2>10. Plateforme principale (SKY-PLAY-Platform-main/)</h2>
 
 <p>Dossier untracké contenant :</p>
 
@@ -423,7 +555,7 @@
 
 <hr>
 
-<h2>10. Scripts & Tests (untrackés)</h2>
+<h2>11. Scripts & Tests (untrackés)</h2>
 
 <table>
 <thead><tr><th>Script</th><th>Description</th></tr></thead>
@@ -434,13 +566,15 @@
 <tr><td><code>scripts/reset-test-sky.mjs</code></td><td>Reset SKY test</td></tr>
 <tr><td><code>apps/game-server/scripts/analyze-stripe-cols.cjs</code></td><td>Analyse colonnes stripe santé (diagnostic perfect KO)</td></tr>
 <tr><td><code>apps/game-server/scripts/scan-sfa2-timer.mjs</code></td><td>Génération templates timer SFA2</td></tr>
+<tr><td><code>apps/game-server/scripts/discover-dino.mjs</code></td><td>🆕 Découverte RAM Cadillacs & Dinosaurs (CPS1, 600 lignes)</td></tr>
+<tr><td><code>apps/game-server/scripts/start-dino.sh</code></td><td>🆕 Script lancement dino (helper)</td></tr>
 </tbody></table>
 
 <p>*Nettoyage 17/07 : supprimés <code>nav-sfa2.*</code>, <code>scan-sfa2-ram.mjs</code>, <code>test-keys.cjs</code>, <code>test-ws.mjs</code>, <code>debug-*.png/jpg</code>, <code>screenshots/</code>, captures <code>.rgb</code> (approches abandonnées / debug one-shot). Conservés : <code>char-select-shots/</code> (tâches portraits) et <code>recordings/templates</code> + <code>timercap</code> (templates timer).*</p>
 
 <hr>
 
-<h2>11. Résumé visuel</h2>
+<h2>12. Résumé visuel</h2>
 
 <pre><code>┌──────────────────────────────────────────────────────────────────┐
 │                     SKY PLAY — ÉTAT PROJET                        │
@@ -455,40 +589,46 @@
 │ │ RulesOverlay│ VPS deploy   │ Multi-challenge  │ vsync video   │ │
 │ │ DB registre │ winner_share │ entry_fee dyn.  │ Offline-first │ │
 │ │ escrow rooms│ bank platform│ Sync heartbeat  │ SFA2 RAM      │ │
+│ │ Gift System │ GiftPanel    │ DonorRanking    │ API proxy     │ │
+│ │ Spectate WS │ GiftOverlay  │ Wallet virtuel  │ Leaderboard   │ │
 │ └─────────────┴──────────────┴─────────────────┴───────────────┘ │
 │                                                                   │
 │ 🔧 NON COMMITÉ (working tree)                                     │
 │ ┌─────────────┬──────────────┬─────────────────┬───────────────┐ │
 │ │ Rules flow  │ Confirm-rule │ Recovery lobby   │ DuelPause     │ │
 │ │ DuelScore   │ DuelWizard   │ Auto-rematch    │ HeaderAuth    │ │
-│ │ SSO Arcade  │ Lieu partage │ WSS URL regen   │               │ │
+│ │ SSO Arcade  │ Lieu partage │ WSS URL regen   │ CPS1 system   │ │
+│ │ CPS1 brawler│ Dino RAM     │ layout fix      │ /duel fix     │ │
+│ │ Pause fix   │ xdotool fix  │ SKY testplayers │ dino db seed  │ │
 │ └─────────────┴──────────────┴─────────────────┴───────────────┘ │
 │                                                                   │
 │ ❌ NON FAIT                                                       │
 │ ┌─────────────┬──────────────┬─────────────────┬───────────────┐ │
-│ │ Northflank  │ Secret rotate│ KOF2002 RAM    │               │ │
-│ │ swap URLs   │              │ complet        │               │ │
+│ │ Northflank  │ Secret rotate│ KOF2002 RAM    │ Dino RAM      │ │
+│ │ swap URLs   │              │ complet        │ confirmé      │ │
 │ └─────────────┴──────────────┴─────────────────┴───────────────┘ │
 │                                                                   │
 └──────────────────────────────────────────────────────────────────┘</code></pre>
 
 <hr>
 
-<h2>12. Priorités restantes</h2>
+<h2>13. Priorités restantes</h2>
 
 <h3>🔴 URGENT</h3>
-<p>*Aucune tâche urgente en cours.*</p>
+<p>1. <strong>Terminer la découverte RAM Cadillacs &amp; Dinosaurs</strong> — scan en cours (30/07), gameplay actif P1</p>
+<ul>
+<li>Valider les adresses santé, vies, score, niveau, game over</li>
+<li>Cross-reference avec 2ème scan</li>
+<li>Câbler dans game-config.ts FALLBACK_RAM_CONFIGS + game-runner.ts HEALTH_MEMORY_MAP</li>
+</ul>
 
 <h3>🟡 IMPORTANT</h3>
-<p>1. <strong>Committer le working tree</strong> :</p>
+<p>1. <strong>Committer le working tree</strong> (17 fichiers, +521/-40 lignes) :</p>
 <ul>
-<li>~~D-pad tracking~~ ✅ Retiré (26/07)</li>
-<li>~~Détection visuelle/pixel SFA2~~ ✅ Retiré (26/07), RAM-only</li>
-<li>~~Lot 1 : game-runner + pixel/~~ ✅ Supprimé (plus pertinent)</li>
-<li>Lot 2 : DB + registre jeux</li>
-<li>Lot 3 : Flow règles (respond → confirm-rules)</li>
-<li>Lot 4 : UI duel (wizard, pause, score, lobby)</li>
-<li>Lot 5 : i18n + config SNES + homepage</li>
+<li>Lot CPS1 : types.ts, EmulatorAdapter.ts, useEmulator.ts, cloud-session, roms API, GameControls, i18n</li>
+<li>Lot Game-server brawler : config.ts, game-config.ts, game-runner.ts, types.ts, ws-handler.ts</li>
+<li>Lot Fixes : layout.tsx (Script removal), /duel page (loading guards), pause hotkey (game-runner.ts)</li>
+<li>Lot DB : db.ts (dino seed), discover-dino.mjs (script)</li>
 </ul>
 <p>2. ~~<strong>Pick order KOF98</strong>~~ ✅ Câblé complet (22/07)</p>
 <p>3. ~~<strong>Templates portrait SFA2</strong>~~ ✅ Plus pertinent (détection visuelle supprimée)</p>
@@ -506,7 +646,288 @@
 
 <hr>
 
-<p>*Document mis à jour le 2026-07-26 — suppression détection visuelle SFA2, round counters RAM autoritaires, D-pad tracking retiré, noms persos game-agnostic, timeouts ×2.*</p>
+<h2>14. Analyse des coûts de déploiement production</h2>
+
+<p><strong>Date d'estimation</strong> : 2026-07-30</p>
+<p><strong>Périmètre</strong> : Plateforme complète (frontends, API, game-server, DB, stockage)</p>
+<p><strong>Monnaie</strong> : EUR (conversion USD → EUR au taux ~0.92)</p>
+
+<hr>
+
+<h3>14.1 Architecture cible</h3>
+
+<pre><code>┌─────────────────────────────────────────────────────────────┐
+│                       UTILISATEURS                           │
+│  Navigateur (Cameroun, Afrique, Europe)                       │
+└──────────┬──────────────────────┬───────────────────────────┘
+           │ HTTPS (pages, API)    │ WSS (streaming vidéo)
+           ▼                       ▼
+┌──────────────────┐    ┌──────────────────────┐
+│  VERCEL (edge)    │    │  GAME-SERVER (VPS)    │
+│  • Next.js PWA    │    │  • Docker RetroArch   │
+│  • API routes     │    │  • Xvfb + FFmpeg      │
+│  • Pages statiques│    │  • WebSocket WSS      │
+└────────┬─────────┘    └──────────┬───────────┘
+         │                         │
+         ▼                         ▼
+┌──────────────────┐    ┌──────────────────────┐
+│  TURSO (libsql)   │    │  NORTHFLANK (API)     │
+│  • Config jeux   │    │  • NestJS backend     │
+│  • Lobby duels   │    │  • Gift System        │
+│  • Résultats     │    │  • Auth/SSO           │
+│  • Transactions  │    │  • Notifications      │
+└──────────────────┘    └──────────────────────┘</code></pre>
+
+<hr>
+
+<h3>14.2 Détail par service</h3>
+
+<h4>A. Vercel — Frontend + API Routes</h4>
+
+<table>
+<thead><tr><th>Ressource</th><th>Plan</th><th>Coût mensuel</th><th>Notes</th></tr></thead>
+<tbody>
+<tr><td>Pro plan (2 membres)</td><td>Pro</td><td><strong>20 €</strong></td><td>Inclut 2 projets simultanés, SSO, analytics</td></tr>
+<tr><td>Bande passante</td><td>Inclus (1 TB)</td><td>0 €</td><td>Pages + API légères, pas de streaming</td></tr>
+<tr><td>Function execution</td><td>Inclus (1000 GB-hrs)</td><td>0 €</td><td>API routes (lobby, auth, duel CRUD) très légères</td></tr>
+<tr><td>Build minutes</td><td>Inclus (6000 min)</td><td>0 €</td><td>Déploiements Next.js</td></tr>
+<tr><td><strong>Sous-total Vercel</strong></td><td></td><td><strong>20 €/mois</strong></td><td></td></tr>
+</tbody></table>
+
+<p><strong>Détail</strong> : Les streams vidéo passent en WebSocket direct (game-server → navigateur), sans transiter par Vercel. Le frontend ne consomme que des appels API REST légers (JSON, <1 KB par requête). Même à 10 000 utilisateurs/jour, on reste dans le tier gratuit.</p>
+
+<p><strong>Marge de sécurité</strong> : Ajouter 10-50 € si les API routes deviennent plus lourdes (upload, traitement). Peu probable à court terme.</p>
+
+<hr>
+
+<h4>B. Game-server (VPS) — Le poste principal</h4>
+
+<p>Chaque duel consomme environ <strong>1,5-2 vCPU</strong> (Xvfb + RetroArch FBNeo + 2 flux FFmpeg libx264/Opus par joueur). Avec GPU encoding (h264_nvenc/vaapi), on réduit à ~0,5 vCPU par duel.</p>
+
+<p>##### Tier 1 — Démarrage (1-3 duels simultanés)</p>
+
+<table>
+<thead><tr><th>Ressource</th><th>Spécification</th><th>Coût mensuel</th><th>Fournisseur</th></tr></thead>
+<tbody>
+<tr><td>VPS Cloud L</td><td>8 vCPU, 30 GB RAM, 800 GB SSD</td><td><strong>18 €</strong></td><td>Contabo</td></tr>
+<tr><td>Bande passante</td><td>Illimité (port 1 Gbps)</td><td>0 €</td><td>Inclus</td></tr>
+<tr><td>IP statique</td><td>IPv4 + IPv6</td><td>0 €</td><td>Inclus</td></tr>
+<tr><td><strong>Sous-total Tier 1</strong></td><td></td><td><strong>18 €/mois</strong></td><td></td></tr>
+</tbody></table>
+
+<p>Capacité estimée : 3-5 duels simultanés (software encoding), connexions spectateurs illimitées (relay binaire, quasi gratuit).</p>
+
+<p>##### Tier 2 — Croissance Cameroun (5-15 duels simultanés)</p>
+
+<table>
+<thead><tr><th>Ressource</th><th>Spécification</th><th>Coût mensuel</th><th>Fournisseur</th></tr></thead>
+<tbody>
+<tr><td>VPS Cloud XL</td><td>10 vCPU, 60 GB RAM, 1.6 TB SSD</td><td><strong>27 €</strong></td><td>Contabo</td></tr>
+<tr><td>OU Serveur dédié</td><td>AX42 (6c/12t, 64 GB, 2×512 NVMe)</td><td><strong>49 €</strong></td><td>Hetzner</td></tr>
+<tr><td>Bande passante</td><td>Illimité / 1 Gbps</td><td>0 €</td><td>Inclus</td></tr>
+<tr><td><strong>Sous-total Tier 2</strong></td><td></td><td><strong>27-49 €/mois</strong></td><td></td></tr>
+</tbody></table>
+
+<p>Capacité estimée : 6-12 duels simultanés (software), 10-20 (GPU encoding).</p>
+
+<p>##### Tier 3 — Scale international (20-50+ duels simultanés)</p>
+
+<table>
+<thead><tr><th>Ressource</th><th>Spécification</th><th>Coût mensuel</th><th>Fournisseur</th></tr></thead>
+<tbody>
+<tr><td>2× Serveur dédié</td><td>AX52 (8c/16t, 128 GB, 2×1TB NVMe)</td><td><strong>2×74 € = 148 €</strong></td><td>Hetzner</td></tr>
+<tr><td>OU Multi-VPS</td><td>3-4× Cloud XL (10 vCPU, 60 GB)</td><td><strong>3-4×27 € = 81-108 €</strong></td><td>Contabo</td></tr>
+<tr><td>Load balancer</td><td>HAProxy ou Traefik sur VPS d'entrée</td><td><strong>5-10 €</strong></td><td>—</td></tr>
+<tr><td><strong>Sous-total Tier 3</strong></td><td></td><td><strong>86-158 €/mois</strong></td><td></td></tr>
+</tbody></table>
+
+<p>##### Option alternative : Northflank (scaling à la demande)</p>
+
+<table>
+<thead><tr><th>Composant</th><th>Coût unitaire</th><th>Pour 1000 duels/mois (15 min)</th></tr></thead>
+<tbody>
+<tr><td>Container 2 vCPU / 4 GB</td><td>~0,015 €/min</td><td>1000 × 15 × 0,015 = <strong>225 €</strong></td></tr>
+<tr><td>Bande passante sortante</td><td>0,03 €/GB</td><td>~225 MB/duel × 1000 = 225 GB → <strong>6,75 €</strong></td></tr>
+<tr><td>Container always-on (API)</td><td>~10 €/mois</td><td><strong>10 €</strong></td></tr>
+<tr><td><strong>Total Northflank</strong></td><td></td><td><strong>~242 €/mois</strong></td></tr>
+</tbody></table>
+
+<p>Northflank est plus cher que le VPS pour le jeu vidéo continu, mais évite la gestion serveur. Avantage clé : scaling multi-région (déploiement automatique Europe/Amérique/Asie).</p>
+
+<hr>
+
+<h4>C. Turso — Base de données (libsql)</h4>
+
+<table>
+<thead><tr><th>Ressource</th><th>Plan</th><th>Coût mensuel</th><th>Notes</th></tr></thead>
+<tbody>
+<tr><td>Stockage</td><td>Gratuit (9 GB)</td><td><strong>0 €</strong></td><td>Configs, lobby, users, résultats : <100 MB</td></tr>
+<tr><td>Lectures DB</td><td>Gratuit (1B rows/mo)</td><td><strong>0 €</strong></td><td>Polling lobby 2s, ~50 joueurs actifs</td></tr>
+<tr><td>Écritures DB</td><td>Gratuit (25M rows/mo)</td><td><strong>0 €</strong></td><td>Résultats, transactions : milliers/mois max</td></tr>
+<tr><td>Locations</td><td>Gratuit (3 régions)</td><td><strong>0 €</strong></td><td>EU-West + 2 autres</td></tr>
+<tr><td><strong>Sous-total Turso</strong></td><td></td><td><strong>0 €/mois</strong></td><td>Niveau gratuit très généreux</td></tr>
+</tbody></table>
+
+<p><strong>⚠️ Limites</strong> : 500 bases de données max, 9 GB total. Si on dépasse (audience >50k), passer au plan Scaler :</p>
+<ul>
+<li>0,05 €/GB stocké → ~1-5 €/mois</li>
+<li>0,03 €/GB lu → négligeable (lectures KB)</li>
+<li><strong>Plan scaler estimé : 5-25 €/mois</strong></li>
+</ul>
+
+<hr>
+
+<h4>D. Northflank — API NestJS (Gift System, Auth, Notifications)</h4>
+
+<table>
+<thead><tr><th>Ressource</th><th>Spécification</th><th>Coût mensuel</th></tr></thead>
+<tbody>
+<tr><td>Service Combined</td><td>0,5 vCPU, 512 MB RAM, always-on</td><td><strong>10-12 €</strong></td></tr>
+<tr><td>Bande passante</td><td>Trafic API léger (JSON)</td><td>Inclus</td></tr>
+<tr><td>Domaine/TLS</td><td>Automatique</td><td>Inclus</td></tr>
+<tr><td><strong>Sous-total Northflank API</strong></td><td></td><td><strong>12 €/mois</strong></td></tr>
+</tbody></table>
+
+<p>Alternative : héberger l'API sur le même VPS que le game-server → 0 € supplémentaire (démarrage).</p>
+
+<hr>
+
+<h4>E. Vercel Blob — Enregistrements vidéo (optionnel)</h4>
+
+<table>
+<thead><tr><th>Ressource</th><th>Coût unitaire</th><th>Si 100 duels/jour (RECORDING_ENABLED)</th></tr></thead>
+<tbody>
+<tr><td>Stockage (30j rétention)</td><td>0,05 €/GB</td><td>675 GB → <strong>33,75 €/mois</strong></td></tr>
+<tr><td>Bande passante (visionnage)</td><td>0,10 €/GB</td><td>Faible (consultation occasionnelle)</td></tr>
+<tr><td><strong>Sous-total Blob</strong></td><td></td><td><strong>0-40 €/mois</strong></td></tr>
+</tbody></table>
+
+<p><strong>Note</strong> : Le recording est actuellement <strong>désactivé</strong> (<code>RECORDING_ENABLED=0</code>). À activer uniquement si la monétisation le justifie (replay payant, litiges, contenu highlight). Chaque duel de 15 min à 2 Mbps ≈ 225 MB. À 1000 duels/mois = 225 GB stocké = 11,25 €/mois.</p>
+
+<hr>
+
+<h4>F. Domaines & DNS</h4>
+
+<table>
+<thead><tr><th>Domaine</th><th>Usage</th><th>Coût annuel</th><th>Coût mensuel</th></tr></thead>
+<tbody>
+<tr><td><code>skyplay.cloud</code></td><td>Principal</td><td>~12 €/an</td><td><strong>1,00 €</strong></td></tr>
+<tr><td><code>skyplay.cm</code></td><td>Local Cameroun (optionnel)</td><td>~25 €/an</td><td><strong>2,08 €</strong></td></tr>
+<tr><td>Sous-domaines Vercel</td><td><code>*.vercel.app</code></td><td>Gratuit</td><td>0 €</td></tr>
+<tr><td>Tunnel Cloudflare</td><td>Exposition game-server</td><td>Gratuit (quick)</td><td>0 €</td></tr>
+<tr><td><strong>Sous-total Domaines</strong></td><td></td><td></td><td><strong>1-3 €/mois</strong></td></tr>
+</tbody></table>
+
+<hr>
+
+<h4>G. Services auxiliaires</h4>
+
+<table>
+<thead><tr><th>Service</th><th>Usage</th><th>Coût mensuel</th></tr></thead>
+<tbody>
+<tr><td>Gmail API</td><td>Emails transactionnels (<500/j)</td><td><strong>0 €</strong></td></tr>
+<tr><td>GitHub</td><td>Code source, CI de base</td><td><strong>0 €</strong></td></tr>
+<tr><td>Docker Hub</td><td>Images conteneur (public)</td><td><strong>0 €</strong></td></tr>
+<tr><td>Cloudflare Tunnel</td><td>Exposition game-server nommé</td><td><strong>0 €</strong> (tunnel gratuit)</td></tr>
+<tr><td><strong>Sous-total Auxiliaires</strong></td><td></td><td><strong>0 €/mois</strong></td></tr>
+</tbody></table>
+
+<hr>
+
+<h3>14.3 Synthèse par tier</h3>
+
+<h4>Tier 1 — Démarrage / Démo (1-3 duels simultanés, ~500 joueurs/mois)</h4>
+
+<table>
+<thead><tr><th>Poste</th><th>Mensuel</th><th>Annuel</th></tr></thead>
+<tbody>
+<tr><td>Vercel Pro</td><td>20 €</td><td>240 €</td></tr>
+<tr><td>VPS Game-server (Contabo L)</td><td>18 €</td><td>216 €</td></tr>
+<tr><td>Turso</td><td>0 €</td><td>0 €</td></tr>
+<tr><td>Northflank API</td><td>0 € (sur VPS)</td><td>0 €</td></tr>
+<tr><td>Domaines</td><td>1 €</td><td>12 €</td></tr>
+<tr><td>Blob (recording off)</td><td>0 €</td><td>0 €</td></tr>
+<tr><td><strong>TOTAL</strong></td><td><strong>39 €</strong></td><td><strong>468 €</strong></td></tr>
+</tbody></table>
+
+<hr>
+
+<h4>Tier 2 — Croissance Cameroun (5-15 duels simultanés, ~5000 joueurs/mois)</h4>
+
+<table>
+<thead><tr><th>Poste</th><th>Mensuel</th><th>Annuel</th></tr></thead>
+<tbody>
+<tr><td>Vercel Pro</td><td>20 €</td><td>240 €</td></tr>
+<tr><td>VPS Game-server (Hetzner AX42)</td><td>49 €</td><td>588 €</td></tr>
+<tr><td>Turso (scaler si dépassement)</td><td>5 €</td><td>60 €</td></tr>
+<tr><td>Northflank API</td><td>12 €</td><td>144 €</td></tr>
+<tr><td>Domaines</td><td>1 €</td><td>12 €</td></tr>
+<tr><td>Blob (recording ON, 1000 duels/mois)</td><td>15 €</td><td>180 €</td></tr>
+<tr><td><strong>TOTAL</strong></td><td><strong>102 €</strong></td><td><strong>1 224 €</strong></td></tr>
+</tbody></table>
+
+<hr>
+
+<h4>Tier 3 — Scale international (20-50 duels simultanés, ~20k+ joueurs/mois)</h4>
+
+<table>
+<thead><tr><th>Poste</th><th>Mensuel</th><th>Annuel</th></tr></thead>
+<tbody>
+<tr><td>Vercel Pro / Team</td><td>20-50 €</td><td>240-600 €</td></tr>
+<tr><td>2× Serveur dédié (Hetzner AX52)</td><td>148 €</td><td>1 776 €</td></tr>
+<tr><td>Load balancer + failover</td><td>10 €</td><td>120 €</td></tr>
+<tr><td>Turso scaler multi-région</td><td>25 €</td><td>300 €</td></tr>
+<tr><td>Northflank API (HA)</td><td>25 €</td><td>300 €</td></tr>
+<tr><td>Domaines (.cloud + .cm)</td><td>3 €</td><td>36 €</td></tr>
+<tr><td>Blob (recording ON, 10k duels/mois)</td><td>100 €</td><td>1 200 €</td></tr>
+<tr><td><strong>TOTAL</strong></td><td><strong>331-361 €</strong></td><td><strong>3 972-4 332 €</strong></td></tr>
+</tbody></table>
+
+<hr>
+
+<h3>14.4 Coûts annuels récapitulatifs</h3>
+
+<table>
+<thead><tr><th>Tier</th><th>Mensuel</th><th>Annuel</th><th>Capacité</th><th>Cible</th></tr></thead>
+<tbody>
+<tr><td><strong>Tier 1</strong> Démarrage</td><td><strong>39 €</strong></td><td><strong>468 €</strong></td><td>1-3 duels simultanés</td><td>Tests, démo, early adopters</td></tr>
+<tr><td><strong>Tier 2</strong> Croissance</td><td><strong>102 €</strong></td><td><strong>1 224 €</strong></td><td>5-15 duels simultanés</td><td>Lancement Cameroun</td></tr>
+<tr><td><strong>Tier 3</strong> Scale</td><td><strong>331-361 €</strong></td><td><strong>~4 000 €</strong></td><td>20-50+ duels</td><td>Multi-pays, e-sport</td></tr>
+</tbody></table>
+
+<hr>
+
+<h3>14.5 Recommandations d'optimisation</h3>
+
+<table>
+<thead><tr><th>Levier</th><th>Économie estimée</th><th>Délai</th></tr></thead>
+<tbody>
+<tr><td><strong>GPU encoding</strong> (h264_nvenc/vaapi)</td><td>-40% CPU = 2× capacité au même prix</td><td>1-2 jours (config FFmpeg + driver)</td></tr>
+<tr><td><strong>API sur VPS game-server</strong> (pas Northflank séparé)</td><td>-12 €/mois (Tier 2)</td><td>0 jour (déjà possible)</td></tr>
+<tr><td><strong>Cloudflare Tunnel nommé</strong> (vs tunnel quick)</td><td>URL stable, 0 €</td><td>30 min config</td></tr>
+<tr><td><strong>Turso gratuit long terme</strong></td><td>0 € jusqu'à 50k utilisateurs</td><td>Déjà en place</td></tr>
+<tr><td><strong>Recording off par défaut</strong></td><td>-40 €/mois (Tier 3)</td><td>Déjà en place</td></tr>
+<tr><td><strong>Hetzner au lieu de Contabo</strong></td><td>+puissance, +fiabilité, ~30% plus cher</td><td>Migration 1 jour</td></tr>
+<tr><td><strong>Multi-région Northflank</strong> au lieu de multi-VPS</td><td>+50-100% coût mais 0 maintenance</td><td>Quand scaling >50 duels</td></tr>
+</tbody></table>
+
+<h3>14.6 Projection 3 ans (Tier 2 → Tier 3)</h3>
+
+<table>
+<thead><tr><th>Année</th><th>Tier</th><th>Coût annuel</th><th>Cumul</th></tr></thead>
+<tbody>
+<tr><td>2026 (août-déc)</td><td>Tier 1 → Tier 2</td><td>200-500 €</td><td>500 €</td></tr>
+<tr><td>2027</td><td>Tier 2 (Cameroun)</td><td>1 224 €</td><td>1 724 €</td></tr>
+<tr><td>2028</td><td>Tier 2 → Tier 3 (multi-pays)</td><td>2 500-3 500 €</td><td>~5 000 €</td></tr>
+</tbody></table>
+
+<p><strong>Coût total sur 3 ans : ~5 000 €</strong> — très compétitif pour une plateforme de cloud gaming e-sport.</p>
+
+<p>Comparaison : une solution tout-cloud (AWS GameLift + Lambda + RDS) coûterait 1 500-3 000 €/mois pour la même capacité, soit 54 000-108 000 € sur 3 ans. L'approche VPS + serverless léger divise le coût par <strong>~20</strong>.</p>
+
+<hr>
+
+<p>*Document mis à jour le 2026-07-30 — CPS1 intégré (17 fichiers, non commité). Scan #1 Dino terminé : vies P1=0xdd15 confirmé, score/santé/charID non trouvés. Scan #2 planifié (autre perso, P1+P2 actifs). Pause hotkey fix appliqué. Section 14 ajoutée (analyse coûts déploiement prod).*</p>
 
 
 </body>

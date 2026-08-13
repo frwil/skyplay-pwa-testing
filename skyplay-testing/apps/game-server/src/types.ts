@@ -302,6 +302,66 @@ export interface GiftNotifyMessage {
   message?: string;
 }
 
+// ── Brawler-mode messages (Cadillacs and Dinosaurs / CPS1 beat-em-up) ──
+
+/** A player died in brawler mode (lost a life). */
+export interface BrawlerPlayerDiedMessage {
+  type: "brawler_player_died";
+  player: 1 | 2 | 3;
+  livesRemaining: number;
+  score: number;
+}
+
+/** Brawler game over — all players out of lives (or game-over screen reached). */
+export interface BrawlerGameOverMessage {
+  type: "brawler_game_over";
+  p1Score: number;
+  p2Score: number;
+  p3Score: number;
+  p1Lives: number;
+  p2Lives: number;
+  p3Lives: number;
+  levelReached: number;
+  winner: 1 | 2 | 3 | 0; // 0 = tie
+  p1CharName?: string;
+  p2CharName?: string;
+  /** P1 rank OCR ("#TH" under the score) — null when never read. */
+  p1Rank: number | null;
+  p1RankSuffix: string | null;
+}
+
+/** Periodic brawler state update (health, lives, score, level). Sent ~2Hz. */
+export interface BrawlerStateMessage {
+  type: "brawler_state";
+  p1Health: number;
+  p2Health: number;
+  p3Health: number;
+  p1Lives: number;
+  p2Lives: number;
+  p3Lives: number;
+  p1Score: number;
+  p2Score: number;
+  p3Score: number;
+  level: number;
+  p1CharName: string;
+  p2CharName: string;
+  /** P1 rank OCR ("#TH" under the score) — null when never read. */
+  p1Rank: number | null;
+  p1RankSuffix: string | null;
+}
+
+/** Brawler level transition (level changed). */
+export interface BrawlerLevelStartMessage {
+  type: "brawler_level_start";
+  level: number;
+}
+
+/** A player respawned in brawler mode — inputs should be unlocked. */
+export interface BrawlerPlayerRespawnedMessage {
+  type: "brawler_player_respawned";
+  player: 1 | 2 | 3;
+}
+
 export type ServerMessage =
   | StatusMessage
   | ReadyMessage
@@ -323,7 +383,12 @@ export type ServerMessage =
   | ResumedMessage
   | SessionCancelledMessage
   | SpectatorCountMessage
-  | GiftNotifyMessage;
+  | GiftNotifyMessage
+  | BrawlerPlayerDiedMessage
+  | BrawlerGameOverMessage
+  | BrawlerStateMessage
+  | BrawlerLevelStartMessage
+  | BrawlerPlayerRespawnedMessage;
 
 /** Binary frame header: 0x01 + width(u16) + height(u16) + frameId(u32) + nalLength(u32) + H.264 NAL data */
 export const FRAME_MAGIC = 0x01;

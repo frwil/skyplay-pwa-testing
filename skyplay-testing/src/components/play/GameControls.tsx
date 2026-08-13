@@ -14,7 +14,7 @@ import {
   ExternalLink,
 } from "lucide-react";
 
-const SYSTEM_LIST: SystemType[] = ["nes", "snes", "gb", "gbc", "gba", "neogeo", "ps1"];
+const SYSTEM_LIST: SystemType[] = ["nes", "snes", "gb", "gbc", "gba", "neogeo", "ps1", "cps1"];
 
 interface GameControlsProps {
   romList: RomEntry[];

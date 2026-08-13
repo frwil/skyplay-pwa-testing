@@ -195,6 +195,30 @@ export const SYSTEM_CONFIGS: Record<SystemType, SystemConfig> = {
     touchLayout: "snes",
     cloud: true,
   },
+  cps1: {
+    type: "cps1",
+    labelKey: "play.systems.cps1",
+    width: 384,
+    height: 224,
+    buttonCount: 10,
+    buttons: [
+      // CPS1 brawler: Attack / Jump / Special / Coin / Start + DPAD
+      { id: "A", index: 0, bit: 0x001 },
+      { id: "B", index: 1, bit: 0x002 },
+      { id: "C", index: 2, bit: 0x004 },
+      { id: "D", index: 3, bit: 0x008 },
+      { id: "SELECT", index: 4, bit: 0x010 },
+      { id: "START", index: 5, bit: 0x020 },
+      { id: "UP", index: 6, bit: 0x040 },
+      { id: "DOWN", index: 7, bit: 0x080 },
+      { id: "LEFT", index: 8, bit: 0x100 },
+      { id: "RIGHT", index: 9, bit: 0x200 },
+    ],
+    coreName: "fbneo",
+    romExtensions: [".zip"],
+    touchLayout: "snes",
+    cloud: true,
+  },
   ps1: {
     type: "ps1",
     labelKey: "play.systems.ps1",
@@ -377,6 +401,27 @@ export const SYSTEM_KEY_MAPS: Record<SystemType, KeyMapping> = {
     NumpadEnter: { player: 2, button: 5 },
     NumpadAdd:   { player: 2, button: 4 },
   },
+  cps1: {
+    // CPS1 brawler via FBNeo: same indices as NeoGeo
+    ArrowUp:    { player: 1, button: 6 },
+    ArrowDown:  { player: 1, button: 7 },
+    ArrowLeft:  { player: 1, button: 8 },
+    ArrowRight: { player: 1, button: 9 },
+    KeyW:       { player: 1, button: 6 },
+    KeyS:       { player: 1, button: 7 },
+    KeyA:       { player: 1, button: 8 },
+    KeyD:       { player: 1, button: 9 },
+    KeyZ: { player: 1, button: 0 }, // Attack
+    KeyX: { player: 1, button: 1 }, // Jump
+    KeyC: { player: 1, button: 2 }, // Special
+    KeyV: { player: 1, button: 3 }, // (unused for CPS1)
+    Enter:      { player: 1, button: 5 },
+    Space:      { player: 1, button: 5 },
+    ShiftRight: { player: 1, button: 4 }, // Coin
+    Tab:        { player: 1, button: 4 }, // Coin (alt)
+    NumpadEnter: { player: 2, button: 5 },
+    NumpadAdd:   { player: 2, button: 4 },
+  },
   ps1: {
     // PS1: uses Arrow keys for D-Pad (WASD reserved for shoulder buttons)
     // D-Pad (UP=10, DOWN=11, LEFT=12, RIGHT=13)
@@ -487,6 +532,17 @@ export const SYSTEM_GAMEPAD_MAPS: Record<SystemType, GamepadMapping> = {
       3: 3, // Triangle → D
       8: 4, // Share → SELECT
       9: 5, // Options → START
+    },
+    dPadIndices: [6, 7, 8, 9],
+  },
+  cps1: {
+    faceButtons: {
+      0: 0, // Cross → Attack
+      1: 1, // Circle → Jump
+      2: 2, // Square → Special
+      3: 3, // Triangle → (unused)
+      8: 4, // Share → Coin
+      9: 5, // Options → Start
     },
     dPadIndices: [6, 7, 8, 9],
   },

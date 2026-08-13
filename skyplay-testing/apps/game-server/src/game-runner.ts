@@ -4,9 +4,11 @@ import { EventEmitter } from "events";
 import { writeFileSync, unlinkSync, mkdirSync, existsSync, readFileSync, readdirSync, statSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { SYSTEM_CORES, SYSTEM_RESOLUTIONS, UPSCALE, XDOTOOL_KEY_MAP, XDOTOOL_KEY_MAP_P2, getButtonToRetroarch, buildRetroarchKeyConfig } from "./config.js";
+import { SYSTEM_CORES, SYSTEM_RESOLUTIONS, UPSCALE, XDOTOOL_KEY_MAP, XDOTOOL_KEY_MAP_P2, getButtonToRetroarch, buildRetroarchKeyConfig, BRAWLER_PIXEL_FPS, BRAWLER_MIN_GAME_MS, BRAWLER_GAME_OVER_STREAK, BRAWLER_DEATH_COOLDOWN } from "./config.js";
 import { isRecordingEnabled, isStreamingEnabled, recordingDir, recorderFfmpegArgs, streamerFfmpegArgs, uploadRecording } from "./recording.js";
-import type { RamConfig } from "./game-config.js";
+import type { RamConfig, BrawlerPixelConfig } from "./game-config.js";
+import { getBrawlerPixelConfig } from "./game-config.js";
+import { BrawlerPixelAnalyzer, type BrawlerPixelReadings } from "./pixel/brawler-pixel-analyzer.js";
 
 // Verbose per-frame / per-input RAM-detection tracing. OFF by default: those logs fire
 // dozens of times per second during a live round and each console.log to the Docker
@@ -28,7 +30,7 @@ const RA_CMD_PORT = 55355;
 
 /** Known memory addresses for health bars in RetroArch core memory (offsets from work RAM base).
  *  For NeoGeo/FBNeo: full health is typically 0x67 (103 decimal). */
-const HEALTH_MEMORY_MAP: Record<string, { p1: number; p2: number; size: number; maxHealth: number; timer: number; timerAlt: number; p1Char: number; p2Char: number; p1Mode: number; p2Mode: number; altChars?: number[]; teamSlots?: number[]; /** Discovered via RAM scan: team roster base at 0xA84E (P1) and 0xA85E (P2) */ p1TeamBase?: number; p2TeamBase?: number; /** Byte offsets from team base to each of the 3 slots (irregular, with separator gaps) */ p1TeamOffsets?: number[]; p2TeamOffsets?: number[]; /** Active character slot index (0-2) */ p1ActiveIdx?: number; p2ActiveIdx?: number; /** Currently-fighting character ID address (0x8256 P1 / 0x8456 P2), discovered via multi-snapshot diff */ p1Active?: number; p2Active?: number; /** Match state flag at 0xA840 (0x40 = in-match, 0x00 = char select) */ matchFlag?: number; /** Per-player "characters lost" counters (0xA859 P1 / 0xA868 P2), 0→3, draw-inclusive — the authoritative match-end signal (health heuristics give the wrong time-over winner and misread the 31% draw-replay) */ p1Lost?: number; p2Lost?: number; /** Pick-order (fight order) buffer in the player struct — [1st, 2nd, 3rd] absolute addresses. P1 0x15CB/0x15CA/0x15CD, P2 mirror +0x200 0x17CB/0x17CA/0x17CD (sep 0x00 at +0xCC). Discovered + validated via controlled diff on 3 distinct orders (2026-07-10). This is the REAL selection order (≠ set-order 0xA84E). Reliable in stable combat; read once + freeze. */ p1PickOrder?: number[]; p2PickOrder?: number[]; /** SFA2 play mode: 0=Manual, 1=Auto. P1 at 0x1C2A, P2 at 0x1C2B (+1 offset, S-DD1 interleaved). Confirmed 2026-07-26 via Manual→Auto diff. */ p1PlayMode?: number; p2PlayMode?: number; /** SFA2 round-win counters (0→1→2, best-of-3). Mirror-region copies at 0x0701 P1 / 0x0A04 P2. Discovered 2026-07-26 via full-WRAM differential. */ p1Rounds?: number; p2Rounds?: number }> = {
+const HEALTH_MEMORY_MAP: Record<string, { p1: number; p2: number; size: number; maxHealth: number; timer: number; timerAlt: number; p1Char: number; p2Char: number; p1Mode: number; p2Mode: number; altChars?: number[]; teamSlots?: number[]; /** Discovered via RAM scan: team roster base at 0xA84E (P1) and 0xA85E (P2) */ p1TeamBase?: number; p2TeamBase?: number; /** Byte offsets from team base to each of the 3 slots (irregular, with separator gaps) */ p1TeamOffsets?: number[]; p2TeamOffsets?: number[]; /** Active character slot index (0-2) */ p1ActiveIdx?: number; p2ActiveIdx?: number; /** Currently-fighting character ID address (0x8256 P1 / 0x8456 P2), discovered via multi-snapshot diff */ p1Active?: number; p2Active?: number; /** Match state flag at 0xA840 (0x40 = in-match, 0x00 = char select) */ matchFlag?: number; /** Per-player "characters lost" counters (0xA859 P1 / 0xA868 P2), 0→3, draw-inclusive — the authoritative match-end signal (health heuristics give the wrong time-over winner and misread the 31% draw-replay) */ p1Lost?: number; p2Lost?: number; /** Pick-order (fight order) buffer in the player struct — [1st, 2nd, 3rd] absolute addresses. P1 0x15CB/0x15CA/0x15CD, P2 mirror +0x200 0x17CB/0x17CA/0x17CD (sep 0x00 at +0xCC). Discovered + validated via controlled diff on 3 distinct orders (2026-07-10). This is the REAL selection order (≠ set-order 0xA84E). Reliable in stable combat; read once + freeze. */ p1PickOrder?: number[]; p2PickOrder?: number[]; /** SFA2 play mode: 0=Manual, 1=Auto. P1 at 0x1C2A, P2 at 0x1C2B (+1 offset, S-DD1 interleaved). Confirmed 2026-07-26 via Manual→Auto diff. */ p1PlayMode?: number; p2PlayMode?: number; /** SFA2 round-win counters (0→1→2, best-of-3). Mirror-region copies at 0x0701 P1 / 0x0A04 P2. Discovered 2026-07-26 via full-WRAM differential. */ p1Rounds?: number; p2Rounds?: number; /** P1 lives remaining address (brawler). */ p1Lives?: number; /** P2 lives remaining address (brawler). */ p2Lives?: number; /** P1 score address (brawler, multi-byte BCD). */ p1Score?: number; /** P2 score address (brawler, multi-byte BCD). */ p2Score?: number; /** P1 score size in bytes (brawler, default 3). */ p1ScoreSize?: number; /** P2 score size in bytes (brawler, default 3). */ p2ScoreSize?: number; /** Current level/stage address (brawler). */ levelAddr?: number; /** Current level/stage address — alias for levelAddr (RamConfig compat). */ level?: number; /** Game-over flag address (brawler). */ gameOverAddr?: number; /** Game-over flag address — alias for gameOverAddr (RamConfig compat). */ gameOverFlag?: number; /** Game-over flag value (brawler, e.g. 0x01 = GAME OVER screen). */ gameOverValue?: number }> = {
   "kof98.zip":   {
     p1: 0x8238, p2: 0x8438, size: 1, maxHealth: 0x67,
     timer: 0xA83A, timerAlt: 0x85D2,
@@ -137,6 +139,27 @@ const HEALTH_MEMORY_MAP: Record<string, { p1: number; p2: number; size: number; 
     // stable across the entire match. P1 at 0x0701, P2 at 0x0A04 (+0x303 offset).
     p1Rounds: 0x0701, p2Rounds: 0x0A04,
   },
+  // ── Cadillacs and Dinosaurs (CPS1 / FBNeo) — brawler ─────────────────
+  // Discovered via live differential RAM scans (2026-07-31).
+  // CPS1 work RAM mapped by FBNeo at 0x000000-0x00FFFF (64KB, 68000 big-endian).
+  // Health: 1 byte, max 0x90 (144). Stored in [value, 0] 16-bit LE pairs.
+  //   P1=0x0B46, P2=0x0B48 (paired +2 offset). Candidate — needs live combat verification.
+  // Timer: 0x0B4C (cycles 67→84→102→111 pattern).
+  // Lives: P1=0xB2C0 (CONFIRMED: tracks 1→0 on death). P2=0xB2C1 (adjacent, unverified).
+  // Score: not yet found in 64KB work RAM (may be in VRAM or custom encoding).
+  // Char ID: cheat addresses (0xB277,0x863A) return 0 for all chars in this RetroArch core.
+  // Game Over: candidate 0xB335 — not validated live.
+  "dino.zip": {
+    p1: 0x0B46, p2: 0x0B48, size: 1, maxHealth: 0x90,
+    timer: 0x0B4C, timerAlt: 0x0B4C,
+    p1Char: 0xB276, p2Char: 0xB3F6,
+    p1Mode: 0x0000, p2Mode: 0x0000,
+    // Brawler-specific (discovered 2026-07-31):
+    p1Lives: 0xB2C0, p2Lives: 0xB2C1,
+    p1Score: 0x0000, p2Score: 0x0000, p1ScoreSize: 3, p2ScoreSize: 3,
+    levelAddr: 0x84F2,
+    gameOverAddr: 0xB335, gameOverValue: 0x01,
+  },
 };
 
 /** KOF '98 character ID → name mapping. */
@@ -193,6 +216,15 @@ const KOF2002_CHARACTERS: Record<number, string> = {
   0x26: "Ramon",
   // Boss
   0x30: "Omega Rugal",
+};
+
+/** Cadillacs and Dinosaurs (CPS1) character ID → name mapping.
+ *  4 playable characters. IDs to be confirmed via RAM discovery (Phase 2). */
+const CNDINO_CHARACTERS: Record<number, string> = {
+  0x00: "Jack Tenrec",
+  0x01: "Hannah Dundee",
+  0x02: "Mustapha Cairo",
+  0x03: "Mess O'Bradovich",
 };
 
 /** SF2 (Street Fighter II, SNES) character ID → name mapping.
@@ -280,6 +312,80 @@ export class GameRunner extends EventEmitter {
   /** Track minimum health of each player during the current round (for accurate perfect KO detection). */
   private roundP1MinHealth = 100;
   private roundP2MinHealth = 100;
+  // ── Brawler-mode state ────────────────────────────────────────────────
+  /** Whether the current game is in brawler mode (detected from RamConfig). */
+  private brawlerMode = false;
+  /** Latest lives values (brawler). -1 = not yet read. */
+  private memP1Lives = -1;
+  private memP2Lives = -1;
+  private memP3Lives = -1;
+  /** Previous lives values for death detection. */
+  private prevP1Lives = -1;
+  private prevP2Lives = -1;
+  /** Latest score values (brawler). Raw 24-bit BCD or integer. -1 = not yet read. */
+  private memP1Score = -1;
+  private memP2Score = -1;
+  private memP3Score = -1;
+  /** P1 rank OCR values (brawler). null = not yet read / rank not shown. */
+  private brawlerPixelRankP1: number | null = null;
+  private brawlerPixelRankSuffixP1: string | null = null;
+  /** Current level/stage (brawler). -1 = not yet read. */
+  private memLevel = -1;
+  private prevLevel = -1;
+  /** Game-over flag (brawler). -1 = not yet read. */
+  private memGameOverFlag = -1;
+  /** Whether the brawler game has started (past char select + intro). */
+  private brawlerGameStarted = false;
+  /** Timestamp (ms) when the brawler game started. Guards against premature game-over. */
+  private brawlerGameStartTime = 0;
+  /** Death cooldown counter to prevent double-fire on player death. */
+  private brawlerDeathCooldown = 0;
+  /** Count of legitimate deaths (lives decreased by exactly 1). Game-over requires ≥1 death. */
+  private brawlerDeathsDetected = 0;
+  /** Whether a brawler game-over has already been emitted. */
+  private brawlerGameOverEmitted = false;
+  /** Consecutive polls where P1 lives = 0. Game-over requires ≥3 to filter transients. */
+  private brawlerP1DeadStreak = 0;
+  /** Consecutive polls where P2 lives have been stable (same non-garbage value). */
+  private brawlerP2StableCount = 0;
+  private brawlerPrevP2LivesForStable = -1;
+  /** Poll counter for throttled brawler debug logging. */
+  private brawlerDebugPollCount = 0;
+
+  // ── Pixel-based brawler detection ──────────────────────────────────
+  private brawlerPixelConfig: BrawlerPixelConfig | null = null;
+  private brawlerPixelAnalyzer: BrawlerPixelAnalyzer | null = null;
+  private brawlerPixelFfmpeg: ChildProcess | null = null;
+  private brawlerPixelBuf = Buffer.alloc(0);
+  private brawlerPixelReadings: BrawlerPixelReadings | null = null;
+  // Pixel-driven death/game-over state
+  private brawlerPixelLivesP1 = 3;
+  private brawlerPixelLivesP2 = 3;
+  private brawlerPixelLivesP3 = 3;
+  private brawlerPrevPixelLivesP1 = 3;
+  private brawlerPrevPixelLivesP2 = 3;
+  private brawlerPrevPixelLivesP3 = 3;
+  private brawlerDeathConfirmP1 = 0;
+  private brawlerDeathConfirmP2 = 0;
+  private brawlerDeathConfirmP3 = 0;
+  private brawlerDeathEmittedP1 = false;
+  private brawlerDeathEmittedP2 = false;
+  private brawlerDeathEmittedP3 = false;
+  private brawlerWasHealthyP1 = false;
+  private brawlerWasHealthyP2 = false;
+  private brawlerWasHealthyP3 = false;
+  private brawlerDeathCooldownCounter = 0;
+  private brawlerGameOverConfirm = 0;
+  /** Lives snapshot taken when death confirm starts — used to decide game-over vs respawn. */
+  private brawlerLivesBeforeDeathP1 = 0;
+  private brawlerLivesBeforeDeathP2 = 0;
+  private brawlerLivesBeforeDeathP3 = 0;
+  /** Respawn deadline: after dying with 0 lives left, force game-over if no respawn within this many frames. */
+  private brawlerRespawnDeadlineP1 = 0;
+  private brawlerRespawnDeadlineP2 = 0;
+  private brawlerRespawnDeadlineP3 = 0;
+  private static readonly BRAWLER_RESPAWN_DEADLINE_FRAMES = 60; // 15s at 4fps
+
   /** Latches when the round timer counts down to 0 (TIME OVER). A perfect KO and a per-character win
    *  badge are credited ONLY on a KO round (timer > 0). A TIME OVER — including KOF98 "DRAW GAME",
    *  where the game flashes "PERFECT" for an untouched player even without a KO — never counts. */
@@ -297,6 +403,7 @@ export class GameRunner extends EventEmitter {
   /** Latest health values read from core memory (raw, before normalization). */
   private memHealthP1 = -1;
   private memHealthP2 = -1;
+  private memHealthP3 = -1;
   private memTimer = -1;
   private memTimerAlt = -1;
   private memTimer16 = -1; // 16-bit LE timer (A83A-A83B)
@@ -384,8 +491,10 @@ export class GameRunner extends EventEmitter {
     const maxH = this.healthMemMap?.maxHealth;
     if (maxH === 0x60) return SFA2_CHARACTERS;
     if (maxH === 0xB0) return SF2_CHARACTERS;
-    // Both KOF98 and KOF2002 use maxHealth 0x67 — distinguish by ROM name
+    // CPS1 Cadillacs and Dinosaurs — distinguish by ROM name
     const romLower = this.rom.toLowerCase();
+    if (romLower.includes("dino")) return CNDINO_CHARACTERS;
+    // Both KOF98 and KOF2002 use maxHealth 0x67 — distinguish by ROM name
     if (romLower.includes("kof2002")) return KOF2002_CHARACTERS;
     return KOF98_CHARACTERS;
   }
@@ -405,6 +514,14 @@ export class GameRunner extends EventEmitter {
     if (isSfa2 && p1Team.length === 0 && p1Name !== "?") p1Team = [p1Name];
     if (isSfa2 && p2Team.length === 0 && p2Name !== "?") p2Team = [p2Name];
     return { p1Char: p1Name, p2Char: p2Name, p1Team, p2Team };
+  }
+  /** Detect whether a RamConfig (DB or fallback) represents a brawler/beat-em-up game
+   *  rather than a traditional fighting game. Brawler games have lives + score + game-over
+   *  fields; fighting games have round/timer/team-based detection. */
+  private isBrawlerConfig(cfg: typeof HEALTH_MEMORY_MAP[string]): boolean {
+    return (cfg.p1Lives != null && cfg.p1Lives > 0) ||
+           (cfg.gameOverAddr != null && cfg.gameOverAddr > 0) ||
+           (cfg.gameOverFlag != null && cfg.gameOverFlag > 0);
   }
   /**
    * Match metadata for post-match stats persistence: team rosters + selection order as
@@ -470,6 +587,7 @@ export class GameRunner extends EventEmitter {
     // Pre-set the memory map from the provided config (or fall back to hardcoded lookup).
     if (ramConfig) {
       this.healthMemMap = ramConfig;
+      this.brawlerMode = this.isBrawlerConfig(ramConfig);
     }
   }
 
@@ -543,11 +661,42 @@ export class GameRunner extends EventEmitter {
         k.replace(/\.zip$/i, "") === romKey
       );
       this.healthMemMap = memMapEntry?.[1] ?? null;
+      if (this.healthMemMap) {
+        this.brawlerMode = this.isBrawlerConfig(this.healthMemMap);
+      }
     }
     if (this.healthMemMap) {
       this.startMemoryHealthReader();
     } else {
       console.log(`[game-runner] 🧠 No memory map for ${this.rom} — detection disabled`);
+    }
+
+    // ── Start pixel-based brawler detection (replaces unreliable RAM health/lives) ──
+    if (this.brawlerMode) {
+      const pixelConfig =
+        getBrawlerPixelConfig(this.rom) ??
+        (this.healthMemMap as RamConfig | null)?.pixel ??
+        null;
+      if (pixelConfig) {
+        this.brawlerPixelConfig = pixelConfig;
+        this.brawlerPixelAnalyzer = new BrawlerPixelAnalyzer(pixelConfig);
+        this.brawlerPixelLivesP1 = pixelConfig.maxLives ?? 3;
+        this.brawlerPixelLivesP2 = pixelConfig.maxLives ?? 3;
+        this.brawlerPixelLivesP3 = pixelConfig.maxLives ?? 3;
+        this.brawlerPrevPixelLivesP1 = this.brawlerPixelLivesP1;
+        this.brawlerPrevPixelLivesP2 = this.brawlerPixelLivesP2;
+        this.brawlerPrevPixelLivesP3 = this.brawlerPixelLivesP3;
+        this.startBrawlerPixelCapture(displayW, displayH);
+        console.log(
+          `[game-runner] ${this.readerTag} 📸 Brawler pixel detection started ` +
+          `(${displayW}x${displayH} @ ${BRAWLER_PIXEL_FPS}fps)`
+        );
+      } else {
+        console.log(
+          `[game-runner] ${this.readerTag} ⚠️  Brawler mode but no pixel config — ` +
+          `death/game-over detection disabled`
+        );
+      }
     }
 
     return { width: resolution.w, height: resolution.h };
@@ -592,9 +741,21 @@ export class GameRunner extends EventEmitter {
     if (map.matchFlag != null) allAddrs.push(map.matchFlag);
     if (map.p1Lost != null) allAddrs.push(map.p1Lost);
     if (map.p2Lost != null) allAddrs.push(map.p2Lost);
-    const minAddr = Math.min(...allAddrs);
+    // Brawler-mode addresses
+    if (map.p1Lives != null && map.p1Lives > 0) allAddrs.push(map.p1Lives);
+    if (map.p2Lives != null && map.p2Lives > 0) allAddrs.push(map.p2Lives);
+    if (map.p1Score != null && map.p1Score > 0) { allAddrs.push(map.p1Score); allAddrs.push(map.p1Score + (map.p1ScoreSize ?? 3) - 1); }
+    if (map.p2Score != null && map.p2Score > 0) { allAddrs.push(map.p2Score); allAddrs.push(map.p2Score + (map.p2ScoreSize ?? 3) - 1); }
+    if (map.levelAddr != null && map.levelAddr > 0) allAddrs.push(map.levelAddr);
+    else if (map.level != null && map.level > 0) allAddrs.push(map.level);
+    if (map.gameOverAddr != null && map.gameOverAddr > 0) allAddrs.push(map.gameOverAddr);
+    else if (map.gameOverFlag != null && map.gameOverFlag > 0) allAddrs.push(map.gameOverFlag);
+    // Filter out 0x0000 (unused) addresses to avoid huge chunk reads.
+    // CPS1 brawler games (dino) don't use p1Mode/p2Mode — they stay at 0.
+    const nonZeroAddrs = allAddrs.filter(a => a > 0);
+    let minAddr = nonZeroAddrs.length > 0 ? Math.min(...nonZeroAddrs) : 0;
     const maxAddr = Math.max(...allAddrs);
-    const chunkSize = maxAddr + 2 - minAddr; // +2: timer is 16-bit (needs A83A + A83B)
+    let chunkSize = maxAddr + 2 - minAddr; // +2: timer is 16-bit (needs A83A + A83B)
     const p1Offset = (map.p1 - minAddr) * 2;
     const p2Offset = (map.p2 - minAddr) * 2;
     const timerOffset = (map.timer - minAddr) * 2;
@@ -614,6 +775,68 @@ export class GameRunner extends EventEmitter {
     const p2ActiveOff = map.p2Active != null ? (map.p2Active - minAddr) * 2 : -1;
     const p1LostOff = map.p1Lost != null ? (map.p1Lost - minAddr) * 2 : -1;
     const p2LostOff = map.p2Lost != null ? (map.p2Lost - minAddr) * 2 : -1;
+    // Brawler-mode offsets
+    const p1LivesOff = (map.p1Lives != null && map.p1Lives > 0) ? (map.p1Lives - minAddr) * 2 : -1;
+    const p2LivesOff = (map.p2Lives != null && map.p2Lives > 0) ? (map.p2Lives - minAddr) * 2 : -1;
+    const p1ScoreAddr = map.p1Score ?? 0;
+    const p2ScoreAddr = map.p2Score ?? 0;
+    const p1ScoreOff = (map.p1Score != null && map.p1Score > 0) ? (p1ScoreAddr - minAddr) * 2 : -1;
+    const p2ScoreOff = (map.p2Score != null && map.p2Score > 0) ? (p2ScoreAddr - minAddr) * 2 : -1;
+    const p1ScoreBytes = map.p1ScoreSize ?? 3;
+    const p2ScoreBytes = map.p2ScoreSize ?? 3;
+    const levelAddr = map.levelAddr ?? map.level ?? 0;
+    const levelOff = (levelAddr > 0) ? (levelAddr - minAddr) * 2 : -1;
+    const goAddr = map.gameOverAddr ?? map.gameOverFlag ?? 0;
+    const goOff = (goAddr > 0) ? (goAddr - minAddr) * 2 : -1;
+    const goValue = map.gameOverValue ?? 0x01;
+
+    // ── Brawler-mode: split into low (health+timer) and high (lives+level+gameOver+chars)
+    //    chunks to avoid huge 43KB UDP reads that cause RetroArch timeouts. ──
+    let brawlerHighMinAddr = 0;
+    let brawlerHighChunkSize = 0;
+    // Offsets relative to brawler high chunk
+    let bhLivesOff1 = -1, bhLivesOff2 = -1;
+    let bhScoreOff1 = -1, bhScoreOff2 = -1;
+    let bhLevelOff = -1, bhGameOverOff = -1;
+    let bhCharOff1 = -1, bhCharOff2 = -1;
+
+    if (this.brawlerMode) {
+      // Limit the main poll to just health + timer (low region, tiny chunk)
+      const lowAddrs = [map.p1, map.p2, map.timer, map.timerAlt].filter(a => a > 0);
+      if (lowAddrs.length > 0) {
+        minAddr = Math.min(...lowAddrs);
+        chunkSize = Math.max(...lowAddrs) + 2 - minAddr;
+      }
+
+      // Build the high-region chunk: lives, score, level, game-over, chars
+      const highAddrs: number[] = [];
+      if (map.p1Lives && map.p1Lives > 0) highAddrs.push(map.p1Lives);
+      if (map.p2Lives && map.p2Lives > 0) highAddrs.push(map.p2Lives);
+      if (p1ScoreAddr > 0) { highAddrs.push(p1ScoreAddr); highAddrs.push(p1ScoreAddr + p1ScoreBytes - 1); }
+      if (p2ScoreAddr > 0) { highAddrs.push(p2ScoreAddr); highAddrs.push(p2ScoreAddr + p2ScoreBytes - 1); }
+      if (levelAddr > 0) highAddrs.push(levelAddr);
+      if (goAddr > 0) highAddrs.push(goAddr);
+      if (map.p1Char > 0) highAddrs.push(map.p1Char);
+      if (map.p2Char > 0) highAddrs.push(map.p2Char);
+
+      if (highAddrs.length > 0) {
+        brawlerHighMinAddr = Math.min(...highAddrs);
+        brawlerHighChunkSize = Math.max(...highAddrs) + 2 - brawlerHighMinAddr;
+
+        // Recompute offsets relative to brawler high chunk
+        if (map.p1Lives && map.p1Lives > 0) bhLivesOff1 = (map.p1Lives - brawlerHighMinAddr) * 2;
+        if (map.p2Lives && map.p2Lives > 0) bhLivesOff2 = (map.p2Lives - brawlerHighMinAddr) * 2;
+        if (p1ScoreAddr > 0) bhScoreOff1 = (p1ScoreAddr - brawlerHighMinAddr) * 2;
+        if (p2ScoreAddr > 0) bhScoreOff2 = (p2ScoreAddr - brawlerHighMinAddr) * 2;
+        if (levelAddr > 0) bhLevelOff = (levelAddr - brawlerHighMinAddr) * 2;
+        if (goAddr > 0) bhGameOverOff = (goAddr - brawlerHighMinAddr) * 2;
+        if (map.p1Char > 0) bhCharOff1 = (map.p1Char - brawlerHighMinAddr) * 2;
+        if (map.p2Char > 0) bhCharOff2 = (map.p2Char - brawlerHighMinAddr) * 2;
+      }
+
+      console.log(`[game-runner] ${this.readerTag} 🧠 Brawler dual-chunk: low=${chunkSize}B@0x${minAddr.toString(16)} high=${brawlerHighChunkSize}B@0x${brawlerHighMinAddr.toString(16)}`);
+    }
+
     let responseBuf = "";
     let successCount = 0;
     let timeoutCount = 0;
@@ -651,7 +874,7 @@ export class GameRunner extends EventEmitter {
         const hexBytes = parts.slice(2).join("");
         if (hexBytes === "-1") continue; // read failed
 
-        if (rspAddr !== minAddr && rspAddr !== map.timer && rspAddr !== roundCounterAddr) {
+        if (rspAddr !== minAddr && rspAddr !== map.timer && rspAddr !== roundCounterAddr && rspAddr !== brawlerHighMinAddr) {
           // Unexpected address — might be a timeout retry response
           continue;
         }
@@ -690,6 +913,29 @@ export class GameRunner extends EventEmitter {
               console.log(`[game-runner] ${this.readerTag} ⏱️ timer-only poll #${timerPollCount}: timer=${this.memTimer} 16bit=${this.memTimer16}`);
             }
           }
+          continue;
+        }
+
+        // ── Brawler high-region chunk response (lives, level, game-over, chars) ──
+        if (this.brawlerMode && brawlerHighMinAddr > 0 && rspAddr === brawlerHighMinAddr) {
+          if (bhLivesOff1 >= 0) this.memP1Lives = parseInt(hexBytes.substring(bhLivesOff1, bhLivesOff1 + 2), 16);
+          if (bhLivesOff2 >= 0) this.memP2Lives = parseInt(hexBytes.substring(bhLivesOff2, bhLivesOff2 + 2), 16);
+          if (bhScoreOff1 >= 0) {
+            this.memP1Score = 0;
+            for (let b = 0; b < p1ScoreBytes; b++) {
+              this.memP1Score = (this.memP1Score << 8) | parseInt(hexBytes.substring(bhScoreOff1 + b * 2, bhScoreOff1 + b * 2 + 2), 16);
+            }
+          }
+          if (bhScoreOff2 >= 0) {
+            this.memP2Score = 0;
+            for (let b = 0; b < p2ScoreBytes; b++) {
+              this.memP2Score = (this.memP2Score << 8) | parseInt(hexBytes.substring(bhScoreOff2 + b * 2, bhScoreOff2 + b * 2 + 2), 16);
+            }
+          }
+          if (bhLevelOff >= 0) this.memLevel = parseInt(hexBytes.substring(bhLevelOff, bhLevelOff + 2), 16);
+          if (bhGameOverOff >= 0) this.memGameOverFlag = parseInt(hexBytes.substring(bhGameOverOff, bhGameOverOff + 2), 16);
+          if (bhCharOff1 >= 0) this.memP1Char = parseInt(hexBytes.substring(bhCharOff1, bhCharOff1 + 2), 16);
+          if (bhCharOff2 >= 0) this.memP2Char = parseInt(hexBytes.substring(bhCharOff2, bhCharOff2 + 2), 16);
           continue;
         }
 
@@ -738,6 +984,26 @@ export class GameRunner extends EventEmitter {
           // Authoritative per-player "characters lost" counters (0xA859 P1 / 0xA868 P2).
           if (p1LostOff >= 0) this.memP1Lost = parseInt(hexBytes.substring(p1LostOff, p1LostOff + 2), 16);
           if (p2LostOff >= 0) this.memP2Lost = parseInt(hexBytes.substring(p2LostOff, p2LostOff + 2), 16);
+          // Brawler-mode: lives, score, level, game-over (non-brawler path;
+          // brawler games use a separate high-region chunk — see brawlerPoll).
+          if (!this.brawlerMode) {
+            if (p1LivesOff >= 0) this.memP1Lives = parseInt(hexBytes.substring(p1LivesOff, p1LivesOff + 2), 16);
+            if (p2LivesOff >= 0) this.memP2Lives = parseInt(hexBytes.substring(p2LivesOff, p2LivesOff + 2), 16);
+            if (p1ScoreOff >= 0) {
+              this.memP1Score = 0;
+              for (let b = 0; b < p1ScoreBytes; b++) {
+                this.memP1Score = (this.memP1Score << 8) | parseInt(hexBytes.substring(p1ScoreOff + b * 2, p1ScoreOff + b * 2 + 2), 16);
+              }
+            }
+            if (p2ScoreOff >= 0) {
+              this.memP2Score = 0;
+              for (let b = 0; b < p2ScoreBytes; b++) {
+                this.memP2Score = (this.memP2Score << 8) | parseInt(hexBytes.substring(p2ScoreOff + b * 2, p2ScoreOff + b * 2 + 2), 16);
+              }
+            }
+            if (levelOff >= 0) this.memLevel = parseInt(hexBytes.substring(levelOff, levelOff + 2), 16);
+            if (goOff >= 0) this.memGameOverFlag = parseInt(hexBytes.substring(goOff, goOff + 2), 16);
+          }
           // Selection order: prefer the authoritative RAM pick-order buffer (captured once below).
           // Until that succeeds, fall back to appending each newly-seen active char in the order it
           // enters the fight (first = 1st pick). Disabled once the RAM order is captured so it can't
@@ -859,6 +1125,25 @@ export class GameRunner extends EventEmitter {
             });
           }
 
+          // ── Live brawler-state event (throttled ~500ms) ──
+          if (this.brawlerMode && Date.now() - this.lastMatchStateEmit >= 500) {
+            this.lastMatchStateEmit = Date.now();
+            const ci = this.charInfo();
+            this.emit("brawlerState", {
+              p1Health: this.memHealthP1,
+              p2Health: this.memHealthP2,
+              p1Lives: this.memP1Lives,
+              p2Lives: this.memP2Lives,
+              p1Score: this.memP1Score,
+              p2Score: this.memP2Score,
+              level: this.memLevel,
+              p1CharName: ci.p1Char,
+              p2CharName: ci.p2Char,
+              p1Rank: this.brawlerPixelRankP1,
+              p1RankSuffix: this.brawlerPixelRankSuffixP1,
+            });
+          }
+
           // Verbose logging for first 100 reads (25s) to capture ephemeral team data during char select
           if (DEBUG_RAM && (successCount <= 100 || successCount % 30 === 0)) {
             const charMap = this.resolveCharMap();
@@ -975,6 +1260,14 @@ export class GameRunner extends EventEmitter {
       this.healthUdp!.send(cmd, RA_CMD_PORT, "127.0.0.1");
     };
 
+    // Brawler high-region poll: lives, level, game-over, chars (separate chunk
+    // from health+timer to keep each chunk under ~12KB for reliable UDP delivery).
+    const brawlerPoll = () => {
+      if (!this.running || !this.healthUdp || !this.brawlerMode || brawlerHighChunkSize === 0) return;
+      const cmd = Buffer.from(`READ_CORE_RAM ${brawlerHighMinAddr.toString(16)} ${brawlerHighChunkSize}\n`);
+      this.healthUdp!.send(cmd, RA_CMD_PORT, "127.0.0.1");
+    };
+
     // Timeout watchdog: if no response in 2s, just keep polling
     const watchdog = () => {
       if (!this.running) return;
@@ -992,12 +1285,13 @@ export class GameRunner extends EventEmitter {
 
     // Poll every 250ms (4 reads/sec — single command is faster)
     this.healthReadTimer = setInterval(() => {
-      if (this.running && this.healthUdp) { poll(); timerPoll(); roundPoll(); }
+      if (this.running && this.healthUdp) { poll(); timerPoll(); roundPoll(); brawlerPoll(); }
     }, 250);
 
     poll();
     timerPoll();
     roundPoll();
+    brawlerPoll();
     watchdogTimer = setTimeout(watchdog, 2000);
 
     console.log(`[game-runner] ${this.readerTag} 🧠 UDP health reader: ${this.rom} P1=0x${map.p1.toString(16)} P2=0x${map.p2.toString(16)} max=0x${maxHealth.toString(16)} (single-shot READ_CORE_RAM ${chunkSize} bytes)`);
@@ -1561,12 +1855,622 @@ export class GameRunner extends EventEmitter {
     }
   }
 
+  /** Brawler-mode frame processing: detect player deaths, game over, level transitions,
+   *  and emit periodic state updates. Called from processHealthFrame() when brawlerMode is set. */
+  private processBrawlerFrame(): void {
+    if (!this.brawlerGameStarted) {
+      // Detect brawler game start: P1 has lives > 0 and health > 0.
+      // P2 is optional (single-player mode) — do NOT require P2 lives > 0
+      // because 0xB2C1 contains garbage when P2 is inactive.
+      if (this.memP1Lives > 0 && this.memHealthP1 > 0) {
+        this.brawlerGameStarted = true;
+        this.brawlerGameStartTime = Date.now();
+        this.brawlerDeathsDetected = 0;
+        this.brawlerP1DeadStreak = 0;
+        this.brawlerP2StableCount = 0;
+        this.brawlerPrevP2LivesForStable = -1;
+        const ci = this.charInfo();
+        console.log(`[game-runner] ${this.readerTag} 🥊 Brawler game started — ` +
+          `P1=${ci.p1Char} lives=${this.memP1Lives} health=${this.memHealthP1}% ` +
+          `P2=${ci.p2Char} lives=${this.memP2Lives} health=${this.memHealthP2}%`);
+        this.emit("matchStarted", {
+          p1Char: ci.p1Char, p2Char: ci.p2Char,
+          p1Health: this.memHealthP1, p2Health: this.memHealthP2,
+        });
+      }
+      return;
+    }
+
+    // ── Initialize previous-values baseline ──
+    if (this.prevP1Lives < 0) this.prevP1Lives = this.memP1Lives;
+    if (this.prevP2Lives < 0) this.prevP2Lives = this.memP2Lives;
+    if (this.prevLevel < 0) this.prevLevel = this.memLevel;
+
+    // ── Level transition ──
+    if (this.prevLevel >= 0 && this.memLevel > this.prevLevel) {
+      console.log(`[game-runner] ${this.readerTag} 🗺️  Level ${this.prevLevel}→${this.memLevel}`);
+      this.emit("brawlerLevelStart", { level: this.memLevel });
+      this.prevLevel = this.memLevel;
+    }
+
+    // ── Pixel-based health tracking ──
+    const readings = this.brawlerPixelReadings;
+    if (readings) {
+      // Track "was healthy this life" for death detection gating
+      if (readings.p1Health >= 25) this.brawlerWasHealthyP1 = true;
+      if (readings.p2Health >= 25) this.brawlerWasHealthyP2 = true;
+      if (readings.p3Health >= 25) this.brawlerWasHealthyP3 = true;
+
+      // Sync OCR score — pixel-based score takes priority over RAM (which may be unknown).
+      if (readings.p1Score >= 0) {
+        if (readings.p1Score !== this.memP1Score) {
+          console.log(`[game-runner] ${this.readerTag} 🔢 OCR score: ${this.memP1Score}→${readings.p1Score}`);
+        }
+        this.memP1Score = readings.p1Score;
+      }
+
+      // Sync OCR rank ("#TH" under the score). Null when absent (room 1) —
+      // the analyzer's latch already keeps the last read through gaps.
+      if (readings.p1Rank !== null && readings.p1RankSuffix !== null) {
+        if (readings.p1Rank !== this.brawlerPixelRankP1 || readings.p1RankSuffix !== this.brawlerPixelRankSuffixP1) {
+          const prev = this.brawlerPixelRankP1 !== null
+            ? `${this.brawlerPixelRankP1}${this.brawlerPixelRankSuffixP1 ?? ""}` : "null";
+          console.log(`[game-runner] ${this.readerTag} 🔢 OCR rank: ${prev}→${readings.p1Rank}${readings.p1RankSuffix}`);
+        }
+        this.brawlerPixelRankP1 = readings.p1Rank;
+        this.brawlerPixelRankSuffixP1 = readings.p1RankSuffix;
+      }
+
+      // Sync lives from pixel readings (icon counting).
+      // Only sync for players who have been healthy at some point —
+      // prevents inactive-player pixel artifacts from overwriting
+      // the internal lives tracker with bogus values.
+      if (this.brawlerWasHealthyP1 && readings.p1Lives !== this.brawlerPrevPixelLivesP1) {
+        const prev = this.brawlerPixelLivesP1;
+        this.brawlerPrevPixelLivesP1 = readings.p1Lives;
+        this.brawlerPixelLivesP1 = readings.p1Lives;
+        if (prev !== readings.p1Lives) {
+          console.log(`[game-runner] ${this.readerTag} 🔄 P1 lives sync: ${prev}→${readings.p1Lives} (pixel=${readings.p1Lives} health=${readings.p1Health}%)`);
+        }
+      }
+      if (this.brawlerWasHealthyP2 && readings.p2Lives !== this.brawlerPrevPixelLivesP2) {
+        this.brawlerPrevPixelLivesP2 = readings.p2Lives;
+        this.brawlerPixelLivesP2 = readings.p2Lives;
+      }
+      if (this.brawlerWasHealthyP3 && readings.p3Lives !== this.brawlerPrevPixelLivesP3) {
+        this.brawlerPrevPixelLivesP3 = readings.p3Lives;
+        this.brawlerPixelLivesP3 = readings.p3Lives;
+      }
+    }
+
+    // ── Debug logging (every 30 polls ≈ 7.5s) ──
+    this.brawlerDebugPollCount++;
+    if (this.brawlerDebugPollCount % 30 === 0) {
+      const r = this.brawlerPixelReadings;
+      console.log(`[game-runner] ${this.readerTag} 🔍 Brawler pixel: ` +
+        `P1 health=${r?.p1Health ?? "?"}% lives=${r?.p1Lives ?? "?"} ` +
+        `P2 health=${r?.p2Health ?? "?"}% lives=${r?.p2Lives ?? "?"} ` +
+        `P3 health=${r?.p3Health ?? "?"}% lives=${r?.p3Lives ?? "?"} ` +
+        `level=${this.memLevel} ` +
+        `${r?.p1BarVisible ? "" : "(P1 bar hidden) "}` +
+        `${r?.p2BarVisible ? "" : "(P2 bar hidden) "}` +
+        `${r?.p3BarVisible ? "" : "(P3 bar hidden) "}`);
+    }
+
+    // ── Pixel-based death & game-over detection ──
+    if (!readings || !this.brawlerPixelConfig) {
+      // No pixel data yet — keep RAM values for level transitions only
+      this.prevP1Lives = this.memP1Lives;
+      this.prevP2Lives = this.memP2Lives;
+      return;
+    }
+
+    const cfg = this.brawlerPixelConfig;
+    const DT = cfg.deathHealthThreshold ?? 5;
+    const DC = cfg.deathConfirmFrames ?? 6;
+    const RT = cfg.respawnHealthThreshold ?? 25;
+    const GOC = BRAWLER_GAME_OVER_STREAK;
+    const minGameMs = BRAWLER_MIN_GAME_MS;
+
+    // ── Death cooldown tick ──
+    if (this.brawlerDeathCooldownCounter > 0) this.brawlerDeathCooldownCounter--;
+
+    // ── P1 death detection ──
+    if (readings.p1BarVisible) {
+      if (readings.p1Health <= DT) {
+        this.brawlerDeathConfirmP1++;
+        // DEBUG: track death confirm progression
+        if (this.brawlerDeathConfirmP1 === 1) {
+          // Snapshot lives BEFORE this death — used to decide game-over vs respawn.
+          // If lives was already ≤ 0, this death ends the game.
+          this.brawlerLivesBeforeDeathP1 = this.brawlerPixelLivesP1;
+          console.log(`[game-runner] ${this.readerTag} 🔴 P1 death confirm START (health=${readings.p1Health}% wasHealthy=${this.brawlerWasHealthyP1} emitted=${this.brawlerDeathEmittedP1} cooldown=${this.brawlerDeathCooldownCounter} livesBefore=${this.brawlerLivesBeforeDeathP1})`);
+        } else if (this.brawlerDeathConfirmP1 === DC) {
+          console.log(`[game-runner] ${this.readerTag} 🔴 P1 death confirm ${DC}/${DC} — CHECK: wasHealthy=${this.brawlerWasHealthyP1} emitted=${this.brawlerDeathEmittedP1} cooldown=${this.brawlerDeathCooldownCounter} livesBefore=${this.brawlerLivesBeforeDeathP1}`);
+        }
+        if (
+          this.brawlerDeathConfirmP1 >= DC &&
+          !this.brawlerDeathEmittedP1 &&
+          this.brawlerWasHealthyP1 &&
+          this.brawlerDeathCooldownCounter <= 0
+        ) {
+          const livesBefore = this.brawlerLivesBeforeDeathP1;
+          this.brawlerPixelLivesP1--;
+          this.brawlerDeathEmittedP1 = true;
+          this.brawlerWasHealthyP1 = false;
+          this.brawlerDeathCooldownCounter = BRAWLER_DEATH_COOLDOWN;
+          this.brawlerDeathsDetected++;
+          this.memP1Lives = Math.max(0, this.brawlerPixelLivesP1);
+
+          if (livesBefore <= 0 && !this.brawlerGameOverEmitted) {
+            // ── Final death: lives was already 0 → game over ──
+            this.brawlerGameOverEmitted = true;
+            const ci = this.charInfo();
+            let winner: 1 | 2 | 3 | 0 = 0;
+            if (!readings.p2BarVisible && !readings.p3BarVisible) winner = 0;
+            else if (readings.p2BarVisible && this.brawlerPixelLivesP2 > 0) winner = 2;
+            else if (readings.p3BarVisible && this.brawlerPixelLivesP3 > 0) winner = 3;
+            this.emit("brawlerGameOver", {
+              p1Score: this.memP1Score,
+              p2Score: this.memP2Score,
+              p3Score: this.memP3Score ?? 0,
+              p1Rank: this.brawlerPixelRankP1,
+              p1RankSuffix: this.brawlerPixelRankSuffixP1,
+              p1Lives: 0,
+              p2Lives: readings.p2BarVisible ? Math.max(0, this.brawlerPixelLivesP2) : -1,
+              p3Lives: readings.p3BarVisible ? Math.max(0, this.brawlerPixelLivesP3) : -1,
+              levelReached: this.memLevel,
+              winner,
+              p1CharName: ci.p1Char,
+              p2CharName: ci.p2Char,
+            });
+            console.log(
+              `[game-runner] ${this.readerTag} 🏁 Brawler game over (final death) — ` +
+              `level=${this.memLevel} winner=P${winner} ` +
+              `P1 lives=${this.brawlerPixelLivesP1} P2 lives=${this.brawlerPixelLivesP2} P3 lives=${this.brawlerPixelLivesP3}`
+            );
+          } else {
+            // ── Normal death: lives remaining → expect respawn ──
+            // Arm the respawn deadline: if the player doesn't respawn within the
+            // deadline (e.g. no credits / game-over screen), force game-over.
+            this.brawlerRespawnDeadlineP1 = GameRunner.BRAWLER_RESPAWN_DEADLINE_FRAMES;
+            this.emit("brawlerPlayerDied", {
+              player: 1,
+              livesRemaining: Math.max(0, this.brawlerPixelLivesP1),
+              score: this.memP1Score,
+            });
+            console.log(
+              `[game-runner] ${this.readerTag} 💀 P1 died — ` +
+              `${Math.max(0, this.brawlerPixelLivesP1)} lives left ` +
+              `(health=${readings.p1Health}% livesBefore=${livesBefore} deadline=${this.brawlerRespawnDeadlineP1}f)`
+            );
+            // Reset game-over counter: death animation keeps health at 0% for seconds,
+            // and we must not let the parallel game-over detector fire before respawn.
+            this.brawlerGameOverConfirm = 0;
+          }
+        }
+      } else if (readings.p1Health > DT && this.brawlerDeathConfirmP1 > 0 && this.brawlerDeathConfirmP1 < DC) {
+        // DEBUG: death confirm was reset — health rose above threshold before death confirmed
+        console.log(`[game-runner] ${this.readerTag} 🔴 P1 death confirm RESET at ${this.brawlerDeathConfirmP1}/${DC} (health now=${readings.p1Health}%)`);
+        this.brawlerDeathConfirmP1 = 0;
+      } else if (readings.p1Health >= RT && this.brawlerDeathEmittedP1) {
+        // Player respawned — re-arm death detection and re-sync lives
+        this.brawlerDeathEmittedP1 = false;
+        this.brawlerDeathConfirmP1 = 0;
+        this.brawlerRespawnDeadlineP1 = 0;
+        this.brawlerPixelLivesP1 = readings.p1Lives;
+        this.brawlerPrevPixelLivesP1 = readings.p1Lives;
+        // Reset game-over flags so the player can continue playing
+        this.brawlerGameOverConfirm = 0;
+        this.brawlerGameOverEmitted = false;
+        this.emit("brawlerPlayerRespawned", { player: 1 });
+        console.log(`[game-runner] ${this.readerTag} 🎮 P1 respawned (health=${readings.p1Health}% lives=${this.brawlerPixelLivesP1})`);
+      } else if (readings.p1Health > DT) {
+        this.brawlerDeathConfirmP1 = 0;
+      }
+
+      // ── P1 respawn deadline: force game-over if no respawn within deadline ──
+      if (this.brawlerDeathEmittedP1 && this.brawlerRespawnDeadlineP1 > 0 && readings.p1Health < RT) {
+        this.brawlerRespawnDeadlineP1--;
+        if (this.brawlerRespawnDeadlineP1 <= 0 && !this.brawlerGameOverEmitted) {
+          this.brawlerGameOverEmitted = true;
+          const ci = this.charInfo();
+          this.emit("brawlerGameOver", {
+            p1Score: this.memP1Score,
+            p2Score: this.memP2Score,
+            p3Score: this.memP3Score ?? 0,
+            p1Rank: this.brawlerPixelRankP1,
+            p1RankSuffix: this.brawlerPixelRankSuffixP1,
+            p1Lives: 0,
+            p2Lives: readings.p2BarVisible ? Math.max(0, this.brawlerPixelLivesP2) : -1,
+            p3Lives: readings.p3BarVisible ? Math.max(0, this.brawlerPixelLivesP3) : -1,
+            levelReached: this.memLevel,
+            winner: 0,
+            p1CharName: ci.p1Char,
+            p2CharName: ci.p2Char,
+          });
+          console.log(
+            `[game-runner] ${this.readerTag} 🏁 Brawler game over (P1 respawn deadline expired) — ` +
+            `level=${this.memLevel}`
+          );
+        }
+      }
+    }
+
+    // ── P2 death detection (skip if bar not visible — single-player) ──
+    if (readings.p2BarVisible) {
+      if (readings.p2Health <= DT) {
+        this.brawlerDeathConfirmP2++;
+        if (this.brawlerDeathConfirmP2 === 1) {
+          this.brawlerLivesBeforeDeathP2 = this.brawlerPixelLivesP2;
+        }
+        if (
+          this.brawlerDeathConfirmP2 >= DC &&
+          !this.brawlerDeathEmittedP2 &&
+          this.brawlerWasHealthyP2 &&
+          this.brawlerDeathCooldownCounter <= 0
+        ) {
+          const livesBefore = this.brawlerLivesBeforeDeathP2;
+          this.brawlerPixelLivesP2--;
+          this.brawlerDeathEmittedP2 = true;
+          this.brawlerWasHealthyP2 = false;
+          this.brawlerDeathCooldownCounter = BRAWLER_DEATH_COOLDOWN;
+          this.brawlerDeathsDetected++;
+          this.memP2Lives = Math.max(0, this.brawlerPixelLivesP2);
+
+          if (livesBefore <= 0 && !this.brawlerGameOverEmitted) {
+            this.brawlerGameOverEmitted = true;
+            const ci = this.charInfo();
+            let winner: 1 | 2 | 3 | 0 = 0;
+            if (readings.p1BarVisible && this.brawlerPixelLivesP1 > 0) winner = 1;
+            else if (readings.p3BarVisible && this.brawlerPixelLivesP3 > 0) winner = 3;
+            this.emit("brawlerGameOver", {
+              p1Score: this.memP1Score,
+              p2Score: this.memP2Score,
+              p3Score: this.memP3Score ?? 0,
+              p1Rank: this.brawlerPixelRankP1,
+              p1RankSuffix: this.brawlerPixelRankSuffixP1,
+              p1Lives: readings.p1BarVisible ? Math.max(0, this.brawlerPixelLivesP1) : -1,
+              p2Lives: 0,
+              p3Lives: readings.p3BarVisible ? Math.max(0, this.brawlerPixelLivesP3) : -1,
+              levelReached: this.memLevel,
+              winner,
+              p1CharName: ci.p1Char,
+              p2CharName: ci.p2Char,
+            });
+            console.log(
+              `[game-runner] ${this.readerTag} 🏁 Brawler game over (final death P2) — ` +
+              `level=${this.memLevel} winner=P${winner}`
+            );
+          } else {
+            // ── Normal death: lives remaining → expect respawn ──
+            this.brawlerRespawnDeadlineP2 = GameRunner.BRAWLER_RESPAWN_DEADLINE_FRAMES;
+            this.emit("brawlerPlayerDied", {
+              player: 2,
+              livesRemaining: Math.max(0, this.brawlerPixelLivesP2),
+              score: this.memP2Score,
+            });
+            console.log(
+              `[game-runner] ${this.readerTag} 💀 P2 died — ` +
+              `${Math.max(0, this.brawlerPixelLivesP2)} lives left ` +
+              `(health=${readings.p2Health}% livesBefore=${livesBefore} deadline=${this.brawlerRespawnDeadlineP2}f)`
+            );
+            this.brawlerGameOverConfirm = 0;
+          }
+        }
+      } else if (readings.p2Health >= RT && this.brawlerDeathEmittedP2) {
+        this.brawlerDeathEmittedP2 = false;
+        this.brawlerDeathConfirmP2 = 0;
+        this.brawlerRespawnDeadlineP2 = 0;
+        this.brawlerPixelLivesP2 = readings.p2Lives;
+        this.brawlerPrevPixelLivesP2 = readings.p2Lives;
+        this.brawlerGameOverConfirm = 0;
+        this.brawlerGameOverEmitted = false;
+        this.emit("brawlerPlayerRespawned", { player: 2 });
+      } else if (readings.p2Health > DT) {
+        this.brawlerDeathConfirmP2 = 0;
+      }
+
+      // ── P2 respawn deadline: force game-over if no respawn within deadline ──
+      if (this.brawlerDeathEmittedP2 && this.brawlerRespawnDeadlineP2 > 0 && readings.p2Health < RT) {
+        this.brawlerRespawnDeadlineP2--;
+        if (this.brawlerRespawnDeadlineP2 <= 0 && !this.brawlerGameOverEmitted) {
+          this.brawlerGameOverEmitted = true;
+          const ci = this.charInfo();
+          this.emit("brawlerGameOver", {
+            p1Score: this.memP1Score,
+            p2Score: this.memP2Score,
+            p3Score: this.memP3Score ?? 0,
+            p1Rank: this.brawlerPixelRankP1,
+            p1RankSuffix: this.brawlerPixelRankSuffixP1,
+            p1Lives: readings.p1BarVisible ? Math.max(0, this.brawlerPixelLivesP1) : -1,
+            p2Lives: 0,
+            p3Lives: readings.p3BarVisible ? Math.max(0, this.brawlerPixelLivesP3) : -1,
+            levelReached: this.memLevel,
+            winner: 0,
+            p1CharName: ci.p1Char,
+            p2CharName: ci.p2Char,
+          });
+          console.log(
+            `[game-runner] ${this.readerTag} 🏁 Brawler game over (P2 respawn deadline expired) — ` +
+            `level=${this.memLevel}`
+          );
+        }
+      }
+    }
+
+    // ── P3 death detection (skip if bar not visible — single/two-player) ──
+    if (readings.p3BarVisible) {
+      if (readings.p3Health <= DT) {
+        this.brawlerDeathConfirmP3++;
+        if (this.brawlerDeathConfirmP3 === 1) {
+          this.brawlerLivesBeforeDeathP3 = this.brawlerPixelLivesP3;
+        }
+        if (
+          this.brawlerDeathConfirmP3 >= DC &&
+          !this.brawlerDeathEmittedP3 &&
+          this.brawlerWasHealthyP3 &&
+          this.brawlerDeathCooldownCounter <= 0
+        ) {
+          const livesBefore = this.brawlerLivesBeforeDeathP3;
+          this.brawlerPixelLivesP3--;
+          this.brawlerDeathEmittedP3 = true;
+          this.brawlerWasHealthyP3 = false;
+          this.brawlerDeathCooldownCounter = BRAWLER_DEATH_COOLDOWN;
+          this.brawlerDeathsDetected++;
+          this.memP3Lives = Math.max(0, this.brawlerPixelLivesP3);
+
+          if (livesBefore <= 0 && !this.brawlerGameOverEmitted) {
+            this.brawlerGameOverEmitted = true;
+            const ci = this.charInfo();
+            let winner: 1 | 2 | 3 | 0 = 0;
+            if (readings.p1BarVisible && this.brawlerPixelLivesP1 > 0) winner = 1;
+            else if (readings.p2BarVisible && this.brawlerPixelLivesP2 > 0) winner = 2;
+            this.emit("brawlerGameOver", {
+              p1Score: this.memP1Score,
+              p2Score: this.memP2Score,
+              p3Score: this.memP3Score ?? 0,
+              p1Rank: this.brawlerPixelRankP1,
+              p1RankSuffix: this.brawlerPixelRankSuffixP1,
+              p1Lives: readings.p1BarVisible ? Math.max(0, this.brawlerPixelLivesP1) : -1,
+              p2Lives: readings.p2BarVisible ? Math.max(0, this.brawlerPixelLivesP2) : -1,
+              p3Lives: 0,
+              levelReached: this.memLevel,
+              winner,
+              p1CharName: ci.p1Char,
+              p2CharName: ci.p2Char,
+            });
+            console.log(
+              `[game-runner] ${this.readerTag} 🏁 Brawler game over (final death P3) — ` +
+              `level=${this.memLevel} winner=P${winner}`
+            );
+          } else {
+            // ── Normal death: lives remaining → expect respawn ──
+            this.brawlerRespawnDeadlineP3 = GameRunner.BRAWLER_RESPAWN_DEADLINE_FRAMES;
+            this.emit("brawlerPlayerDied", {
+              player: 3,
+              livesRemaining: Math.max(0, this.brawlerPixelLivesP3),
+              score: this.memP3Score ?? 0,
+            });
+            console.log(
+              `[game-runner] ${this.readerTag} 💀 P3 died — ` +
+              `${Math.max(0, this.brawlerPixelLivesP3)} lives left ` +
+              `(health=${readings.p3Health}% livesBefore=${livesBefore} deadline=${this.brawlerRespawnDeadlineP3}f)`
+            );
+            this.brawlerGameOverConfirm = 0;
+          }
+        }
+      } else if (readings.p3Health >= RT && this.brawlerDeathEmittedP3) {
+        this.brawlerDeathEmittedP3 = false;
+        this.brawlerDeathConfirmP3 = 0;
+        this.brawlerRespawnDeadlineP3 = 0;
+        this.brawlerPixelLivesP3 = readings.p3Lives;
+        this.brawlerPrevPixelLivesP3 = readings.p3Lives;
+        this.brawlerGameOverConfirm = 0;
+        this.brawlerGameOverEmitted = false;
+        this.emit("brawlerPlayerRespawned", { player: 3 });
+      } else if (readings.p3Health > DT) {
+        this.brawlerDeathConfirmP3 = 0;
+      }
+
+      // ── P3 respawn deadline: force game-over if no respawn within deadline ──
+      if (this.brawlerDeathEmittedP3 && this.brawlerRespawnDeadlineP3 > 0 && readings.p3Health < RT) {
+        this.brawlerRespawnDeadlineP3--;
+        if (this.brawlerRespawnDeadlineP3 <= 0 && !this.brawlerGameOverEmitted) {
+          this.brawlerGameOverEmitted = true;
+          const ci = this.charInfo();
+          this.emit("brawlerGameOver", {
+            p1Score: this.memP1Score,
+            p2Score: this.memP2Score,
+            p3Score: this.memP3Score ?? 0,
+            p1Rank: this.brawlerPixelRankP1,
+            p1RankSuffix: this.brawlerPixelRankSuffixP1,
+            p1Lives: readings.p1BarVisible ? Math.max(0, this.brawlerPixelLivesP1) : -1,
+            p2Lives: readings.p2BarVisible ? Math.max(0, this.brawlerPixelLivesP2) : -1,
+            p3Lives: 0,
+            levelReached: this.memLevel,
+            winner: 0,
+            p1CharName: ci.p1Char,
+            p2CharName: ci.p2Char,
+          });
+          console.log(
+            `[game-runner] ${this.readerTag} 🏁 Brawler game over (P3 respawn deadline expired) — ` +
+            `level=${this.memLevel}`
+          );
+        }
+      }
+    }
+
+    // ── Game-over detection ──
+    const p1Dead = readings.p1BarVisible && this.brawlerPixelLivesP1 <= 0 && readings.p1Health <= DT;
+    const p2Dead = readings.p2BarVisible && this.brawlerPixelLivesP2 <= 0 && readings.p2Health <= DT;
+    const p3Dead = readings.p3BarVisible && this.brawlerPixelLivesP3 <= 0 && readings.p3Health <= DT;
+    // All visible players must be dead for game-over.
+    // Hidden bars = player not present → excluded from both counts.
+    const visiblePlayers = [readings.p1BarVisible, readings.p2BarVisible, readings.p3BarVisible].filter(Boolean).length;
+    const deadPlayers = [p1Dead, p2Dead, p3Dead].filter(Boolean).length;
+    const gameOverCondition = deadPlayers >= visiblePlayers && visiblePlayers > 0;
+
+    // Gate: don't count game-over while a player is in death animation
+    // (death emitted, waiting for respawn). During the death animation health
+    // sits at 0% for several seconds, which would cause a false game-over.
+    // The true game-over is emitted directly from the death handler when
+    // livesBeforeDeath ≤ 0 (this was the last life).
+    const anyPendingRespawn =
+      this.brawlerDeathEmittedP1 || this.brawlerDeathEmittedP2 || this.brawlerDeathEmittedP3;
+
+    if (
+      gameOverCondition &&
+      !anyPendingRespawn &&
+      this.brawlerDeathsDetected >= 1 &&
+      Date.now() - this.brawlerGameStartTime > minGameMs
+    ) {
+      this.brawlerGameOverConfirm++;
+      if (this.brawlerGameOverConfirm >= GOC && !this.brawlerGameOverEmitted) {
+        this.brawlerGameOverEmitted = true;
+        const ci = this.charInfo();
+        // Winner: the player who still has lives (or 0 if all dead)
+        let winner: 1 | 2 | 3 | 0 = 0;
+        if (!p1Dead && p2Dead && p3Dead) winner = 1;
+        else if (p1Dead && !p2Dead && p3Dead) winner = 2;
+        else if (p1Dead && p2Dead && !p3Dead) winner = 3;
+        this.emit("brawlerGameOver", {
+          p1Score: this.memP1Score,
+          p2Score: this.memP2Score,
+          p3Score: this.memP3Score ?? 0,
+          p1Rank: this.brawlerPixelRankP1,
+          p1RankSuffix: this.brawlerPixelRankSuffixP1,
+          p1Lives: 0,
+          p2Lives: readings.p2BarVisible ? Math.max(0, this.brawlerPixelLivesP2) : -1,
+          p3Lives: readings.p3BarVisible ? Math.max(0, this.brawlerPixelLivesP3) : -1,
+          levelReached: this.memLevel,
+          winner,
+          p1CharName: ci.p1Char,
+          p2CharName: ci.p2Char,
+        });
+        console.log(
+          `[game-runner] ${this.readerTag} 🏁 Brawler game over — ` +
+          `level=${this.memLevel} winner=P${winner} ` +
+          `P1 lives=${this.brawlerPixelLivesP1} P2 lives=${this.brawlerPixelLivesP2} P3 lives=${this.brawlerPixelLivesP3}`
+        );
+      }
+    } else {
+      this.brawlerGameOverConfirm = 0;
+    }
+
+    // ── Level transition resets death streaks ──
+    if (this.prevLevel >= 0 && this.memLevel > this.prevLevel) {
+      this.brawlerDeathConfirmP1 = 0;
+      this.brawlerDeathConfirmP2 = 0;
+      this.brawlerDeathConfirmP3 = 0;
+    }
+
+    // Update previous values
+    this.prevP1Lives = this.memP1Lives;
+    this.prevP2Lives = this.memP2Lives;
+  }
+
+  // ── Pixel-based brawler capture ─────────────────────────────────
+
+  /** Start a dedicated ffmpeg x11grab that outputs raw RGB24 frames at
+   *  BRAWLER_PIXEL_FPS fps. Frames are sliced in processBrawlerPixelChunks()
+   *  and fed to the BrawlerPixelAnalyzer for health + lives measurement. */
+  private startBrawlerPixelCapture(w: number, h: number): void {
+    const args = [
+      "-f", "x11grab",
+      "-framerate", String(BRAWLER_PIXEL_FPS),
+      "-video_size", `${w}x${h}`,
+      "-i", `${this.display}.0`,
+      "-f", "rawvideo",
+      "-pix_fmt", "rgb24",
+      "-loglevel", "quiet",
+      "pipe:1",
+    ];
+
+    this.brawlerPixelFfmpeg = spawn("ffmpeg", args, {
+      stdio: ["ignore", "pipe", "pipe"],
+      env: { ...process.env, DISPLAY: this.display },
+    });
+
+    const frameSize = w * h * 3; // RGB24
+
+    this.brawlerPixelFfmpeg.stdout?.on("data", (chunk: Buffer) => {
+      this.brawlerPixelBuf = Buffer.concat([this.brawlerPixelBuf, chunk]);
+      this.processBrawlerPixelChunks(w, h, frameSize);
+    });
+
+    this.brawlerPixelFfmpeg.stderr?.on("data", (data: Buffer) => {
+      const text = data.toString();
+      if (text.includes("Error") || text.includes("error")) {
+        console.error(`[brawler-pixel] ffmpeg error: ${text.trim()}`);
+      }
+    });
+
+    this.brawlerPixelFfmpeg.on("error", (err) => {
+      console.error(`[brawler-pixel] ffmpeg process error:`, err);
+    });
+
+    this.brawlerPixelFfmpeg.on("exit", (code) => {
+      if (code !== 0 && code !== null && this.running) {
+        console.warn(`[brawler-pixel] ffmpeg exited with code ${code}`);
+      }
+    });
+  }
+
+  /** Slice complete RGB24 frames from the accumulated buffer and feed
+   *  them to the pixel analyzer. Drops stale frames if the buffer grows
+   *  too large (analysis can't keep up with capture). */
+  private processBrawlerPixelChunks(w: number, h: number, frameSize: number): void {
+    while (this.brawlerPixelBuf.length >= frameSize) {
+      const frame = this.brawlerPixelBuf.subarray(0, frameSize);
+      this.brawlerPixelBuf = this.brawlerPixelBuf.subarray(frameSize);
+
+      if (!this.brawlerPixelAnalyzer || !this.brawlerPixelConfig) continue;
+
+      try {
+        const readings = this.brawlerPixelAnalyzer.processFrame(frame, w, h);
+        this.brawlerPixelReadings = readings;
+
+        // Feed into mem fields so processBrawlerFrame uses them transparently
+        if (readings.p1BarVisible) {
+          this.memHealthP1 = readings.p1Health;
+        }
+        if (readings.p2BarVisible) {
+          this.memHealthP2 = readings.p2Health;
+        }
+        if (readings.p3BarVisible) {
+          this.memHealthP3 = readings.p3Health;
+        }
+        this.memP1Lives = readings.p1Lives;
+        this.memP2Lives = readings.p2Lives;
+        this.memP3Lives = readings.p3Lives;
+      } catch {
+        // Silently skip corrupt / unreadable frames
+      }
+    }
+
+    // Prevent unbounded buffer growth if analysis is slow
+    if (this.brawlerPixelBuf.length > frameSize * 3) {
+      // Drop to the last full frame boundary
+      const excess = this.brawlerPixelBuf.length % frameSize;
+      this.brawlerPixelBuf = this.brawlerPixelBuf.subarray(
+        this.brawlerPixelBuf.length - frameSize - excess
+      );
+    }
+  }
+
   private processHealthFrame(): void {
     if (!this.running || this.matchEnded) return;
     this.healthPollErrorCount = 0;
 
     // Skip KO detection during demo/attract mode (before coins + START)
     if (!this.gameStarted) return;
+
+    // ── Brawler mode: lives + score + level + game-over detection ────
+    if (this.brawlerMode) {
+      this.processBrawlerFrame();
+      return;
+    }
 
     // ── Authoritative RAM path (SFA2 round counters) ───────────────
     // SFA2 arcade mode is best-of-3 (first to 2 wins). The mirror-region round counters
@@ -2238,8 +3142,8 @@ export class GameRunner extends EventEmitter {
    *  Also sends PAUSE_TOGGLE via UDP as fallback for cores that support it (FBNeo). */
   private raPauseToggle(): void {
     try {
-      // Primary: xdotool f12 — works with all cores, no UDP dependency
-      execSync("xdotool key f12", { timeout: 1000, env: { ...process.env, DISPLAY: this.display || ":99" } });
+      // Primary: xdotool F12 — works with all cores, no UDP dependency
+      execSync("xdotool key F12", { timeout: 1000, env: { ...process.env, DISPLAY: this.display || ":99" } });
     } catch {
       // Fallback: UDP PAUSE_TOGGLE for cores that support network commands (FBNeo)
       try {
@@ -2590,6 +3494,7 @@ export class GameRunner extends EventEmitter {
 
     this.parec?.kill("SIGTERM");
     this.ffmpegVideo?.kill("SIGTERM");
+    this.brawlerPixelFfmpeg?.kill("SIGTERM");
     // Plan A: finalize the recording gracefully — "q" on FFmpeg's stdin flushes the mp4
     // moov/fragments before it exits, and the recorder's exit handler then uploads it.
     if (this.recorder) {
@@ -2607,6 +3512,7 @@ export class GameRunner extends EventEmitter {
     setTimeout(() => {
       this.parec?.kill("SIGKILL");
       this.ffmpegVideo?.kill("SIGKILL");
+      this.brawlerPixelFfmpeg?.kill("SIGKILL");
       this.recorder?.kill("SIGKILL");
       this.streamer?.kill("SIGKILL");
       this.retroarch?.kill("SIGKILL");
@@ -2669,8 +3575,9 @@ export class GameRunner extends EventEmitter {
       // Disable ALL default RetroArch hotkeys — several collide with P2's keyboard keys
       // (default input_reset="h" = P2 Right, input_pause_toggle="p" = P2 R2,
       //  input_frame_advance="k" = P2 B), which caused accidental resets/freezes.
-      // Pause is rebound to a dedicated key (f12) that no player uses; pause()/resume() send it.
-      `input_pause_toggle = "f12"`,
+      // Pause is completely disabled here; pause()/resume() send PAUSE_TOGGLE via UDP for
+      // cores that support it (FBNeo), or xdotool F12 as a fallback.
+      `input_pause_toggle = "nul"`,
       `input_reset = "nul"`,
       `input_frame_advance = "nul"`,
       `input_rewind = "nul"`,

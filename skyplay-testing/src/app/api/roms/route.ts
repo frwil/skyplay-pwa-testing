@@ -2,13 +2,22 @@ import { NextResponse } from "next/server";
 import { readdir } from "fs/promises";
 import { join, extname } from "path";
 import { detectSystem } from "@/lib/emulator/EmulatorAdapter";
-import type { RomEntry } from "@/lib/emulator/types";
+import type { RomEntry, SystemType } from "@/lib/emulator/types";
+
+/**
+ * CPS1 ROMs share the .zip extension with NeoGeo, so extension-based detection
+ * can't tell them apart. This map overrides the system for known CPS1 titles.
+ * Source of truth: duel_games table in Turso (system = 'cps1').
+ */
+const CPS1_ROMS = new Set<string>([
+  "dino.zip",            // Cadillacs and Dinosaurs
+  // Future CPS1 games can be added here
+]);
 
 /**
  * GET /api/roms
  *
- * Lists all ROM files in public/roms/ with known extensions
- * (.nes, .sfc, .smc, .gb, .gbc, .gba).
+ * Lists all ROM files in public/roms/ with known extensions.
  * Returns { roms: [{ name, path, size, system }] }.
  */
 export async function GET() {
@@ -20,7 +29,11 @@ export async function GET() {
       .filter((e) => e.isFile())
       .map((e) => {
         const ext = extname(e.name).toLowerCase();
-        const system = detectSystem(ext);
+        let system: SystemType | null = detectSystem(ext);
+        // CPS1 override: these .zip files are CPS1, not NeoGeo
+        if (system === "neogeo" && CPS1_ROMS.has(e.name)) {
+          system = "cps1";
+        }
         if (!system) return null;
         return {
           name: e.name.replace(/\.[^.]+$/, ""),

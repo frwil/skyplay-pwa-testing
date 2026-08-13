@@ -797,6 +797,35 @@ export class CloudAdapter implements EmulatorAdapter {
           this.callbacks.onResumed?.();
           break;
         }
+        case "brawler_game_over": {
+          const bgo = msg as unknown as { p1Score: number; p2Score: number; p3Score: number; p1Lives: number; p2Lives: number; p3Lives: number; levelReached: number; winner: 1 | 2 | 3 | 0; p1Rank: number | null; p1RankSuffix: string | null };
+          console.log(`[Cloud:${this.systemType}] 🏁 Brawler GAME OVER! P${bgo.winner} wins! Level=${bgo.levelReached}`);
+          this.callbacks.onBrawlerGameOver?.(bgo);
+          break;
+        }
+        case "brawler_player_died": {
+          const bpd = msg as unknown as { player: 1 | 2 | 3; livesRemaining: number; score: number };
+          console.log(`[Cloud:${this.systemType}] 💀 Brawler P${bpd.player} died — ${bpd.livesRemaining} lives left`);
+          this.callbacks.onBrawlerPlayerDied?.(bpd);
+          break;
+        }
+        case "brawler_player_respawned": {
+          const bpr = msg as unknown as { player: 1 | 2 | 3 };
+          console.log(`[Cloud:${this.systemType}] 🎮 Brawler P${bpr.player} respawned`);
+          this.callbacks.onBrawlerPlayerRespawned?.(bpr);
+          break;
+        }
+        case "brawler_level_start": {
+          const bls = msg as unknown as { level: number };
+          console.log(`[Cloud:${this.systemType}] 🗺️  Brawler level ${bls.level}`);
+          this.callbacks.onBrawlerLevelStart?.(bls);
+          break;
+        }
+        case "brawler_state": {
+          const bs = msg as unknown as { p1Health: number; p2Health: number; p3Health: number; p1Lives: number; p2Lives: number; p3Lives: number; p1Score: number; p2Score: number; p3Score: number; level: number; p1CharName: string; p2CharName: string; p1Rank: number | null; p1RankSuffix: string | null };
+          this.callbacks.onBrawlerState?.(bs);
+          break;
+        }
         case "pong": { break; }
       }
     } catch {
@@ -1140,5 +1169,26 @@ export interface CloudCallbacks {
     quantity: number;
     diamondAmount: number;
     message?: string;
+  }) => void;
+  /** Called when a brawler game ends (final death with no lives remaining). */
+  onBrawlerGameOver?: (data: {
+    p1Score: number; p2Score: number; p3Score: number;
+    p1Lives: number; p2Lives: number; p3Lives: number;
+    levelReached: number; winner: 1 | 2 | 3 | 0;
+    p1Rank: number | null; p1RankSuffix: string | null;
+  }) => void;
+  /** Called when a brawler player dies (but still has lives / respawn pending). */
+  onBrawlerPlayerDied?: (data: { player: 1 | 2 | 3; livesRemaining: number; score: number }) => void;
+  /** Called when a brawler player respawns after death. */
+  onBrawlerPlayerRespawned?: (data: { player: 1 | 2 | 3 }) => void;
+  /** Brawler level transition. */
+  onBrawlerLevelStart?: (data: { level: number }) => void;
+  /** Periodic brawler state update (health, lives, score for all players). */
+  onBrawlerState?: (data: {
+    p1Health: number; p2Health: number; p3Health: number;
+    p1Lives: number; p2Lives: number; p3Lives: number;
+    p1Score: number; p2Score: number; p3Score: number;
+    level: number; p1CharName: string; p2CharName: string;
+    p1Rank: number | null; p1RankSuffix: string | null;
   }) => void;
 }

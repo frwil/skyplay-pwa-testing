@@ -110,6 +110,13 @@ export function useEmulator(system: SystemType = "nes") {
   const [p2CharName, setP2CharName] = useState<string | null>(null);
   /** Active gift notifications for the GiftOverlay (auto-removed after 5s). */
   const [giftNotifications, setGiftNotifications] = useState<import("../types").GiftNotifyData[]>([]);
+  /** Brawler game-over data — set when a brawler game ends (final death, no lives left). */
+  const [brawlerGameOver, setBrawlerGameOver] = useState<{
+    p1Score: number; p2Score: number; p3Score: number;
+    p1Lives: number; p2Lives: number; p3Lives: number;
+    levelReached: number; winner: 1 | 2 | 3 | 0;
+    p1Rank: number | null; p1RankSuffix: string | null;
+  } | null>(null);
 
   // ── Duel callbacks (stable refs) ──────────────────────────────────
   const duelCallbacksRef = useRef({
@@ -227,6 +234,23 @@ export function useEmulator(system: SystemType = "nes") {
       setTimeout(() => {
         setGiftNotifications((prev) => prev.filter((g) => g !== data));
       }, 5000);
+    },
+    onBrawlerGameOver: (data: { p1Score: number; p2Score: number; p3Score: number; p1Lives: number; p2Lives: number; p3Lives: number; levelReached: number; winner: 1 | 2 | 3 | 0; p1Rank: number | null; p1RankSuffix: string | null }) => {
+      console.log(`[useEmulator] 🏁 Brawler GAME OVER! Level=${data.levelReached} winner=P${data.winner}`);
+      setBrawlerGameOver(data);
+      setStatus("running"); // keep running — ws-handler manages pause
+    },
+    onBrawlerPlayerDied: (data: { player: 1 | 2 | 3; livesRemaining: number; score: number }) => {
+      console.log(`[useEmulator] 💀 Brawler P${data.player} died — ${data.livesRemaining} lives left`);
+    },
+    onBrawlerPlayerRespawned: (data: { player: 1 | 2 | 3 }) => {
+      console.log(`[useEmulator] 🎮 Brawler P${data.player} respawned`);
+    },
+    onBrawlerLevelStart: (data: { level: number }) => {
+      console.log(`[useEmulator] 🗺️  Brawler level ${data.level}`);
+    },
+    onBrawlerState: (_data: { p1Health: number; p2Health: number; p3Health: number; p1Lives: number; p2Lives: number; p3Lives: number; p1Score: number; p2Score: number; p3Score: number; level: number; p1CharName: string; p2CharName: string; p1Rank: number | null; p1RankSuffix: string | null }) => {
+      // Periodic update — no UI change needed
     },
   });
 
@@ -560,6 +584,29 @@ export function useEmulator(system: SystemType = "nes") {
         }
         return new NeoGeoEmulatorAdapter({ onStatusChange: setStatus });
       }
+      case "cps1":
+        return new CloudAdapter("cps1", {
+          onStatusChange: setStatus,
+          onRoundResult: duelCallbacksRef.current.onRoundResult,
+          onMatchEnd: duelCallbacksRef.current.onMatchEnd,
+          onMatchState: duelCallbacksRef.current.onMatchState,
+          onCharSelected: duelCallbacksRef.current.onCharSelected,
+          onRematchStarting: duelCallbacksRef.current.onRematchStarting,
+          onSessionClosed: duelCallbacksRef.current.onSessionClosed,
+          onRematchRequested: duelCallbacksRef.current.onRematchRequested,
+          onRematchAccepted: duelCallbacksRef.current.onRematchAccepted,
+          onRematchDeclined: duelCallbacksRef.current.onRematchDeclined,
+          onPlayerEvent: duelCallbacksRef.current.onPlayerEvent,
+          onAutoRematch: duelCallbacksRef.current.onAutoRematch,
+          onPaused: duelCallbacksRef.current.onPaused,
+          onResumed: duelCallbacksRef.current.onResumed,
+          onGiftNotify: duelCallbacksRef.current.onGiftNotify,
+          onBrawlerGameOver: duelCallbacksRef.current.onBrawlerGameOver,
+          onBrawlerPlayerDied: duelCallbacksRef.current.onBrawlerPlayerDied,
+          onBrawlerPlayerRespawned: duelCallbacksRef.current.onBrawlerPlayerRespawned,
+          onBrawlerLevelStart: duelCallbacksRef.current.onBrawlerLevelStart,
+          onBrawlerState: duelCallbacksRef.current.onBrawlerState,
+        });
       case "ps1":
         return new CloudAdapter("ps1", {
           onStatusChange: setStatus,
@@ -962,6 +1009,7 @@ export function useEmulator(system: SystemType = "nes") {
     p1CharName,
     p2CharName,
     giftNotifications,
+    brawlerGameOver,
     clearOpponentAbandoned: useCallback(() => setOpponentAbandoned(null), []),
     stopDuel: useCallback(() => {
       const adapter = adapterRef.current;

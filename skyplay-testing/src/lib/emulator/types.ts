@@ -1,5 +1,5 @@
 // ─── System Type ───────────────────────────────────────────────────
-export type SystemType = "nes" | "snes" | "gb" | "gbc" | "gba" | "neogeo" | "ps1";
+export type SystemType = "nes" | "snes" | "gb" | "gbc" | "gba" | "neogeo" | "ps1" | "cps1";
 
 // ─── Emulator Status ───────────────────────────────────────────────
 export type EmulatorStatus =
@@ -178,6 +178,13 @@ export interface EmulatorState {
   p2CharName: string | null;
   /** Active gift notifications for the GiftOverlay (auto-removed after 5s). */
   giftNotifications: GiftNotifyData[];
+  /** Brawler game-over data — set when a brawler game ends (final death, no lives left). */
+  brawlerGameOver: {
+    p1Score: number; p2Score: number; p3Score: number;
+    p1Lives: number; p2Lives: number; p3Lives: number;
+    levelReached: number; winner: 1 | 2 | 3 | 0;
+    p1Rank: number | null; p1RankSuffix: string | null;
+  } | null;
 }
 
 /** Live in-match state for the on-canvas HUD (cloud/neogeo/snes only). */

@@ -1,5 +1,5 @@
 import { readFileSync, writeFileSync } from "fs";
-import { spawnSync } from "child_process";
+import puppeteer from "puppeteer";
 
 const md = readFileSync("D:/Skyplay/SKYPLAY-PROJECT-STATUS.md", "utf-8");
 
@@ -7,9 +7,9 @@ function escapeHTML(s) {
   return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
 }
 function renderInline(s) {
-  s = s.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
-  s = s.replace(/`([^`]+)`/g, "<code>$1</code>");
-  s = s.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>');
+  s = s.replace(/\*\*(.+?)\*\*/g, (_, c) => "<strong>" + escapeHTML(c) + "</strong>");
+  s = s.replace(/`([^`]+)`/g, (_, c) => "<code>" + escapeHTML(c) + "</code>");
+  s = s.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, text, url) => '<a href="' + escapeHTML(url) + '">' + escapeHTML(text) + '</a>');
   return s;
 }
 
@@ -120,28 +120,28 @@ const htmlContent = `<!DOCTYPE html>
 <body>
 <div class="header">
 <h1>SKY PLAY — État d&rsquo;avancement complet</h1>
-<p>2026-07-22 &middot; Branche <code>main</code> &middot; SFA2 complet + cleanup escrow + pick order KOF98 câblé</p>
+<p>2026-07-30 &middot; Branche <code>main</code> &middot; CPS1 Cadillacs &amp; Dinosaurs int&eacute;gr&eacute; + Scan RAM #1 termin&eacute; + Analyse co&ucirc;ts prod</p>
 </div>
 
 <div class="summary-grid">
 <div class="summary-box box-committed">
 <h3>&#x2705; Commités</h3>
-<div class="count">85+</div>
+<div class="count">163</div>
 <div>commits depuis juin</div>
 </div>
 <div class="summary-box box-wip">
 <h3>&#x1F527; En cours (WD)</h3>
-<div class="count">~30</div>
+<div class="count">~20</div>
 <div>fichiers modifiés/nouveaux</div>
 </div>
 <div class="summary-box box-todo">
 <h3>&#x274C; Reste à faire</h3>
-<div class="count">~10</div>
+<div class="count">~8</div>
 <div>tâches identifiées</div>
 </div>
 <div class="summary-box box-docs">
 <h3>&#x1F4C4; Docs</h3>
-<div class="count">14</div>
+<div class="count">23</div>
 <div>memory files + status</div>
 </div>
 </div>
@@ -153,12 +153,18 @@ ${renderMD(md)}
 writeFileSync("D:/Skyplay/SKYPLAY-PROJECT-STATUS.html", htmlContent);
 console.log("HTML written.");
 
-const chrome = "C:/Program Files/Google/Chrome/Application/chrome.exe";
-const r = spawnSync(chrome, [
-  "--headless", "--disable-gpu", "--no-sandbox",
-  "--print-to-pdf=D:/Skyplay/SKYPLAY-PROJECT-STATUS.pdf",
-  "file:///D:/Skyplay/SKYPLAY-PROJECT-STATUS.html",
-], { timeout: 30000 });
-
-if (r.error) { console.error("Chrome error:", r.error); process.exit(1); }
-console.log("PDF generated.");
+const browser = await puppeteer.launch({ headless: true });
+try {
+  const page = await browser.newPage();
+  await page.goto("file:///D:/Skyplay/SKYPLAY-PROJECT-STATUS.html", { waitUntil: "networkidle0", timeout: 30000 });
+  await page.pdf({
+    path: "D:/Skyplay/SKYPLAY-PROJECT-STATUS.pdf",
+    format: "A4",
+    printBackground: true,
+    margin: { top: "20mm", bottom: "20mm", left: "15mm", right: "15mm" },
+    timeout: 60000,
+  });
+  console.log("PDF generated.");
+} finally {
+  await browser.close();
+}

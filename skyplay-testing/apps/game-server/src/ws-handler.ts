@@ -557,6 +557,56 @@ async function handleInit(
     sendToSession(session, { type: "match_state", ...data });
   });
 
+  // ── Brawler-mode events (Cadillacs and Dinosaurs / CPS1) ──────────
+
+  runner.on("brawlerPlayerDied", (data: { player: 1 | 2 | 3; livesRemaining: number; score: number }) => {
+    console.log(`[ws] 💀 Brawler P${data.player} died — ${data.livesRemaining} lives left (score: ${data.score})`);
+    sendToSession(session, { type: "brawler_player_died", ...data });
+  });
+
+  runner.on("brawlerPlayerRespawned", (data: { player: 1 | 2 | 3 }) => {
+    console.log(`[ws] 🎮 Brawler P${data.player} respawned — unlocking inputs`);
+    // Unlock inputs — player continued after death
+    matchInputLocked.delete(msg.sessionId);
+    sendToSession(session, { type: "brawler_player_respawned", ...data });
+  });
+
+  runner.on("brawlerGameOver", (data: { p1Score: number; p2Score: number; p3Score: number; p1Lives: number; p2Lives: number; p3Lives: number; levelReached: number; winner: 1 | 2 | 3 | 0; p1CharName?: string; p2CharName?: string; p1Rank: number | null; p1RankSuffix: string | null }) => {
+    const OVERLAY_DELAY_MS = 3000;
+    const resultLabel = data.winner === 0 ? "DRAW!" : `P${data.winner} wins!`;
+    console.log(`[ws] 🏁 Brawler GAME OVER! ${resultLabel} P1=${data.p1Score} vs P2=${data.p2Score} Level=${data.levelReached}`);
+
+    setTimeout(() => {
+      sendToSession(session, { type: "brawler_game_over", ...data });
+      // Lock input — game is over
+      matchInputLocked.add(msg.sessionId);
+      // Freeze the emulator
+      runner.pause();
+      // Remember loser for rematch
+      if (data.winner === 1) matchLoserSide.set(msg.sessionId, 2);
+      else if (data.winner === 2) matchLoserSide.set(msg.sessionId, 1);
+      else matchLoserSide.set(msg.sessionId, 0);
+
+      // Start post-match countdown
+      const timer = setTimeout(() => {
+        console.log(`[ws] ⏰ Brawler post-match countdown expired for session ${msg.sessionId} — stopping`);
+        stopSession(msg.sessionId);
+      }, 30000);
+      const existing = matchEndTimers.get(msg.sessionId);
+      if (existing) { clearTimeout(existing); matchEndTimers.delete(msg.sessionId); }
+      matchEndTimers.set(msg.sessionId, timer);
+    }, OVERLAY_DELAY_MS);
+  });
+
+  runner.on("brawlerLevelStart", (data: { level: number }) => {
+    console.log(`[ws] 🗺️  Brawler level ${data.level}`);
+    sendToSession(session, { type: "brawler_level_start", level: data.level });
+  });
+
+  runner.on("brawlerState", (data: { p1Health: number; p2Health: number; p3Health: number; p1Lives: number; p2Lives: number; p3Lives: number; p1Score: number; p2Score: number; p3Score: number; level: number; p1CharName: string; p2CharName: string; p1Rank: number | null; p1RankSuffix: string | null }) => {
+    sendToSession(session, { type: "brawler_state", ...data });
+  });
+
   // Start the game (text detector always runs, auto-resumes health analysis on FIGHT!)
   runner.start().then(({ width, height }) => {
     // Guard: if stop() was called during async setup (player disconnected while
