@@ -1,8 +1,8 @@
 # SKY PLAY — État d'avancement complet
 
-**Date** : 2026-07-30  
-**Branche** : `main` — CPS1/Cadillacs & Dinosaurs intégré (non commité), brawler pixel end-to-end ✅, score OCR pixel fixé 12/08  
-**Dernier commit** : `82b10e0` — feat(sprint3): real-time gift UI — GiftPanel, DonorRanking, API proxy, hostUserId  
+**Date** : 2026-08-13  
+**Branche** : `main` — CPS1/Cadillacs & Dinosaurs intégré ✅, brawler pixel end-to-end ✅, score OCR pixel fixé 12/08, rank OCR #TH 13/08  
+**Dernier commit** : `1309e76` — feat(dino): rank OCR #TH — white glyphs y=24-44, latch room-1 absence, overlay Rank  
 
 ---
 
@@ -20,10 +20,10 @@
 | Page Duel | ✅ Live | Lobby, défis, combat cloud |
 | Page Admin | ✅ Live | Administration (users, duels, settings) |
 | Auth JWT | ✅ Live | `jose` + `bcryptjs`, cookies sécurisés, fallback dev local |
-| Auth serveur-side (homepage) | 🔧 **WD** | `HeaderAuth` + vérification JWT + lookup username — non commité |
-| Logout avec sessionStorage | 🔧 **WD** | `skyplay_logged_out` flag — non commité |
+| Auth serveur-side (homepage) | 🔧 **WD** | `HeaderAuth` + vérification JWT + lookup username — commité 13/08 (1309e76) |
+| Logout avec sessionStorage | 🔧 **WD** | `skyplay_logged_out` flag — commité 13/08 (1309e76) |
 
-### 🔧 En cours (non commité)
+### 🔧 En cours (commité 13/08 — 1309e76)
 
 - HeaderAuth component sur la homepage
 - Liens "Plateforme ↗" vers `sky-play-platform-gamma.vercel.app`
@@ -106,7 +106,7 @@
 | Neo Geo | fbneo_libretro.so | 320×224 (3x=960×672) | ✅ Stable |
 | PS1 | pcsx_rearmed_libretro.so | 640×480 (3x=1920×1440) | ✅ Stable |
 | SNES | snes9x_libretro.so | 256×224 (3x=768×672) | ✅ (Docker + code) |
-| CPS1 | fbneo_libretro.so | 384×224 (3x=1152×672) | 🔧 WD (non commité) |
+| CPS1 | fbneo_libretro.so | 384×224 (3x=1152×672) | 🔧 WD (commité 13/08 — 1309e76) |
 
 ### 3.2 Détection santé KOF98 (RAM — FBNeo) ✅
 
@@ -150,9 +150,9 @@
 
 ### 3.4 Cadillacs and Dinosaurs (CPS1) — Brawler Mode 🔧 WD
 
-**17 fichiers modifiés, +521/-40 lignes (non commité)**
+**Intégration + pixel + score + rank : commité 13/08 (1309e76)**
 
-#### 3.4.1 Intégration système CPS1 ✅ (non commité)
+#### 3.4.1 Intégration système CPS1 ✅ (commité 13/08)
 
 | Composant | Fichier | Changement |
 |-----------|---------|------------|
@@ -210,7 +210,7 @@
 | Adresses confirmées → game-config.ts | ❌ Après scan #2 |
 | Test end-to-end brawler | ❌ Après adresses |
 
-#### 3.4.4 Correctifs divers (non commité)
+#### 3.4.4 Correctifs divers (commité 13/08 — 1309e76)
 
 | Fix | Fichier | Description |
 |-----|---------|-------------|
@@ -221,7 +221,7 @@
 | SKY balance test | `sky_transactions` | testplayer1 + testplayer2 → 20000 SKY (SQLite local) |
 | db.ts seed dino | `db.ts` | INSERT duel_games pour dino (CPS1, mode brawler) |
 
-#### 3.4.5 Pipeline pixel brawler + Score OCR ✅ (fix 12/08, non commité)
+#### 3.4.5 Pipeline pixel brawler + Score OCR ✅ (fix 12/08, commité 13/08 — 1309e76)
 
 RAM score Dino introuvable → OCR pixel. End-to-end vérifié en live le 10/08 (mort + game-over + overlay).
 
